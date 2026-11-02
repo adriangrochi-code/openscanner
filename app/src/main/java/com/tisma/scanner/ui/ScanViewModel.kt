@@ -409,9 +409,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private fun opticsText(): String {
         val stream = cameras.openedStreams.firstOrNull() ?: return ""
         val info = inventory[stream.cameraId] ?: inventory[stream.viaGroup] ?: return ""
-        val dist = Optics.distanceM(cameras.primaryFocusDiopters()) ?: return "enfoque: lejos/infinito"
         val f = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return ""
         val sw = info.sensorSizeMm?.first?.toDouble() ?: return ""
+        if ((info.minFocusDiopters ?: 0f) <= 0f) {
+            // Foco fijo (macro y ultra gran angular del Honor): no hay distancia que leer.
+            // La macro sólo enfoca a unos ~4 cm: hay que mover el móvil hasta verla nítida.
+            return if (info.id == roles.macro) {
+                val gsd = Optics.gsdMm(MACRO_FOCUS_M, Optics.fxPixels(f, sw, stream.size.width))
+                "macro foco fijo · a ~%.0f cm · ≈%.3f mm/px · acércate hasta verla nítida".format(MACRO_FOCUS_M * 100, gsd)
+            } else "foco fijo"
+        }
+        val dist = Optics.distanceM(cameras.primaryFocusDiopters()) ?: return "enfoque: lejos/infinito"
         val gsd = Optics.gsdMm(dist, Optics.fxPixels(f, sw, stream.size.width))
         val dofD = dofDiopters(info.id)
         val dofMm = dofD * dist * dist * 1000
@@ -770,5 +778,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val LOW_TEXTURE = 0.3
         /** Más de ~1,5 px de arrastre ya borra la microtextura que usa SIFT. */
         const val MAX_MOTION_BLUR_PX = 1.5
+        /** Distancia típica de enfoque de las macro de foco fijo de 2 MP. */
+        const val MACRO_FOCUS_M = 0.04
     }
 }

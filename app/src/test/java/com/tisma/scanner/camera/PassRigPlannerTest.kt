@@ -74,4 +74,28 @@ class PassRigPlannerTest {
         assertEquals("5", roles.tele)
         assertEquals("5", PassRigPlanner.plan(ScanPass.FAR, roles, phone, emptyList()).companionId)
     }
+
+    /** Configuración real del HONOR ALI-NX3 (Magic 6 Lite) según su diagnóstico. */
+    @Test fun honorMagic6LiteFromDiagnostics() {
+        val honor = listOf(
+            Lens("0", true, false, emptyList(), true, 4000L * 3000, 72.0),
+            Lens("1", false, false, emptyList(), true, 2304L * 1728, 70.0),
+            Lens("2", true, false, emptyList(), true, 2592L * 1944, 91.0),          // oculta: ultra gran angular
+            Lens("3", true, false, emptyList(), true, 1456L * 1088, 74.0),          // oculta: macro foco fijo
+            Lens("4", true, true, listOf("0", "2"), true, 4000L * 3000, 72.0),      // oculta: lógica [0, 2]
+        )
+        val roles = CameraRoles.detect(honor)
+        assertEquals(CameraRoles("0", "2", null, "3"), roles)
+
+        val far = PassRigPlanner.plan(ScanPass.FAR, roles, honor, listOf(setOf("1")))
+        assertEquals(RigPlan.Mode.PHYSICAL, far.mode)
+        assertEquals("4", far.groups.single().deviceId)
+        assertEquals(listOf("0", "2"), far.groups.single().physicalStreams)
+        assertEquals("0", far.groups.single().previewPhysicalId)
+
+        val close = PassRigPlanner.plan(ScanPass.CLOSE, roles, honor, listOf(setOf("1")))
+        assertEquals(RigPlan.Mode.TURNS, close.mode)
+        assertEquals("3", close.groups.single().deviceId)
+        assertEquals("0", close.separate.single().deviceId)
+    }
 }

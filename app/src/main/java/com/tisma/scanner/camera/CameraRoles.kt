@@ -32,7 +32,7 @@ data class CameraRoles(val main: String?, val ultrawide: String?, val tele: Stri
          * Heurística por objetivo físico ("hoja", no lógico):
          *  - macro: el de menor resolución, por debajo de 3,5 MP (las macro de móvil son de 2 MP);
          *  - principal: el de mayor resolución entre el resto;
-         *  - ultra gran angular: campo de visión > 1,25× el principal;
+         *  - ultra gran angular: campo de visión > 1,15× el principal (el Honor declara 91° frente a 72°);
          *  - tele: campo de visión < principal / 1,3.
          */
         fun detect(lenses: List<Lens>): CameraRoles {
@@ -45,7 +45,7 @@ data class CameraRoles(val main: String?, val ultrawide: String?, val tele: Stri
             val main = rest.maxWithOrNull(compareBy<Lens>({ it.pixels }, { -(it.id.toIntOrNull() ?: 99) }))!!
             val fov = main.hfovDeg
             val others = rest.filter { it != main && it.hfovDeg != null }
-            val ultra = if (fov == null) null else others.filter { it.hfovDeg!! > fov * 1.25 }.maxByOrNull { it.hfovDeg!! }
+            val ultra = if (fov == null) null else others.filter { it.hfovDeg!! > fov * 1.15 }.maxByOrNull { it.hfovDeg!! }
             val tele = if (fov == null) null else others.filter { it.hfovDeg!! < fov / 1.3 }.minByOrNull { it.hfovDeg!! }
             return CameraRoles(main.id, ultra?.id, tele?.id, macro?.id)
         }
