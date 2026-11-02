@@ -48,4 +48,15 @@ class OpticsTest {
             }
         }
     }
+
+    @Test fun depthSweepBracketsTheSubject() {
+        // Pieza a 25 cm (4 D): planos de ~17,5 cm a ~35 cm, de cerca a lejos.
+        val s = Optics.depthSweep(4.0, minFocusD = 11.1)
+        assertEquals(7, s.size)
+        assertEquals(1 / 0.175, s.first().toDouble(), 0.05)
+        assertEquals(1 / 0.35, s.last().toDouble(), 0.05)
+        // Muy cerca: no pasa del enfoque mínimo. En infinito: no hay barrido.
+        assertTrue(Optics.depthSweep(10.0, minFocusD = 11.1).all { it <= 11.1f })
+        assertTrue(Optics.depthSweep(0.0, minFocusD = 11.1).isEmpty())
+    }
 }

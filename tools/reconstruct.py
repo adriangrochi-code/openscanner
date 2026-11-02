@@ -311,12 +311,66 @@ def read_model_txt(d: Path):
         if line and not line.startswith("#"):
             p = line.split()
             cams[int(p[0])] = (p[1], int(p[2]), int(p[3]), np.array(list(map(float, p[4:]))))
-    lines = [l for l in (d / "images.txt").read_text().splitlines() if l and not l.startswith("#")]
-    for l in lines[0::2]:
+    lines = [l for l in (d / "images.txt").read_text().splitlines() if not l.startswith("#")]
+    for l, obs_line in zip(lines[0::2], lines[1::2]):
+        if not l.strip():
+            continue
         p = l.split()
         q, t = np.array(list(map(float, p[1:5]))), np.array(list(map(float, p[5:8])))
-        imgs[p[9]] = dict(R=qvec2rot(q), t=t, cam=int(p[8]))
+        o = np.array(list(map(float, obs_line.split())) or [0, 0, -1], float).reshape(-1, 3)
+        imgs[p[9]] = dict(R=qvec2rot(q), t=t, cam=int(p[8]), obs=o[o[:, 2] >= 0])
     return cams, imgs
+
+
+def read_points3d(d: Path):
+    pts = {}
+    p = d / "points3D.txt"
+    if p.exists():
+        for l in p.read_text().splitlines():
+            if l and not l.startswith("#"):
+                v = l.split()
+                pts[int(v[0])] = np.array(list(map(float, v[1:4])))
+    return pts
+
+
+def scale_from_focus(work, imgs, pts):
+    """
+    Escala métrica a partir de la distancia medida con el ENFOQUE (barridos de enfoque).
+    Para cada punto 3D visto en una foto con mapa de profundidad por enfoque:
+    ratio = profundidad por enfoque (m) / profundidad SfM (unidades del modelo). La mediana es
+    la escala. Su precisión depende de la calibración del enfoque del móvil (session.json).
+    Devuelve (escala, dispersión relativa, nº de puntos) o (None, None, 0).
+    """
+    ratios = []
+    for name, im in imgs.items():
+        cam, stem = name.split("/")[0], Path(name).stem
+        dpath = work / "depth" / cam / f"{stem}_mm.png"
+        if not dpath.exists() or len(im["obs"]) == 0:
+            continue
+        depth = cv2.imread(str(dpath), cv2.IMREAD_UNCHANGED)
+        color = cv2.imread(str(work / "images" / name), cv2.IMREAD_GRAYSCALE)
+        if depth is None or color is None:
+            continue
+        sy, sx = depth.shape[0] / color.shape[0], depth.shape[1] / color.shape[1]
+        for x, y, pid in im["obs"]:
+            X = pts.get(int(pid))
+            if X is None:
+                continue
+            z = (im["R"] @ X + im["t"])[2]
+            yi, xi = int(y * sy), int(x * sx)
+            if z <= 0 or not (0 <= yi < depth.shape[0] and 0 <= xi < depth.shape[1]):
+                continue
+            dmm = float(depth[yi, xi])
+            if dmm > 0:
+                ratios.append(dmm / 1000.0 / z)
+    if len(ratios) < 20:
+        return None, None, len(ratios)
+    r = np.array(ratios)
+    med = np.median(r)
+    mad = np.median(np.abs(r - med))
+    r = r[np.abs(r - med) < 4 * mad + 1e-12]       # fuera puntos en bordes/sin textura
+    med = float(np.median(r))
+    return med, float(1.4826 * np.median(np.abs(r - med)) / med / np.sqrt(len(r))), len(r)
 
 
 def scale_model_txt(src: Path, dst: Path, s: float):
@@ -504,15 +558,25 @@ def main():
     cams, imgs = read_model_txt(txt)
     print(f"[sfm] {len(imgs)}/{len(records)} imágenes registradas")
 
-    s, src = None, None
+    # Todas las fuentes de escala disponibles (se usa la mejor y se muestran las demás para
+    # contrastarlas): tapete ArUco > distancia por enfoque > trayectoria INS.
+    sources = []
     if a.mat:
-        s, rel = scale_from_aruco(a.work, cams, imgs, a.mat)
-        if s:
-            src = f"ArUco (dispersión {rel * 100:.2f} %)"
-    if s is None:
-        s = scale_from_ins(imgs, records, scan)
-        if s:
-            src = "trayectoria INS suavizada (aprox. 5-10 %; mídelo con ins_accuracy.py)"
+        s_a, rel = scale_from_aruco(a.work, cams, imgs, a.mat)
+        if s_a:
+            sources.append((s_a, f"ArUco (dispersión {rel * 100:.2f} %)"))
+    s_f, rel_f, n_f = scale_from_focus(a.work, imgs, read_points3d(txt))
+    if s_f:
+        calib = {c["id"]: c.get("focus_distance_calibration", "?") for c in session["cameras"]}
+        sources.append((s_f, f"distancia por enfoque ({n_f} puntos, ±{rel_f * 100:.2f} % estadístico; "
+                             f"calibración del foco: {', '.join(sorted(set(calib.values())))})"))
+    s_i = scale_from_ins(imgs, records, scan)
+    if s_i:
+        sources.append((s_i, "trayectoria INS suavizada (aprox. 5-10 %; mídelo con ins_accuracy.py)"))
+    for k, (sv, desc) in enumerate(sources):
+        diff = f"  ({(sv / sources[0][0] - 1) * 100:+.1f} % vs la elegida)" if k else "  ← elegida"
+        print(f"[scale] {sv:.6f} m/unidad · {desc}{diff}")
+    s, src = sources[0] if sources else (None, None)
     if s:
         print(f"[scale] factor {s:.6f} m/unidad desde {src}")
         metric = a.work / "sparse_metric_txt"

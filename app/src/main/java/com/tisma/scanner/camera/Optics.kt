@@ -54,4 +54,20 @@ object Optics {
         val steps = (ceil(span / (dofD * 0.8)).toInt() + 1).coerceIn(2, maxSteps)
         return (0 until steps).map { i -> (nearD + (farD - nearD) * i / (steps - 1)).toFloat() }
     }
+
+    /**
+     * Barrido para MEDIR distancia por enfoque (depth from focus) alrededor de la distancia
+     * actual: de ~0,7× a ~1,4× esa distancia, que cubre una pieza y su entorno cercano.
+     * A diferencia de [focusStack], siempre da varios planos (hacen falta para localizar el
+     * máximo de nitidez de cada píxel), aunque la pieza quepa en la profundidad de campo.
+     *
+     * @return planos de cerca a lejos en dioptrías; vacío si el enfoque está en infinito/desconocido.
+     */
+    fun depthSweep(centerD: Double, minFocusD: Double, steps: Int = 7, nearFactor: Double = 0.7, farFactor: Double = 1.4): List<Float> {
+        if (centerD <= 0.2 || minFocusD <= 0) return emptyList()   // más allá de 5 m no aporta
+        val nearD = minOf(centerD / nearFactor, minFocusD)
+        val farD = centerD / farFactor
+        if (nearD <= farD) return emptyList()
+        return (0 until steps).map { i -> (nearD + (farD - nearD) * i / (steps - 1)).toFloat() }
+    }
 }

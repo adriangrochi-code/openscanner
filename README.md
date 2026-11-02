@@ -25,6 +25,11 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   principal dispara a la vez. La app detecta el papel de cada objetivo, también los ocultos (en
   el Honor los encuentra probando su número), y los combina de la mejor forma que permita el
   móvil: flujos físicos sincronizados por hardware → cámaras concurrentes → por turnos.
+- **Distancia medida con el enfoque (activado por defecto)**: cada 6 disparos, con el móvil
+  quieto, la app barre el enfoque de 0,7× a 1,4× la distancia a la pieza. En el servidor eso da un
+  mapa de profundidad en mm por cada barrido y una **escala métrica sin tapete**, comparando la
+  profundidad medida por enfoque con la de la fotogrametría en cada punto. Las fuentes de escala
+  se muestran juntas para contrastarlas: tapete ArUco > enfoque > INS.
 - **Descarte de fotos movidas en el propio móvil**: giro medido por el giróscopo durante la exposición
   (> 1,5 px de arrastre), más nitidez relativa. Así no se guardan ni se suben. **JPEG ajustable**
   (92 por defecto) y una herramienta para medir cuánto se puede comprimir sin perder calidad.

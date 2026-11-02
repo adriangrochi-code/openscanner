@@ -65,6 +65,9 @@ data class UiState(
     val previewChoice: Map<ScanPass, String?> = emptyMap(),
     /** Usar la macro en la pasada Cerca (opcional; por defecto Cerca usa la principal). */
     val useMacro: Boolean = false,
+    /** Medir distancia con el enfoque: barrido automático cada pocos disparos (por defecto sí). */
+    val focusDepth: Boolean = true,
+    val focusSweeps: Int = 0,
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -149,6 +152,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     @Volatile private var discardedCount = 0
     @Volatile private var discardedBytes = 0L
     private val storedBytes = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Disparos desde el último barrido de enfoque automático. */
+    @Volatile private var shotsSinceSweep = 0
+    @Volatile private var focusSweepCount = 0
 
     /** Evita disparos solapados (ráfagas HDR o secuencias de rotación en curso). */
     @Volatile private var sequenceRunning = false
@@ -283,6 +290,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         if (warning.isNotEmpty()) log(warning)
         return plan
     }
+
+    override fun setFocusDepth(v: Boolean) = _state.update { it.copy(focusDepth = v) }
 
     override fun setUseMacro(v: Boolean) {
         _state.update { it.copy(useMacro = v) }
@@ -538,6 +547,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("jpeg_quality", _state.value.jpegQuality)
                 put("discard_blurry", _state.value.discardBlurry)
                 put("use_macro", _state.value.useMacro)
+                put("focus_depth_every", if (_state.value.focusDepth) AUTO_SWEEP_EVERY else 0)
                 put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
                 put("min_angle_deg", selector.minAngleDeg)
@@ -547,6 +557,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             },
         )
         ins.reset(); selector.reset(); trigger = 0
+        shotsSinceSweep = AUTO_SWEEP_EVERY - 1; focusSweepCount = 0   // el primer disparo quieto ya mide
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
         stackTriggers.clear(); coveredShots.clear(); exposures.clear()
         synchronized(recentTexture) { recentTexture.clear() }
@@ -621,21 +632,35 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val pass = activePass
         // HDR sólo si el móvil está quieto: la ráfaga dura 3 exposiciones y no debe haber movimiento.
         val bracket = if (ui.hdr && pass.hdr && (st?.stationary == true || imu.gyroRate < 0.05)) HDR_EV else emptyList()
-        val plan = focusPlanFor(pass)
+        var plan = focusPlanFor(pass)
+        var bracketUsed = bracket
+        // Medición de distancia por enfoque: cada AUTO_SWEEP_EVERY disparos, si el móvil está
+        // quieto, este disparo es un barrido de enfoque (mapa de profundidad en mm + escala).
+        shotsSinceSweep++
+        val still = st?.stationary == true || imu.gyroRate < 0.08
+        if (ui.focusDepth && shotsSinceSweep >= AUTO_SWEEP_EVERY && still) {
+            shotsSinceSweep = 0
+            focusSweepCount++
+            bracketUsed = emptyList()
+            plan = MultiCameraController.FocusPlan { _, minFocus, current ->
+                Optics.depthSweep(current.toDouble(), minFocus.toDouble())
+            }
+            _state.update { it.copy(focusSweeps = focusSweepCount) }
+        }
         // Si toca HDR, gana el HDR (ya son 3 fotos); si no, ráfaga anti-movimiento si está activada.
-        val burst = if (ui.antiShakeBurst && bracket.isEmpty()) ANTI_SHAKE_FRAMES else 0
+        val burst = if (ui.antiShakeBurst && bracketUsed.isEmpty() && plan == null) ANTI_SHAKE_FRAMES else 0
         sequenceRunning = true
         viewModelScope.launch {
             try {
                 val rig = rigPlan
-                shoot(bracket, plan, burst)
+                shoot(bracketUsed, plan, burst)
                 if (ui.rotateCameras && rig.separate.isNotEmpty()) {
                     // La compañera no se puede abrir a la vez: se dispara justo después, desde
                     // la misma pose (quieto), y se vuelve a la vista de la pasada.
                     for (g in rig.separate) {
                         openRig(listOf(g))
                         delay(700) // convergencia de AE/AF
-                        shoot(bracket, plan, burst)
+                        shoot(bracketUsed, plan, burst)
                     }
                     openRig(rig.groups)
                 }
@@ -878,5 +903,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val MACRO_FOCUS_M = 0.04
         const val IMU_TEST_SECONDS = 60
         const val ANTI_SHAKE_FRAMES = 4
+        /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */
+        const val AUTO_SWEEP_EVERY = 6
     }
 }

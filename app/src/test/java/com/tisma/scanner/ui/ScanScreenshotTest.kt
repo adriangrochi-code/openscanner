@@ -46,6 +46,7 @@ class ScanScreenshotTest {
         override fun runImuStillTest() {}
         override fun setStabilizePreview(v: Boolean) {}
         override fun setUseMacro(v: Boolean) {}
+        override fun setFocusDepth(v: Boolean) {}
         override fun setAntiShakeBurst(v: Boolean) {}
         override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int) = null
     }

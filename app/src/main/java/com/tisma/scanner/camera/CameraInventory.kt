@@ -131,7 +131,10 @@ object CameraInventory {
                 " sensor ${c.pixelArray?.let { "${it.width}x${it.height}" } ?: "?"}" +
                 " jpeg ${c.jpegSizes.firstOrNull()?.let { "${it.width}x${it.height}" } ?: "-"}" +
                 " f=${c.focalLengthsMm.joinToString()}mm hfov=${c.hfovDeg?.toInt() ?: "?"}°" +
-                " minFoco=${c.minFocusDiopters ?: "?"}D nivel=${c.hardwareLevel}")
+                " minFoco=${c.minFocusDiopters ?: "?"}D calibFoco=${when (c.focusCalibration) {
+                    CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_CALIBRATED -> "calibrado"
+                    CameraMetadata.LENS_INFO_FOCUS_DISTANCE_CALIBRATION_APPROXIMATE -> "aproximado"
+                    else -> "sin calibrar" }} nivel=${c.hardwareLevel}")
         }
     }
 
