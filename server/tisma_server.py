@@ -102,7 +102,10 @@ class Jobs:
         self.cfg = cfg
         self.root = Path(cfg["data_dir"]) / "scans"
         self.root.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.Lock()
+        # Reentrante: TODAS las lecturas/escrituras de status.json pasan por él. En Windows no se
+        # puede reemplazar un archivo que otro hilo tiene abierto (WinError 5): leer el estado
+        # mientras el trabajador lo actualiza mataba al trabajador.
+        self.lock = threading.RLock()
         self.queue = queue.Queue()
         # Trabajos que quedaron en cola o a medias si el servidor se reinició.
         for d in self.root.iterdir():
@@ -119,15 +122,25 @@ class Jobs:
         return d
 
     def _read(self, d: Path):
-        try:
-            return json.loads((d / "status.json").read_text())
-        except (OSError, ValueError):
-            return None
+        with self.lock:
+            try:
+                return json.loads((d / "status.json").read_text())
+            except (OSError, ValueError):
+                return None
 
     def _write(self, d: Path, st):
-        tmp = d / "status.json.tmp"
-        tmp.write_text(json.dumps(st, indent=2))
-        os.replace(tmp, d / "status.json")
+        with self.lock:
+            tmp = d / "status.json.tmp"
+            tmp.write_text(json.dumps(st, indent=2))
+            # Windows: un antivirus/indexador puede tener el archivo abierto un instante.
+            for attempt in range(40):
+                try:
+                    os.replace(tmp, d / "status.json")
+                    return
+                except PermissionError:
+                    if attempt == 39:
+                        raise
+                    time.sleep(0.025)
 
     def status(self, job_id):
         d = self.dir(job_id)
@@ -267,50 +280,57 @@ def worker(jobs: Jobs, cfg):
     have_colmap = bool(shutil.which(reconstruct.COLMAP_EXE) or Path(reconstruct.COLMAP_EXE).exists())
     while True:
         job_id = jobs.queue.get()
+        # Pase lo que pase con un trabajo, el trabajador sigue con el siguiente (antes una
+        # excepción fuera del pipeline lo mataba y la cola se quedaba parada para siempre).
         try:
-            d = jobs.dir(job_id)
-        except KeyError:
-            continue
-        jobs.update(job_id, state="processing", stage="empezando", started=time.time())
-        log(f"[{job_id[:8]}] procesando")
-        work = d / "work"
-        res = d / "results"
-        res.mkdir(exist_ok=True)
-        argv = [str(d / "upload.zip"), "--work", str(work), "--dense", cfg["dense"]]
-        if not have_colmap:
-            if not cfg["allow_without_colmap"]:
-                jobs.update(job_id, state="error", stage="falta COLMAP en el servidor",
-                            error="COLMAP no está instalado/configurado (campo 'colmap' en tisma_server.json)")
+            try:
+                d = jobs.dir(job_id)
+            except KeyError:
                 continue
-            argv.append("--prepare-only")
-        last = {"t": 0.0}
+            jobs.update(job_id, state="processing", stage="empezando", started=time.time())
+            log(f"[{job_id[:8]}] procesando")
+            work = d / "work"
+            res = d / "results"
+            res.mkdir(exist_ok=True)
+            argv = [str(d / "upload.zip"), "--work", str(work), "--dense", cfg["dense"]]
+            if not have_colmap:
+                if not cfg["allow_without_colmap"]:
+                    jobs.update(job_id, state="error", stage="falta COLMAP en el servidor",
+                                error="COLMAP no está instalado/configurado (campo 'colmap' en tisma_server.json)")
+                    continue
+                argv.append("--prepare-only")
+            last = {"t": 0.0}
 
-        def on_line(line):
-            st = stage_of(line)
-            now = time.time()
-            if st or now - last["t"] > 2:
-                last["t"] = now
-                jobs.update(job_id, **({"stage": st} if st else {}), last_line=line[:200])
+            def on_line(line):
+                st = stage_of(line)
+                now = time.time()
+                if st or now - last["t"] > 2:
+                    last["t"] = now
+                    jobs.update(job_id, **({"stage": st} if st else {}), last_line=line[:200])
 
-        try:
-            with open(d / "log.txt", "w", encoding="utf-8") as lf:
-                tee = _Tee(lf, on_line)
-                with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
-                    reconstruct.main(argv)
-            collect_results(work, res)
-            shutil.copy(d / "log.txt", res / "log.txt")
-            jobs.update(job_id, state="done", stage="terminado", finished=time.time())
-            log(f"[{job_id[:8]}] terminado")
-        except BaseException as e:   # SystemExit del pipeline incluido
-            with open(d / "log.txt", "a", encoding="utf-8") as lf:
-                traceback.print_exc(file=lf)
-            jobs.update(job_id, state="error", stage="error", error=str(e)[:500])
-            log(f"[{job_id[:8]}] error: {e}")
-        finally:
-            # El .zip ya no hace falta (los resultados quedan): ahorra disco.
-            if (d / "status.json").exists() and jobs._read(d).get("state") == "done":
-                with contextlib.suppress(OSError):
-                    (d / "upload.zip").unlink()
+            try:
+                with open(d / "log.txt", "w", encoding="utf-8") as lf:
+                    tee = _Tee(lf, on_line)
+                    with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
+                        reconstruct.main(argv)
+                collect_results(work, res)
+                shutil.copy(d / "log.txt", res / "log.txt")
+                jobs.update(job_id, state="done", stage="terminado", finished=time.time())
+                log(f"[{job_id[:8]}] terminado")
+            except BaseException as e:   # SystemExit del pipeline incluido
+                with open(d / "log.txt", "a", encoding="utf-8") as lf:
+                    traceback.print_exc(file=lf)
+                jobs.update(job_id, state="error", stage="error", error=str(e)[:500])
+                log(f"[{job_id[:8]}] error: {e}")
+            finally:
+                # El .zip ya no hace falta (los resultados quedan): ahorra disco.
+                if (d / "status.json").exists() and jobs._read(d).get("state") == "done":
+                    with contextlib.suppress(OSError):
+                        (d / "upload.zip").unlink()
+        except Exception as e:
+            log(f"[{job_id[:8]}] fallo inesperado del trabajador: {e!r}")
+            with contextlib.suppress(Exception):
+                jobs.update(job_id, state="error", stage="error", error=f"fallo interno: {e}"[:500])
 
 
 def collect_results(work: Path, res: Path):
@@ -532,6 +552,47 @@ def selftest():
         time.sleep(0.5)
     assert st["state"] == "done", st
     log(f"Trabajo de prueba: {st['state']} · {st.get('stage')} · resultados {st['results']}")
+
+    # Segundo trabajo en condiciones "de Windows": reemplazar status.json falla a ratos
+    # (archivo abierto por otro hilo o un antivirus) mientras 4 hilos consultan el estado sin
+    # parar. Antes esto mataba al trabajador y la cola se quedaba parada.
+    import random
+    real_replace = os.replace
+    rnd = random.Random(7)
+
+    def flaky_replace(a, b):
+        if rnd.random() < 0.3:
+            raise PermissionError(5, "Access is denied (simulado)")
+        return real_replace(a, b)
+    os.replace = flaky_replace
+    stop = threading.Event()
+    try:
+        code, r = call("POST", "/api/scans", {"size": len(data), "name": "autoprueba-windows"})
+        job2 = r["id"]
+        assert call("PUT", f"/api/scans/{job2}/data?offset=0", raw=data[:chunk])[0] == 200
+        off = min(chunk, len(data))
+        while off < len(data):
+            code, r = call("PUT", f"/api/scans/{job2}/data?offset={off}", raw=data[off:off + chunk])
+            off = r["received"]
+
+        def hammer():
+            while not stop.is_set():
+                with contextlib.suppress(Exception):
+                    call("GET", f"/api/scans/{job2}")
+        pollers = [threading.Thread(target=hammer, daemon=True) for _ in range(4)]
+        for t in pollers:
+            t.start()
+        assert call("POST", f"/api/scans/{job2}/complete", {})[0] == 202
+        for _ in range(300):
+            st2 = call("GET", f"/api/scans/{job2}")[1]
+            if st2.get("state") in ("done", "error"):
+                break
+            time.sleep(0.3)
+        assert st2.get("state") == "done", st2
+    finally:
+        stop.set()
+        os.replace = real_replace
+    log("Trabajo con reemplazos fallando al 30 % y consultas concurrentes: done")
 
     # Postprocesado (Open3D) sobre una caja sintética de 40×30×20 mm encima de una mesa.
     import postprocess
