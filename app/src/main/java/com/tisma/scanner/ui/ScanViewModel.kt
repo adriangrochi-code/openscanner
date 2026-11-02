@@ -63,6 +63,8 @@ data class UiState(
     val cameraChoices: List<Pair<String, String>> = emptyList(),
     /** Elección manual de la vista previa por pasada (null = automática). */
     val previewChoice: Map<ScanPass, String?> = emptyMap(),
+    /** Usar la macro en la pasada Cerca (opcional; por defecto Cerca usa la principal). */
+    val useMacro: Boolean = false,
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -249,10 +251,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     /** Papeles con la elección manual aplicada: Lejos cambia la principal, Cerca la macro. */
     private fun rolesFor(p: ScanPass): CameraRoles {
-        val choice = _state.value.previewChoice[p] ?: return roles
+        // Sin la opción de macro, Cerca usa la principal (con apilado de enfoque).
+        val base = if (_state.value.useMacro) roles else roles.copy(macro = null)
+        val choice = _state.value.previewChoice[p] ?: return base
         return when (p) {
-            ScanPass.FAR -> roles.copy(main = choice)
-            ScanPass.CLOSE -> roles.copy(macro = choice)
+            ScanPass.FAR -> base.copy(main = choice)
+            ScanPass.CLOSE -> base.copy(macro = choice)
         }
     }
 
@@ -268,7 +272,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val other = planFor(if (activePass == ScanPass.FAR) ScanPass.CLOSE else ScanPass.FAR)
         val warning = when {
             plan.previewId == null -> "No se encontró ninguna cámara trasera"
-            plan.previewId == other.previewId ->
+            // Sin macro es lo esperado que ambas pasadas usen la principal.
+            plan.previewId == other.previewId && _state.value.useMacro ->
                 "Lejos y Cerca usan la misma cámara (${roleName(plan.previewId)}): no se detectó " +
                     (if (activePass == ScanPass.CLOSE) "la macro" else "otra cámara") +
                     ". Elige una en la pestaña Cámaras o comparte el diagnóstico."
@@ -277,6 +282,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         _state.update { it.copy(rigText = text, rigWarning = warning) }
         if (warning.isNotEmpty()) log(warning)
         return plan
+    }
+
+    override fun setUseMacro(v: Boolean) {
+        _state.update { it.copy(useMacro = v) }
+        if (!sequenceRunning) {
+            val plan = planCurrentPass()
+            if (activePass == ScanPass.CLOSE) viewModelScope.launch { openRig(plan.groups) }
+        }
     }
 
     /** Elegir a mano qué cámara se ve en una pasada (null = automática). */
@@ -524,6 +537,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("part_depth_cm", _state.value.partDepthCm)
                 put("jpeg_quality", _state.value.jpegQuality)
                 put("discard_blurry", _state.value.discardBlurry)
+                put("use_macro", _state.value.useMacro)
                 put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
                 put("min_angle_deg", selector.minAngleDeg)

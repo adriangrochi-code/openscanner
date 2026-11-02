@@ -397,6 +397,10 @@ private fun QualityTab(s: UiState) {
 @Composable
 private fun CamerasTab(s: UiState, vm: ScanActions, onShareText: (String) -> Unit) {
     if (s.rigWarning.isNotEmpty()) Toast(s.rigWarning, error = true)
+    Section("Macro")
+    SettingSwitch("Usar la macro en la pasada Cerca", s.useMacro, enabled = !s.scanning, onChange = vm::setUseMacro)
+    Hint(if (s.useMacro) "Cerca: vista de la macro (foco fijo ~4 cm) + la principal disparando a la vez."
+        else "Cerca usa la cámara principal con apilado de enfoque. Activa la macro para detalle a ~4 cm.")
     Section("Cámara en la vista previa")
     for (p in ScanPass.entries) {
         SettingRow(if (p == ScanPass.FAR) "Lejos" else "Cerca") {

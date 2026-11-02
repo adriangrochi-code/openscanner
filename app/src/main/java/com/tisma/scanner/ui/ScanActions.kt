@@ -27,6 +27,8 @@ interface ScanActions {
     /** Prueba de quietud de 60 s para medir la precisión de la INS. */
     fun runImuStillTest()
     fun setStabilizePreview(v: Boolean)
+    /** Usar la cámara macro en la pasada Cerca. */
+    fun setUseMacro(v: Boolean)
     fun setAntiShakeBurst(v: Boolean)
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */
     fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform?

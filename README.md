@@ -19,13 +19,12 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   fotografiados y hacia dónde apunta la cámara. Cada foto se analiza (nitidez, textura,
   exposición), y la app solo dice **"Listo para enviar"** cuando el escaneo merece el cómputo.
 
-- **Pasadas lejos + cerca** con dos cámaras cada una: *Lejos* = vista de la **principal** + la
-  **ultra gran angular** disparando a la vez (geometría global, HDR); *Cerca* = vista **sólo de la
-  macro** + la **principal** disparando a la vez (detalle). La app detecta el papel de cada objetivo
-  (también los ocultos dentro de la cámara lógica) y los combina de la mejor forma que permita el
-  móvil: flujos físicos sincronizados por hardware → cámaras concurrentes → por turnos. El autoenfoque mide la distancia a la pieza; con ella la app
-  calcula la resolución (mm/px) y la profundidad de campo, y en *Cerca* cada disparo es un **apilado
-  de enfoques** con los planos justos para que toda la pieza salga nítida.
+- **Pasadas lejos + cerca**: *Lejos* = vista de la **principal** + la **ultra gran angular**
+  disparando a la vez (geometría global, HDR). *Cerca* = la **principal** apilando enfoques (detalle).
+  La **macro** es opcional (Ajustes → Cámaras): si se activa, *Cerca* muestra sólo la macro y la
+  principal dispara a la vez. La app detecta el papel de cada objetivo, también los ocultos (en
+  el Honor los encuentra probando su número), y los combina de la mejor forma que permita el
+  móvil: flujos físicos sincronizados por hardware → cámaras concurrentes → por turnos.
 - **Descarte de fotos movidas en el propio móvil**: giro medido por el giróscopo durante la exposición
   (> 1,5 px de arrastre), más nitidez relativa. Así no se guardan ni se suben. **JPEG ajustable**
   (92 por defecto) y una herramienta para medir cuánto se puede comprimir sin perder calidad.
