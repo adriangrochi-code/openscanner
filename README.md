@@ -15,6 +15,10 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
 - **Modo calidad para superficies planas/opacas**: reducción de ruido y realce de bordes al mínimo,
   linterna, bloqueo de foco/exposición/balance, tapete imprimible con textura + marcadores ArUco.
 
+- **Cobertura y calidad en vivo**: una cúpula muestra qué ángulos de la pieza ya están
+  fotografiados y hacia dónde apunta la cámara. Cada foto se analiza (nitidez, textura,
+  exposición), y la app solo dice **"Listo para enviar"** cuando el escaneo merece el cómputo.
+
 La reconstrucción 3D se hace en el PC (COLMAP + OpenMVS) con los scripts de `tools/`. El móvil se
 dedica a capturar los datos más ricos y mejor sincronizados posibles.
 
@@ -63,8 +67,14 @@ lisa, mate y de un solo color **no tiene puntos**. Esto es lo que más influye e
 5. **Movimiento**: rodea la pieza en 2-3 alturas (unos 30°, 50° y 70° sobre la mesa), con un
    solape grande. El disparo automático salta cada ~8° de giro. Si aparece "¡DEMASIADO RÁPIDO!",
    ve más despacio. Párate un instante de vez en cuando: así la INS se recalibra (ZUPT) y se hace el HDR.
-6. **Barrido de foco**: con el móvil apoyado y quieto, pulsa "Barrido foco" en las zonas con relieve.
-7. Pulsa **Detener** y **Compartir** para mandar el `.zip` al PC (o `adb pull` desde
+6. **Mira la cúpula** (abajo a la derecha de la vista previa). El centro es la vista desde arriba
+   y el borde, las vistas rasantes. Gris = falta, amarillo = 1 foto, verde = 2 o más. El punto
+   blanco es hacia dónde apuntas ahora; "arriba" en el dibujo es donde empezaste. Debajo aparecen
+   avisos del tipo *"A 10–30° de altura: falta el sector 90°–150°"*.
+   Si sale **"⚠ Poca textura"**, la pieza no tiene puntos que emparejar: pon el tapete o usa spray.
+7. **Barrido de foco**: con el móvil apoyado y quieto, pulsa "Barrido foco" en las zonas con relieve.
+8. Cuando ponga **"✓ Listo para enviar"** (≥ 75 % de cobertura, ≥ 40 fotos y < 20 % movidas),
+   pulsa **Detener** y **Compartir** para mandar el `.zip` al PC (o `adb pull` desde
    `Android/data/com.tisma.scanner/files/scans/`).
 
 ## Reconstrucción en el PC
@@ -78,7 +88,7 @@ python3 tools/depth_from_focus.py out/raw/scan_20261102_101500 --out out/dff
 ```
 
 `reconstruct.py` hace lo siguiente:
-1. Fusiona las ráfagas HDR (Mertens).
+1. Descarta las fotos que la app marcó como movidas y fusiona las ráfagas HDR (Mertens).
 2. Aplica CLAHE (realce de microtextura) **solo** a las imágenes que se usan para detectar puntos.
 3. Lanza COLMAP con una cámara por objetivo y los intrínsecos de fábrica del móvil como punto de
    partida. Usa SIFT con DSP + forma afín, que funciona mejor con poca textura.
@@ -95,6 +105,8 @@ scan_YYYYMMDD_HHMMSS/
   gps.csv              fixes GNSS/fused con precisión
   ins_trajectory.csv   trayectoria de la INS (pos, vel, orientación, reposo)
   frames.csv           una fila por foto: cámara, timestamp, pose INS interpolada a ese instante
+  quality.csv          por foto: nitidez, textura, recorte, movida sí/no, ángulo de vista, sector de cobertura
+  quality_summary.json cobertura total y por anillo, fotos movidas, avisos y si está "listo"
   capture_meta.jsonl   por foto: exposición, ISO, foco (dioptrías), EV del HDR, intrínsecos dinámicos
   images/<camera_id>/<t_ns>.jpg   JPEG en la orientación nativa del sensor (sin rotar)
 ```
@@ -127,6 +139,8 @@ app/src/main/java/com/tisma/scanner/
   ins/MahonyFilter.kt              orientación (ganancia adaptativa)
   ins/StrapdownIns.kt              navegación inercial + ZUPT + corrección GNSS
   ins/KeyframeSelector.kt          disparo automático guiado por la INS
+  quality/CoverageMap.kt           cúpula de cobertura a partir de la orientación INS
+  quality/ImageQuality.kt          nitidez normalizada, textura por baldosas, recorte
   session/ScanSession.kt           escritura del dataset y .zip
   ui/                              Compose: vista previa, telemetría INS, controles
 tools/
@@ -138,6 +152,5 @@ tools/
 ## Próximos pasos posibles
 
 - Captura RAW/DNG (más rango dinámico y sin procesado) si el móvil lo permite.
-- Indicador de cobertura en vivo (qué ángulos de la pieza faltan por fotografiar).
 - Usar la distancia entre objetivos (`pose_translation_m`) como restricción de rig en COLMAP.
 - Reconstrucción preliminar en el propio móvil para revisar el escaneo antes de irse.

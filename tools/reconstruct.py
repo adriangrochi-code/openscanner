@@ -52,6 +52,18 @@ def read_frames(scan: Path):
         return list(csv.DictReader(f))
 
 
+def drop_blurry(scan: Path, frames):
+    """Descarta las fotos que la app marcó como movidas (quality.csv), salvo ráfagas HDR."""
+    p = scan / "quality.csv"
+    if not p.exists():
+        return frames
+    with open(p) as f:
+        bad = {(r["camera_id"], r["t_ns"]) for r in csv.DictReader(f) if r["blurry"] == "1"}
+    kept = [fr for fr in frames if (fr["camera_id"], fr["t_ns"]) not in bad]
+    print(f"[quality] {len(frames) - len(kept)} fotos movidas descartadas")
+    return kept
+
+
 def read_meta(scan: Path):
     """(camera_id, t_ns) -> metadatos de captura."""
     out = {}
@@ -364,7 +376,13 @@ def main():
     a.work.mkdir(parents=True, exist_ok=True)
     scan = load_session(a.scan, a.work)
     session = json.loads((scan / "session.json").read_text())
-    frames, meta = read_frames(scan), read_meta(scan)
+    frames, meta = drop_blurry(scan, read_frames(scan)), read_meta(scan)
+    qs = scan / "quality_summary.json"
+    if qs.exists():
+        q = json.loads(qs.read_text())
+        print(f"[quality] cobertura {q['coverage'] * 100:.0f} %, listo={q['ready']}")
+        for h in q.get("hints", []):
+            print(f"[quality]   aviso: {h}")
     print(f"[load] {scan.name}: {len(frames)} fotos, {session['device']['manufacturer']} {session['device']['model']}")
     records = prepare_images(scan, a.work, frames, meta, clahe=not a.no_clahe)
     if a.prepare_only:

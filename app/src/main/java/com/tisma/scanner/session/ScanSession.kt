@@ -33,6 +33,7 @@ class ScanSession(baseDir: File) {
     private val frames: BufferedWriter
     private val trajectory: BufferedWriter
     private val meta: BufferedWriter
+    private val quality: BufferedWriter
     val imageCount = AtomicInteger(0)
 
     init {
@@ -44,6 +45,9 @@ class ScanSession(baseDir: File) {
             write("t_ns,px,py,pz,vx,vy,vz,qw,qx,qy,qz,stationary\n")
         }
         meta = File(dir, "capture_meta.jsonl").bufferedWriter()
+        quality = File(dir, "quality.csv").bufferedWriter().apply {
+            write("t_ns,camera_id,sharpness,texture,clipped_high,clipped_low,mean_luma,blurry,view_az_deg,view_el_deg,coverage_ring,coverage_bin\n")
+        }
     }
 
     fun imuWriter(): BufferedWriter = File(dir, "imu.csv").bufferedWriter(bufferSize = 1 shl 16)
@@ -99,8 +103,21 @@ class ScanSession(baseDir: File) {
     }
 
     @Synchronized
+    fun addQuality(cameraId: String, tNs: Long, q: com.tisma.scanner.quality.QualityReport, blurry: Boolean,
+                   azEl: Pair<Double, Double>?, bin: Pair<Int, Int>?) {
+        quality.write("$tNs,$cameraId,${q.sharpness},${q.texture},${q.clippedHigh},${q.clippedLow},${q.meanLuma}," +
+            "${if (blurry) 1 else 0},${azEl?.first ?: ""},${azEl?.second ?: ""},${bin?.first ?: ""},${bin?.second ?: ""}\n")
+    }
+
+    /** Resumen para decidir en el servidor (o antes de subir) si merece la pena procesar. */
+    fun writeQualitySummary(summary: JSONObject) {
+        File(dir, "quality_summary.json").writeText(summary.toString(2))
+    }
+
+    @Synchronized
     fun close() {
         runCatching { frames.close() }; runCatching { trajectory.close() }; runCatching { meta.close() }
+        runCatching { quality.close() }
     }
 
     /** Comprime el escaneo en un .zip junto a la carpeta para compartirlo. */

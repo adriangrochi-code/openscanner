@@ -56,6 +56,12 @@ fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit) {
                 },
             )
             InsOverlay(s, Modifier.align(Alignment.TopStart))
+            if (s.scanning || s.analyzed > 0) {
+                CoverageDome(
+                    s.coverageRings, s.coverage, s.liveAzDeg, s.liveElDeg,
+                    Modifier.align(Alignment.BottomEnd).padding(8.dp),
+                )
+            }
             if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.BottomCenter))
         }
 
@@ -73,6 +79,7 @@ fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit) {
                 }
                 s.lastZip?.let { zip -> OutlinedButton(onClick = { onShare(zip) }) { Text("Compartir") } }
             }
+            if (s.scanning || s.analyzed > 0) QualityPanel(s)
             Spacer(Modifier.padding(4.dp))
             Toggle("Disparo automático guiado por INS", s.autoTrigger, true, vm::setAutoTrigger)
             Toggle("HDR (horquillado −2/0/+2 EV en reposo)", s.hdr, true, vm::setHdr)
@@ -88,6 +95,22 @@ fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit) {
             Section("Cámaras detectadas") { s.cameras.forEach { Mono(it) } }
             Section("Registro") { s.log.forEach { Mono(it) } }
         }
+    }
+}
+
+@Composable
+private fun QualityPanel(s: UiState) {
+    Column(Modifier.padding(top = 8.dp)) {
+        Text(
+            s.readinessText.ifEmpty { "Analizando fotos…" },
+            color = if (s.ready) Color(0xFF7CFC00) else Color(0xFFFFB74D),
+            fontSize = 15.sp,
+        )
+        Mono("Cobertura %d %% · fotos analizadas %d · movidas %d".format((s.coveragePct * 100).toInt(), s.analyzed, s.blurry))
+        if (s.textureRecent < ScanViewModel.LOW_TEXTURE) {
+            Mono("⚠ Poca textura (%d %%): usa el tapete o spray mate".format((s.textureRecent * 100).toInt()), Color(0xFFFF8A65))
+        }
+        s.hints.forEach { Mono("→ $it", Color(0xFFB0BEC5)) }
     }
 }
 
