@@ -207,7 +207,23 @@ private fun CameraPreview(vm: ScanActions) {
                             override fun onSurfaceTextureAvailable(t: SurfaceTexture, w: Int, h: Int) = vm.onPreviewAvailable(t)
                             override fun onSurfaceTextureSizeChanged(t: SurfaceTexture, w: Int, h: Int) {}
                             override fun onSurfaceTextureDestroyed(t: SurfaceTexture): Boolean { vm.onPreviewDestroyed(); return true }
-                            override fun onSurfaceTextureUpdated(t: SurfaceTexture) {}
+                            // Estabilización por software: cada fotograma se desplaza/gira según el
+                            // giróscopo en el instante en que se capturó.
+                            private var stabilized = false
+                            override fun onSurfaceTextureUpdated(t: SurfaceTexture) {
+                                val tr = vm.stabilizePreview(t.timestamp, width, height)
+                                if (tr == null) {
+                                    if (stabilized) { setTransform(null); stabilized = false }
+                                    return
+                                }
+                                val cx = width / 2f; val cy = height / 2f
+                                setTransform(android.graphics.Matrix().apply {
+                                    postScale(tr.scale, tr.scale, cx, cy)
+                                    postRotate(tr.rotDeg, cx, cy)
+                                    postTranslate(tr.dxPx, tr.dyPx)
+                                })
+                                stabilized = true
+                            }
                         }
                     }
                 },
@@ -303,6 +319,8 @@ private fun ScanSettings(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
     SettingSwitch("Linterna", s.torch, onChange = vm::setTorch)
     SettingSwitch("Bloquear foco/exposición", s.lock3A, enabled = !s.scanning, onChange = vm::setLock3A)
     SettingSwitch("Descartar fotos movidas", s.discardBlurry, onChange = vm::setDiscardBlurry)
+    SettingSwitch("Estabilizar vista previa (giróscopo)", s.stabilizePreview, onChange = vm::setStabilizePreview)
+    SettingSwitch("Ráfaga anti-movimiento (4 fotos cortas)", s.antiShakeBurst, onChange = vm::setAntiShakeBurst)
     SettingRow("Calidad JPEG") {
         val opts = listOf(85, 90, 92, 95)
         ValueField("${s.jpegQuality}" + if (s.jpegQuality == 92) " · recomendada" else "") {

@@ -30,6 +30,15 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   (> 1,5 px de arrastre), más nitidez relativa. Así no se guardan ni se suben. **JPEG ajustable**
   (92 por defecto) y una herramienta para medir cuánto se puede comprimir sin perder calidad.
 
+- **Estabilización por software**: la vista previa se estabiliza con el giróscopo (orientación en el
+  instante exacto de cada fotograma, recorte del 15 % sólo en pantalla). Para las fotos, la
+  **ráfaga anti-movimiento** toma 4 fotos con 1/4 de exposición, menos arrastre en cada una, y el
+  servidor las alinea con la más nítida y las promedia: menos movimiento sin más ruido. Las fotos
+  no se recortan, para que la calibración de la cámara sea la misma en todas.
+- **Precisión de la INS medible**: prueba de quietud en la app (ruido, sesgo, deriva) y
+  `tools/ins_accuracy.py`, que mide el error real en movimiento contra las poses de la
+  fotogrametría. Incluye ZARU y suavizado entre paradas.
+
 ![Interfaz](docs/screenshots/scan_tab.png)
 
 La reconstrucción 3D se hace en el PC (COLMAP + OpenMVS) con los scripts de `tools/`. El móvil se
@@ -176,6 +185,7 @@ tools/
   reconstruct.py                   HDR → COLMAP → escala métrica → malla
   depth_from_focus.py              mapas de profundidad a partir de barridos de foco
   compression_test.py              cuánto comprimir sin perder emparejamientos
+  ins_accuracy.py                  error real de la INS frente a la fotogrametría (+ suavizado ZUPT)
 ```
 
 ## Próximos pasos posibles

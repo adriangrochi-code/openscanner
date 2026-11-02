@@ -44,6 +44,9 @@ class ScanScreenshotTest {
         override fun setPreviewCamera(pass: ScanPass, id: String?) {}
         override fun diagnostics() = ""
         override fun runImuStillTest() {}
+        override fun setStabilizePreview(v: Boolean) {}
+        override fun setAntiShakeBurst(v: Boolean) {}
+        override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int) = null
     }
 
     /** Escena falsa en lugar de la cámara: mesa gris con una pieza violeta. */

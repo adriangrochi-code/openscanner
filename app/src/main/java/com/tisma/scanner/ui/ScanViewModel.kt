@@ -67,6 +67,10 @@ data class UiState(
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
     val imuReport: List<String> = emptyList(),
+    // --- Estabilización por software ---
+    val stabilizePreview: Boolean = true,
+    /** Ráfaga anti-movimiento: N fotos con exposición 1/N que el servidor alinea y promedia. */
+    val antiShakeBurst: Boolean = false,
     val gpsText: String = "GPS: sin fix",
     val posStdM: Double = 0.0,
     val scanning: Boolean = false,
@@ -162,6 +166,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     /** Serializa aperturas de cámara (rotación, cambios de ajustes, vista previa). */
     private val rigMutex = kotlinx.coroutines.sync.Mutex()
     private var previewSurface: Surface? = null
+    private val stabilizer = com.tisma.scanner.camera.PreviewStabilizer()
     @Volatile private var trigger = 0
     private var loop: Job? = null
     private var previewTexture: SurfaceTexture? = null
@@ -315,6 +320,26 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         }
     }
 
+    override fun setStabilizePreview(v: Boolean) = _state.update { it.copy(stabilizePreview = v) }
+    override fun setAntiShakeBurst(v: Boolean) = _state.update { it.copy(antiShakeBurst = v) }
+
+    /**
+     * Transformación de estabilización para el fotograma de vista previa con ese timestamp.
+     * null = sin estabilizar (desactivada o sin datos de la INS).
+     */
+    override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform? {
+        if (!_state.value.stabilizePreview || viewW <= 0 || viewH <= 0) return null
+        val cam = cameras.previewCameraId ?: return null
+        val info = inventory[cam] ?: return null
+        if (info.facing != CameraMetadata.LENS_FACING_BACK) return null
+        val t = frameTimestampNs + (clockOffset[cam] ?: 0L)
+        val st = ins.stateAt(t) ?: return null
+        // Fotograma fuera del historial de la INS (base de tiempos distinta): no estabilizar.
+        val latest = ins.latest() ?: return null
+        if (kotlin.math.abs(latest.timestampNs - t) > 1_000_000_000L) return null
+        return stabilizer.update(st.orientation, viewW, viewH, info.hfovDeg ?: 70.0)
+    }
+
     override fun diagnostics(): String = buildString {
         append(CameraInventory.diagnostics(cameraManager, inventory))
         appendLine("Papeles: ${roles.describe()}")
@@ -341,6 +366,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             // Una sola Surface por textura: crear una nueva en cada apertura las filtraba.
             val surface = previewSurface ?: Surface(tex).also { previewSurface = it }
             cameras.open(groups, surface, previewSize)
+            stabilizer.reset()
             if (cameras.openedStreams.isEmpty()) {
                 // Una cámara oculta puede aparecer al probar su número pero negarse a abrir:
                 // volver a la principal para no quedarse sin vista previa.
@@ -489,6 +515,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("part_depth_cm", _state.value.partDepthCm)
                 put("jpeg_quality", _state.value.jpegQuality)
                 put("discard_blurry", _state.value.discardBlurry)
+                put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
                 put("min_angle_deg", selector.minAngleDeg)
                 put("min_translation_m", selector.minTranslationM)
@@ -572,18 +599,20 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         // HDR sólo si el móvil está quieto: la ráfaga dura 3 exposiciones y no debe haber movimiento.
         val bracket = if (ui.hdr && pass.hdr && (st?.stationary == true || imu.gyroRate < 0.05)) HDR_EV else emptyList()
         val plan = focusPlanFor(pass)
+        // Si toca HDR, gana el HDR (ya son 3 fotos); si no, ráfaga anti-movimiento si está activada.
+        val burst = if (ui.antiShakeBurst && bracket.isEmpty()) ANTI_SHAKE_FRAMES else 0
         sequenceRunning = true
         viewModelScope.launch {
             try {
                 val rig = rigPlan
-                shoot(bracket, plan)
+                shoot(bracket, plan, burst)
                 if (ui.rotateCameras && rig.separate.isNotEmpty()) {
                     // La compañera no se puede abrir a la vez: se dispara justo después, desde
                     // la misma pose (quieto), y se vuelve a la vista de la pasada.
                     for (g in rig.separate) {
                         openRig(listOf(g))
                         delay(700) // convergencia de AE/AF
-                        shoot(bracket, plan)
+                        shoot(bracket, plan, burst)
                     }
                     openRig(rig.groups)
                 }
@@ -594,12 +623,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         }
     }
 
-    private suspend fun shoot(bracket: List<Int>, plan: MultiCameraController.FocusPlan?) {
+    private suspend fun shoot(bracket: List<Int>, plan: MultiCameraController.FocusPlan?, burst: Int = 0) {
         val s = session ?: return
         trigger++
         if (plan != null) stackTriggers += trigger
         val before = s.imageCount.get()
-        val expected = cameras.capture(bracket, plan)
+        val expected = cameras.capture(bracket, plan, burst)
         _state.update { it.copy(triggers = trigger) }
         // Espera a que lleguen los JPEG antes de otro disparo; si no, una ráfaga larga
         // (HDR, apilado) quedaría etiquetada con el disparo siguiente.
@@ -819,5 +848,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         /** Distancia típica de enfoque de las macro de foco fijo de 2 MP. */
         const val MACRO_FOCUS_M = 0.04
         const val IMU_TEST_SECONDS = 60
+        const val ANTI_SHAKE_FRAMES = 4
     }
 }

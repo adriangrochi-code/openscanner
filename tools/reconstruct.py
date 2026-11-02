@@ -104,10 +104,11 @@ def group_brackets(frames, meta, max_gap_ns=600_000_000):
             fr["_ev"] = ev
             fr["_focus_target"] = m.get("focus_sweep_target_diopters")
             fr["_focus"] = m.get("focus_distance_diopters", fr["_focus_target"])
-            key = (ev, fr["_focus_target"])
+            fr["_burst"] = m.get("burst_index")
+            key = (ev, fr["_focus_target"], fr["_burst"])
             if cur and (fr["trigger"] != cur[-1]["trigger"]
                         or int(fr["t_ns"]) - int(cur[-1]["t_ns"]) > max_gap_ns
-                        or key in [(c["_ev"], c["_focus_target"]) for c in cur]):
+                        or key in [(c["_ev"], c["_focus_target"], c["_burst"]) for c in cur]):
                 groups.append(cur); cur = []
             cur.append(fr)
         if cur:
@@ -135,6 +136,47 @@ def enhance_for_features(img, clip=3.0):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def sharpness(gray):
+    return cv2.Laplacian(gray, cv2.CV_32F).var() / (gray.var() + 1.0)
+
+
+def burst_merge(paths):
+    """
+    Ráfaga anti-movimiento: alinea las fotos cortas con la más nítida y las promedia.
+    La referencia conserva su geometría completa (sin recorte), así que su calibración no
+    cambia; donde otra foto no cubre (bordes) se usan sólo las que sí cubren.
+    Devuelve (imagen, índice de la referencia) o (None, None).
+    """
+    imgs = [cv2.imread(str(p)) for p in paths]
+    idx = [i for i, im in enumerate(imgs) if im is not None]
+    if not idx:
+        return None, None
+    grays = {i: cv2.cvtColor(imgs[i], cv2.COLOR_BGR2GRAY) for i in idx}
+    sharp = {i: sharpness(grays[i]) for i in idx}
+    ref = max(idx, key=lambda i: sharp[i])
+    h, w = grays[ref].shape
+    s = min(1.0, 1000 / max(h, w))
+    small_ref = cv2.resize(grays[ref], None, fx=s, fy=s).astype(np.float32)
+    acc = imgs[ref].astype(np.float32)
+    weight = np.ones((h, w, 1), np.float32)
+    for i in idx:
+        if i == ref or sharp[i] < 0.6 * sharp[ref]:
+            continue  # una foto de la ráfaga salió movida: no ensuciar la media
+        warp = np.eye(3, dtype=np.float32)
+        try:
+            _, warp = cv2.findTransformECC(small_ref, cv2.resize(grays[i], None, fx=s, fy=s).astype(np.float32),
+                                           warp, cv2.MOTION_HOMOGRAPHY,
+                                           (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5), None, 5)
+        except cv2.error:
+            continue
+        S = np.diag([s, s, 1]).astype(np.float32)
+        H = np.linalg.inv(S) @ warp @ S  # homografía a resolución completa
+        flags = cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+        acc += cv2.warpPerspective(imgs[i].astype(np.float32), H, (w, h), flags=flags)
+        weight += cv2.warpPerspective(np.ones((h, w), np.float32), H, (w, h), flags=flags)[..., None]
+    return np.clip(acc / weight, 0, 255).astype(np.uint8), ref
+
+
 def focus_stack(group, scan, work):
     """Apilado de enfoque -> imagen todo-enfocada alineada con el plano central (+ mapa de profundidad)."""
     from depth_from_focus import depth_from_focus  # mismo directorio
@@ -157,11 +199,15 @@ def focus_stack(group, scan, work):
 def prepare_images(scan, work, frames, meta, clahe):
     color_dir, feat_dir = work / "images", work / "images_feat"
     records = []  # (nombre relativo, frame representativo)
-    n_hdr = n_stack = 0
+    n_hdr = n_stack = n_burst = 0
     for g in group_brackets(frames, meta):
         if len({r["_focus_target"] for r in g}) > 1:
             img, ref = focus_stack(g, scan, work)
             n_stack += 1
+        elif len(g) > 1 and any(r["_burst"] is not None for r in g):
+            img, k = burst_merge([scan / r["file"] for r in g])
+            ref = g[k] if k is not None else g[0]
+            n_burst += 1
         else:
             ref = min(g, key=lambda r: abs(r["_ev"]))  # la de 0 EV como referencia de pose
             img = fuse([scan / r["file"] for r in g])
@@ -177,7 +223,8 @@ def prepare_images(scan, work, frames, meta, clahe):
         f.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(f), enhance_for_features(img) if clahe else img, [cv2.IMWRITE_JPEG_QUALITY, 97])
         records.append((name, ref))
-    print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({n_hdr} fusiones HDR, {n_stack} apilados de enfoque)")
+    print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({n_hdr} fusiones HDR, "
+          f"{n_stack} apilados de enfoque, {n_burst} ráfagas anti-movimiento)")
     return records
 
 

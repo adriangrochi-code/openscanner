@@ -114,7 +114,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     }
 
     /** Etiqueta de cada foto de una ráfaga (HDR o barrido de foco). */
-    data class ShotTag(val ev: Int = 0, val focusDiopters: Float? = null)
+    data class ShotTag(val ev: Int = 0, val focusDiopters: Float? = null, val burstIndex: Int? = null)
 
     /**
      * Plan de enfoque para una cámara: recibe (enfoque mínimo, enfoque actual) en dioptrías y
@@ -220,7 +220,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      *  2. `bracketEv` y control manual -> ráfaga HDR (ISO fijo, tiempo × 2^EV).
      *  3. Foto normal (p.ej. la macro de foco fijo cuando se pide un apilado).
      */
-    fun capture(bracketEv: List<Int> = emptyList(), focusPlan: FocusPlan? = null): Int {
+    fun capture(bracketEv: List<Int> = emptyList(), focusPlan: FocusPlan? = null, burstFrames: Int = 0): Int {
         var n = 0
         for (a in active) {
             try {
@@ -260,6 +260,23 @@ class MultiCameraController(context: Context, private val listener: Listener) {
                                 setTag(ShotTag(ev = ev))
                             }.build()
                         }
+                    // Ráfaga anti-movimiento: N fotos de exposición 1/N (ISO ×N para el mismo brillo).
+                    // Cada una tiene N veces menos arrastre; el servidor las alinea y promedia,
+                    // lo que devuelve buena parte del ruido extra (≈ √N).
+                    burstFrames > 1 && a.manualSensor && a.lastExposureNs > 0 && a.lastIso > 0 -> {
+                        var iso = a.lastIso * burstFrames
+                        a.isoRange?.let { r -> iso = iso.coerceIn(r.lower, r.upper) }
+                        var exp = (a.lastExposureNs.toDouble() * a.lastIso / iso).toLong()
+                        a.exposureRange?.let { r -> exp = exp.coerceIn(r.lower, r.upper) }
+                        (0 until burstFrames).map { k ->
+                            stillRequest(a).apply {
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                                set(CaptureRequest.SENSOR_EXPOSURE_TIME, exp)
+                                set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                                setTag(ShotTag(burstIndex = k))
+                            }.build()
+                        }
+                    }
                     else -> listOf(stillRequest(a).build())
                 }
                 if (burst.size == 1) a.session.capture(burst[0], metadataCallback(a), camHandler)
@@ -435,6 +452,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         val m = JSONObject()
         m.put("bracket_ev", tag?.ev ?: 0)
         tag?.focusDiopters?.let { m.put("focus_sweep_target_diopters", it.toDouble()) }
+        tag?.burstIndex?.let { m.put("burst_index", it) }
         r.get(CaptureResult.LENS_STATE)?.let { m.put("lens_moving", it == CaptureResult.LENS_STATE_MOVING) }
         r.get(CaptureResult.LENS_APERTURE)?.let { m.put("aperture_f", it.toDouble()) }
         r.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { m.put("exposure_ns", it) }
