@@ -23,6 +23,7 @@ Ejemplo:
 """
 import argparse
 import csv
+import os
 import json
 import shutil
 import subprocess
@@ -304,10 +305,26 @@ def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, c
 
 # --------------------------------------------------------------------------- COLMAP
 
+# Rutas configurables (en Windows COLMAP/OpenMVS no suelen estar en el PATH): las fija el
+# servidor (tisma_server.py) o las variables de entorno TISMA_COLMAP / TISMA_OPENMVS.
+COLMAP_EXE = os.environ.get("TISMA_COLMAP", "colmap")
+OPENMVS_DIR = os.environ.get("TISMA_OPENMVS", "")
+
+
+def run_tool(cmd, cwd=None):
+    """Ejecuta una herramienta externa volcando su salida en el registro (stdout actual)."""
+    cmd = [str(c) for c in cmd]
+    print("[run]", " ".join(cmd), flush=True)
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         errors="replace")
+    for line in p.stdout:
+        print("   ", line.rstrip(), flush=True)
+    if p.wait() != 0:
+        raise RuntimeError(f"{Path(cmd[0]).name} terminó con código {p.returncode}")
+
+
 def colmap(*args):
-    cmd = ["colmap", *map(str, args)]
-    print("[colmap]", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    run_tool([COLMAP_EXE, *args])
 
 
 def camera_params(session, cam_id, width, height):
@@ -584,9 +601,9 @@ def dense(work, model_dir, mode):
         colmap("stereo_fusion", "--workspace_path", und, "--output_path", work / "fused.ply")
         colmap("poisson_mesher", "--input_path", work / "fused.ply", "--output_path", work / "mesh.ply")
     elif mode == "openmvs":
-        def mvs(*a):
-            print("[openmvs]", " ".join(map(str, a)))
-            subprocess.run(list(map(str, a)), check=True, cwd=und)
+        def mvs(tool, *a):
+            exe = str(Path(OPENMVS_DIR) / tool) if OPENMVS_DIR else tool
+            run_tool([exe, *a], cwd=und)
         mvs("InterfaceCOLMAP", "-i", ".", "-o", "scene.mvs", "--image-folder", "images")
         mvs("DensifyPointCloud", "scene.mvs", "--resolution-level", 0)
         mvs("ReconstructMesh", "scene_dense.mvs")
@@ -597,7 +614,7 @@ def dense(work, model_dir, mode):
 
 # --------------------------------------------------------------------------- main
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path, help="carpeta scan_* o .zip exportado por la app")
     ap.add_argument("--work", type=Path, default=Path("tisma_work"))
@@ -611,7 +628,7 @@ def main():
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
     ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     a.work.mkdir(parents=True, exist_ok=True)
     scan = load_session(a.scan, a.work)
@@ -628,8 +645,8 @@ def main():
                              a.denoise, not a.no_color_norm)
     if a.prepare_only:
         return
-    if not shutil.which("colmap"):
-        sys.exit("No se encuentra `colmap` en el PATH (https://colmap.github.io/install.html)")
+    if not (shutil.which(COLMAP_EXE) or Path(COLMAP_EXE).exists()):
+        raise SystemExit(f"No se encuentra COLMAP ({COLMAP_EXE}): https://colmap.github.io/install.html")
 
     model = run_sfm(a.work, session, records, a.matcher)
     txt = a.work / "sparse_txt"

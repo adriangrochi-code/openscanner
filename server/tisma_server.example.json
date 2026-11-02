@@ -1,0 +1,16 @@
+{
+  "host": "0.0.0.0",
+  "port": 8443,
+  "api_keys": ["CAMBIA-ESTA-CLAVE-POR-UNA-LARGA-Y-ALEATORIA"],
+  "data_dir": "datos",
+  "colmap": "C:\\COLMAP\\bin\\colmap.exe",
+  "openmvs_dir": "C:\\OpenMVS",
+  "dense": "openmvs",
+  "chunk_mb": 16,
+  "max_upload_gb": 8,
+  "max_unzipped_gb": 12,
+  "retention_days": 14,
+  "tls_cert": "C:\\TismaServer\\certs\\tismaservidores.net-chain.pem",
+  "tls_key": "C:\\TismaServer\\certs\\tismaservidores.net-key.pem",
+  "allow_without_colmap": false
+}

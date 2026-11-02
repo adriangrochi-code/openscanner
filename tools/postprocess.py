@@ -26,8 +26,9 @@ import numpy as np
 
 try:
     import open3d as o3d
-except ImportError:  # pragma: no cover
-    raise SystemExit("Falta Open3D: pip install open3d (y en Linux sin pantalla: apt install libegl1 libgl1)")
+except ImportError as e:  # pragma: no cover
+    raise SystemExit(f"No se puede cargar Open3D ({e}). Instálalo con: pip install open3d "
+                     "(y en Linux sin pantalla: apt install libegl1 libgl1)")
 
 UNITS_TO_MM = {"m": 1000.0, "mm": 1.0, "cm": 10.0, "unit": 1.0}
 
