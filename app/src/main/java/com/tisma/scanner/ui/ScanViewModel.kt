@@ -57,6 +57,12 @@ data class UiState(
     /** Papel detectado de cada objetivo y cómo se combinan en la pasada actual. */
     val rolesText: String = "",
     val rigText: String = "",
+    /** Aviso si la pasada no puede usar la cámara que le toca (p.ej. el móvil oculta la macro). */
+    val rigWarning: String = "",
+    /** Cámaras traseras elegibles a mano para la vista previa de cada pasada: id -> etiqueta. */
+    val cameraChoices: List<Pair<String, String>> = emptyList(),
+    /** Elección manual de la vista previa por pasada (null = automática). */
+    val previewChoice: Map<ScanPass, String?> = emptyMap(),
     val gpsText: String = "GPS: sin fix",
     val posStdM: Double = 0.0,
     val scanning: Boolean = false,
@@ -166,8 +172,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         lenses = inventory.values.map { c ->
             Lens(
                 id = c.id, back = c.facing == CameraMetadata.LENS_FACING_BACK,
-                logical = c.isLogicalMultiCamera, physicalIds = c.physicalIds, isPublic = c.id in public,
-                pixels = c.jpegSizes.firstOrNull()?.let { it.width.toLong() * it.height } ?: 0L,
+                // Las encontradas probando su número también se intentan abrir directamente.
+                logical = c.isLogicalMultiCamera, physicalIds = c.physicalIds, isPublic = c.id in public || c.probed,
+                pixels = c.sensorPixels,
                 hfovDeg = c.hfovDeg,
             )
         }
@@ -178,8 +185,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 cameras = inventory.values.map { c -> c.label },
                 concurrentSupported = concurrentSets.any { s -> s.size > 1 },
                 rolesText = roles.describe(),
+                cameraChoices = inventory.values
+                    .filter { c -> c.facing == CameraMetadata.LENS_FACING_BACK }
+                    .map { c -> c.id to roleName(c.id) + " · %.0f MP".format(c.sensorPixels / 1e6) + (c.hfovDeg?.let { f -> " · ${f.toInt()}°" } ?: "") },
             )
         }
+        val hidden = inventory.values.filter { it.probed }.map { it.id }
+        if (hidden.isNotEmpty()) log("Cámaras ocultas encontradas por número: ${hidden.joinToString()}")
         log("Objetivos: ${roles.describe()}")
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
@@ -219,17 +231,64 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     /** Recalcula qué cámaras abre la pasada actual (vista previa + compañera). */
+    private fun roleName(id: String?): String = when (id) {
+        null -> "—"; roles.main -> "principal #$id"; roles.macro -> "macro #$id"
+        roles.ultrawide -> "ultra gran angular #$id"; roles.tele -> "tele #$id"; else -> "cámara #$id"
+    }
+
+    /** Papeles con la elección manual aplicada: Lejos cambia la principal, Cerca la macro. */
+    private fun rolesFor(p: ScanPass): CameraRoles {
+        val choice = _state.value.previewChoice[p] ?: return roles
+        return when (p) {
+            ScanPass.FAR -> roles.copy(main = choice)
+            ScanPass.CLOSE -> roles.copy(macro = choice)
+        }
+    }
+
+    private fun planFor(p: ScanPass) =
+        PassRigPlanner.plan(p, rolesFor(p), lenses, concurrentSets, _state.value.useConcurrent)
+
+    /** Recalcula qué cámaras abre la pasada actual (vista previa + compañera). */
     private fun planCurrentPass(): RigPlan {
-        val plan = PassRigPlanner.plan(activePass, roles, lenses, concurrentSets, _state.value.useConcurrent)
+        val plan = planFor(activePass)
         rigPlan = plan
-        val name = { id: String? -> when (id) {
-            null -> "—"; roles.main -> "principal #$id"; roles.macro -> "macro #$id"
-            roles.ultrawide -> "ultra gran angular #$id"; roles.tele -> "tele #$id"; else -> "#$id"
-        } }
-        val text = "Vista: ${name(plan.previewId)}" +
-            (plan.companionId?.let { " + ${name(it)}" } ?: "") + " — ${plan.mode.label}"
-        _state.update { it.copy(rigText = text) }
+        val text = "Vista: ${roleName(plan.previewId)}" +
+            (plan.companionId?.let { " + ${roleName(it)}" } ?: "") + " — ${plan.mode.label}"
+        val other = planFor(if (activePass == ScanPass.FAR) ScanPass.CLOSE else ScanPass.FAR)
+        val warning = when {
+            plan.previewId == null -> "No se encontró ninguna cámara trasera"
+            plan.previewId == other.previewId ->
+                "Lejos y Cerca usan la misma cámara (${roleName(plan.previewId)}): no se detectó " +
+                    (if (activePass == ScanPass.CLOSE) "la macro" else "otra cámara") +
+                    ". Elige una en la pestaña Cámaras o comparte el diagnóstico."
+            else -> ""
+        }
+        _state.update { it.copy(rigText = text, rigWarning = warning) }
+        if (warning.isNotEmpty()) log(warning)
         return plan
+    }
+
+    /** Elegir a mano qué cámara se ve en una pasada (null = automática). */
+    override fun setPreviewCamera(pass: ScanPass, id: String?) {
+        _state.update { it.copy(previewChoice = it.previewChoice + (pass to id)) }
+        if (pass == activePass && !sequenceRunning) {
+            val plan = planCurrentPass()
+            viewModelScope.launch { openRig(plan.groups) }
+        }
+    }
+
+    override fun diagnostics(): String = buildString {
+        append(CameraInventory.diagnostics(cameraManager, inventory))
+        appendLine("Papeles: ${roles.describe()}")
+        for (p in ScanPass.entries) {
+            val plan = planFor(p)
+            appendLine("${p.label}: vista ${plan.previewId} + ${plan.companionId} · ${plan.mode} · grupos " +
+                plan.groups.joinToString { "${it.deviceId}${it.physicalStreams}${it.previewPhysicalId?.let { v -> "/vista $v" } ?: ""}" } +
+                (if (plan.separate.isNotEmpty()) " · por turnos " + plan.separate.joinToString { it.deviceId } else ""))
+        }
+        appendLine("Flujos abiertos: " + cameras.openedStreams.joinToString { "${it.cameraId}@${it.size.width}x${it.size.height}" })
+        appendLine("Registro:")
+        _state.value.log.forEach { appendLine("  $it") }
     }
 
     /** Abre un conjunto de cámaras; el primer grupo lleva la vista previa. */
@@ -244,6 +303,27 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             // Una sola Surface por textura: crear una nueva en cada apertura las filtraba.
             val surface = previewSurface ?: Surface(tex).also { previewSurface = it }
             cameras.open(groups, surface, previewSize)
+            if (cameras.openedStreams.isEmpty()) {
+                // Una cámara oculta puede aparecer al probar su número pero negarse a abrir:
+                // volver a la principal para no quedarse sin vista previa.
+                val fallback = runCatching { cameraManager.cameraIdList.firstOrNull { id ->
+                    inventory[id]?.facing == CameraMetadata.LENS_FACING_BACK } }.getOrNull()
+                if (fallback != null && groups.none { it.deviceId == fallback && it.physicalStreams.isEmpty() }) {
+                    log("No se pudo abrir ${groups.joinToString { "#" + it.deviceId }}: se usa la principal #$fallback")
+                    _state.update { it.copy(rigWarning = "El móvil no deja abrir esa cámara; se muestra la principal #$fallback.") }
+                    val g = CameraGroup(fallback, emptyList(), primary = true, concurrent = false)
+                    tex.setDefaultBufferSize(cameras.previewSizeFor(fallback).width, cameras.previewSizeFor(fallback).height)
+                    cameras.open(listOf(g), surface, cameras.previewSizeFor(fallback))
+                }
+            }
+            // ¿Se ve la cámara pedida? (el móvil puede rechazar el flujo físico de la macro).
+            val wanted = first.previewPhysicalId ?: first.deviceId
+            val shown = cameras.previewCameraId
+            if (shown != null && shown != wanted && rigPlan.previewId == wanted) {
+                val msg = "El móvil no deja mostrar ${roleName(wanted)} en la vista previa; se ve ${roleName(shown)}."
+                log(msg)
+                _state.update { it.copy(rigWarning = msg) }
+            }
             _state.update {
                 it.copy(
                     busy = false,

@@ -165,6 +165,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
 
     // Se leen desde el hilo de E/S de cámara (onImage) y se modifican desde el principal.
     private val active = java.util.concurrent.CopyOnWriteArrayList<Active>()
+    /** Cámara que de verdad se ve en la vista previa tras la última apertura. */
+    @Volatile var previewCameraId: String? = null
+        private set
     val openedStreams = java.util.concurrent.CopyOnWriteArrayList<OpenedStream>()
 
     /** Pone el modo de AF sólo si el objetivo lo admite (los de foco fijo sólo admiten OFF). */
@@ -270,6 +273,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     }
 
     fun close() {
+        previewCameraId = null
         for (a in active) {
             runCatching { a.session.close() }
             runCatching { a.device.close() }
@@ -354,6 +358,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             }
             val session = createSession(device, outputs)
             if (session != null) {
+                if (preview != null) previewCameraId = previewPhys ?: g.deviceId
                 val ch = manager.getCameraCharacteristics(g.deviceId)
                 val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
                 val act = Active(

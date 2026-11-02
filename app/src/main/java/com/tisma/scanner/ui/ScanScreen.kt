@@ -55,9 +55,9 @@ import kotlin.math.sin
 private enum class Tab(val label: String) { SCAN("Escanear"), QUALITY("Calidad"), CAMERAS("Cámaras"), LOG("Registro") }
 
 @Composable
-fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit) {
+fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit, onShareText: (String) -> Unit = {}) {
     val s by vm.state.collectAsStateWithLifecycle()
-    ScanContent(s, vm, onShare)
+    ScanContent(s, vm, onShare, onShareText = onShareText)
 }
 
 /**
@@ -70,6 +70,7 @@ fun ScanContent(
     vm: ScanActions,
     onShare: (File) -> Unit,
     initialTab: Int = 0,
+    onShareText: (String) -> Unit = {},
     preview: @Composable () -> Unit = { CameraPreview(vm) },
 ) {
     var tab by remember { mutableStateOf(Tab.entries[initialTab]) }
@@ -85,7 +86,7 @@ fun ScanContent(
                 when (tab) {
                     Tab.SCAN -> ScanSettings(s, vm, onShare)
                     Tab.QUALITY -> QualityTab(s)
-                    Tab.CAMERAS -> CamerasTab(s, vm)
+                    Tab.CAMERAS -> CamerasTab(s, vm, onShareText)
                     Tab.LOG -> LogTab(s)
                 }
             }
@@ -244,6 +245,7 @@ private fun Viewport(s: UiState, vm: ScanActions, onShare: (File) -> Unit, previ
         // Avisos abajo a la izquierda, como los toasts de TISMA.
         // Como mucho 2 avisos para no tapar la vista: primero los problemas, luego qué falta.
         val toasts = buildList {
+            if (s.rigWarning.isNotEmpty()) add(Triple("Esta pasada no puede usar su cámara · ver pestaña Cámaras", true, false))
             if (s.gyroRate > 0.6 && s.scanning) add(Triple("Demasiado rápido: las fotos saldrán movidas", true, false))
             if (s.scanning && s.analyzed > 0 && s.textureRecent < ScanViewModel.LOW_TEXTURE) {
                 add(Triple("Poca textura (%d %%): usa el tapete o spray mate".format((s.textureRecent * 100).toInt()), true, false))
@@ -328,7 +330,25 @@ private fun QualityTab(s: UiState) {
 }
 
 @Composable
-private fun CamerasTab(s: UiState, vm: ScanActions) {
+private fun CamerasTab(s: UiState, vm: ScanActions, onShareText: (String) -> Unit) {
+    if (s.rigWarning.isNotEmpty()) Toast(s.rigWarning, error = true)
+    Section("Cámara en la vista previa")
+    for (p in ScanPass.entries) {
+        SettingRow(if (p == ScanPass.FAR) "Lejos" else "Cerca") {
+            // Pulsar recorre: Automática -> cada cámara trasera -> Automática.
+            val choices = listOf<Pair<String?, String>>(null to "Automática") + s.cameraChoices
+            val current = s.previewChoice[p]
+            val label = choices.firstOrNull { it.first == current }?.second ?: "Automática"
+            ValueField(label) {
+                val i = choices.indexOfFirst { it.first == current }
+                vm.setPreviewCamera(p, choices[(i + 1) % choices.size].first)
+            }
+        }
+    }
+    Hint("Si la automática no acierta (p.ej. no encuentra la macro), elige aquí la cámara.")
+    SecondaryButton("Compartir diagnóstico de cámaras", Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        onShareText(vm.diagnostics())
+    }
     Section("Modo multicámara")
     SettingSwitch(
         if (s.concurrentSupported) "Permitir cámaras concurrentes" else "Concurrentes (no soportado)",

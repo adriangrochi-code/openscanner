@@ -41,6 +41,8 @@ class ScanScreenshotTest {
         override fun setJpegQuality(q: Int) {}
         override fun setUseConcurrent(v: Boolean) {}
         override fun setRotateCameras(v: Boolean) {}
+        override fun setPreviewCamera(pass: ScanPass, id: String?) {}
+        override fun diagnostics() = ""
     }
 
     /** Escena falsa en lugar de la cámara: mesa gris con una pieza violeta. */
@@ -86,7 +88,12 @@ class ScanScreenshotTest {
         readinessText = "✓ Listo para enviar · detalle cerca 34 %", textureRecent = 0.6,
     ), 1)
 
-    @Test fun camerasTab() = shot("cameras_tab", scanning.copy(scanning = false), 2)
+    @Test fun camerasTab() = shot("cameras_tab", scanning.copy(
+        scanning = false,
+        cameraChoices = listOf("0" to "principal #0 · 108 MP · 72°", "2" to "ultra gran angular #2 · 5 MP · 108°", "3" to "macro #3 · 2 MP · 80°"),
+        previewChoice = mapOf(ScanPass.CLOSE to "3"),
+        rigWarning = "Lejos y Cerca usan la misma cámara (principal #0): no se detectó la macro. Elige una en la pestaña Cámaras o comparte el diagnóstico.",
+    ), 2)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 

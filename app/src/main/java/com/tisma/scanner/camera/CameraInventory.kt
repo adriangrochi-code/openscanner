@@ -34,7 +34,13 @@ data class CameraInfo(
     val hyperfocalDiopters: Float?,
     val focusCalibration: Int?,
     val apertures: FloatArray,
+    /** No está en cameraIdList: se encontró probando su número. */
+    val probed: Boolean = false,
 ) {
+    /** Resolución real del sensor (el JPEG puede venir agrupado: 108 MP -> 12 MP). */
+    val sensorPixels: Long get() = pixelArray?.let { it.width.toLong() * it.height }
+        ?: jpegSizes.firstOrNull()?.let { it.width.toLong() * it.height } ?: 0L
+
     val facingName get() = when (facing) {
         CameraMetadata.LENS_FACING_BACK -> "back"
         CameraMetadata.LENS_FACING_FRONT -> "front"
@@ -96,14 +102,37 @@ object CameraInventory {
     /** Lista todas las cámaras: las públicas y las físicas ocultas tras cámaras lógicas. */
     fun enumerate(manager: CameraManager): Map<String, CameraInfo> {
         val out = LinkedHashMap<String, CameraInfo>()
-        for (id in manager.cameraIdList) {
-            val info = describe(manager, id)
-            out[id] = info
-            for (pid in info.physicalIds) {
-                if (pid !in out) runCatching { describe(manager, pid) }.getOrNull()?.let { out[pid] = it }
-            }
+        val listed = runCatching { manager.cameraIdList.toList() }.getOrDefault(emptyList())
+        fun add(id: String, probed: Boolean) {
+            if (id in out) return
+            val info = runCatching { describe(manager, id) }.getOrNull() ?: return
+            out[id] = info.copy(probed = probed)
+            for (pid in info.physicalIds) add(pid, probed = false)
         }
+        for (id in listed) add(id, probed = false)
+        // Muchos fabricantes (Honor/Huawei, Xiaomi…) sólo listan "0" y "1" pero dejan abrir
+        // el resto de objetivos (ultra gran angular, macro) si se piden por su número.
+        for (n in 0..PROBE_MAX_ID) add(n.toString(), probed = true)
         return out
+    }
+
+    /** Hasta qué número de cámara se prueba si existe aunque no esté en la lista. */
+    const val PROBE_MAX_ID = 15
+
+    /** Texto con todo lo que el móvil dice de sus cámaras, para depurar a distancia. */
+    fun diagnostics(manager: CameraManager, cams: Map<String, CameraInfo>): String = buildString {
+        appendLine("Tisma Scanner · diagnóstico de cámaras")
+        appendLine("Dispositivo: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (SDK ${android.os.Build.VERSION.SDK_INT})")
+        appendLine("Lista oficial: " + runCatching { manager.cameraIdList.joinToString() }.getOrDefault("?"))
+        appendLine("Concurrentes: " + concurrentSets(manager).joinToString { it.joinToString("+", "{", "}") })
+        for (c in cams.values) {
+            appendLine("#${c.id} ${c.facingName}${if (c.probed) " (oculta, encontrada por número)" else ""}" +
+                (if (c.isLogicalMultiCamera) " lógica[${c.physicalIds.joinToString()}]" else "") +
+                " sensor ${c.pixelArray?.let { "${it.width}x${it.height}" } ?: "?"}" +
+                " jpeg ${c.jpegSizes.firstOrNull()?.let { "${it.width}x${it.height}" } ?: "-"}" +
+                " f=${c.focalLengthsMm.joinToString()}mm hfov=${c.hfovDeg?.toInt() ?: "?"}°" +
+                " minFoco=${c.minFocusDiopters ?: "?"}D nivel=${c.hardwareLevel}")
+        }
     }
 
     fun describe(manager: CameraManager, id: String): CameraInfo {

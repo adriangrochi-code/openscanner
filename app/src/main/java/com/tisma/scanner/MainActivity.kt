@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
         if (cameraGranted.value) vm.onLocationPermission(hasLocation())
         setContent {
             TismaTheme {
-                if (cameraGranted.value) ScanScreen(vm, ::share)
+                if (cameraGranted.value) ScanScreen(vm, ::share, ::shareText)
                 else Box(Modifier.fillMaxSize().background(Tisma.Bg).padding(24.dp), contentAlignment = Alignment.Center) {
                     Text("Tisma Scanner necesita permiso de cámara para escanear.", color = Tisma.Text)
                 }
@@ -72,6 +72,14 @@ class MainActivity : ComponentActivity() {
 
     private fun hasLocation() =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun shareText(text: String) {
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "Tisma Scanner · diagnóstico de cámaras")
+            putExtra(Intent.EXTRA_TEXT, text)
+        }, "Compartir diagnóstico"))
+    }
 
     private fun share(zip: File) {
         val uri = FileProvider.getUriForFile(this, "$packageName.files", zip)

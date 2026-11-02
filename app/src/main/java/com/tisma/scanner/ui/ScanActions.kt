@@ -20,4 +20,8 @@ interface ScanActions {
     fun setJpegQuality(q: Int)
     fun setUseConcurrent(v: Boolean)
     fun setRotateCameras(v: Boolean)
+    /** Cámara que se ve en una pasada (null = elección automática). */
+    fun setPreviewCamera(pass: com.tisma.scanner.camera.ScanPass, id: String?)
+    /** Informe de cámaras para compartir y depurar a distancia. */
+    fun diagnostics(): String
 }
