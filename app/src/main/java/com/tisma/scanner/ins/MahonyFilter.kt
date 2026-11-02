@@ -16,7 +16,7 @@ class MahonyFilter(
         private set
     private var initialized = false
 
-    fun reset(bias: Vec3 = Vec3.ZERO) { q = Quat.IDENTITY; gyroBias = bias; initialized = false }
+    fun reset(bias: Vec3 = Vec3.ZERO) { q = Quat.IDENTITY; gyroBias = bias; initialized = false; magNormAvg = 0.0 }
 
     /**
      * ZARU (Zero Angular Rate Update): en reposo el giróscopo debería marcar 0, así que lo que
@@ -53,17 +53,39 @@ class MahonyFilter(
             val trust = (1.0 - kotlin.math.abs(g - GRAVITY) / 3.0).coerceIn(0.0, 1.0) * accelWeight
             error = error + (aNorm cross upBody) * trust
         }
-        if (mag != null && mag.norm() > 1e-3) {
-            // Referencia magnética proyectada al plano horizontal (sólo corrige yaw).
+        // El sesgo del giróscopo sólo se aprende de la gravedad (referencia fiable).
+        gyroBias = gyroBias - error * (ki * dt)
+        if (mag != null && magUsable(mag)) {
+            // Rumbo con la brújula, pero SÓLO alrededor de la vertical: dentro de casa el campo
+            // está distorsionado (mesa, PC, hierro) y, sin esta restricción, la corrección inclinaba
+            // la actitud, la gravedad "se filtraba" como aceleración y la INS se iba decenas de
+            // metros con el móvil quieto. La inclinación la decide sólo la gravedad.
             val mWorld = q.rotate(mag.normalized())
             val bRef = Vec3(kotlin.math.sqrt(mWorld.x * mWorld.x + mWorld.y * mWorld.y), 0.0, mWorld.z)
-            val bBody = q.conj().rotate(bRef)
-            error = error + (mag.normalized() cross bBody) * 0.3
+            val errBody = (mag.normalized() cross q.conj().rotate(bRef)) * MAG_WEIGHT
+            val vertical = q.rotate(errBody).z                    // componente de rumbo (eje Z mundo)
+            error = error + q.conj().rotate(Vec3(0.0, 0.0, vertical))
         }
-        gyroBias = gyroBias - error * (ki * dt)
         val corrected = gyro - gyroBias + error * kp
         q = (q * Quat.fromRotationVector(corrected * dt)).normalized()
     }
 
-    companion object { const val GRAVITY = 9.80665 }
+    /**
+     * Descarta lecturas del magnetómetro con un módulo anómalo (imán, metal muy cerca): se
+     * compara con una media lenta del propio campo medido.
+     */
+    private var magNormAvg = 0.0
+    private fun magUsable(m: Vec3): Boolean {
+        val n = m.norm()
+        if (magNormAvg == 0.0) { magNormAvg = n; return true }
+        val ok = kotlin.math.abs(n - magNormAvg) < 0.15 * magNormAvg
+        magNormAvg += (n - magNormAvg) * (if (ok) 0.01 else 0.001)
+        return ok
+    }
+
+    companion object {
+        const val GRAVITY = 9.80665
+        /** Peso de la brújula frente a la gravedad (sólo rumbo). */
+        const val MAG_WEIGHT = 0.3
+    }
 }
