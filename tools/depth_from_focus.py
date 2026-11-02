@@ -18,6 +18,7 @@ Uso:
 Salida por barrido: depth_mm.png (16 bits), depth_color.jpg, confidence.png, all_in_focus.jpg
 """
 import argparse
+import sys
 import csv
 import json
 from collections import defaultdict
@@ -105,7 +106,17 @@ def depth_from_focus(stack_diopters, images, win=9, max_side=2000):
     return depth_m, conf, aif
 
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path)
     ap.add_argument("--out", type=Path, default=Path("dff"))

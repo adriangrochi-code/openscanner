@@ -15,6 +15,7 @@ comprobarlo. Si no mide 100 mm, corrige con --marker-mm o reimprime.
 Genera también <out>.json con las coordenadas (mm) de cada esquina de los marcadores.
 """
 import argparse
+import sys
 import json
 
 import cv2
@@ -34,7 +35,17 @@ def multiscale_noise(h, w, rng):
     return (40 + img * 175).astype(np.uint8)
 
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--paper", choices=PAPERS_MM, default="a4")
     ap.add_argument("--dpi", type=int, default=300)

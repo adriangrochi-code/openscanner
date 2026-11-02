@@ -55,7 +55,7 @@ import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
 
-private enum class Tab(val label: String) { SCAN("Captura"), QUALITY("Calidad"), CAMERAS("Cámaras"), LOG("Registro") }
+private enum class Tab(val label: String) { SCAN("Captura"), QUALITY("Calidad"), CAMERAS("Cámaras"), CLOUD("Nube"), LOG("Registro") }
 
 @Composable
 fun ScanScreen(vm: ScanViewModel, onShare: (File) -> Unit, onShareText: (String) -> Unit = {}) {
@@ -143,11 +143,16 @@ private fun CameraScreen(
                 if (s.scanning && s.analyzed > 0 && s.textureRecent < ScanViewModel.LOW_TEXTURE) {
                     add(Triple("Poca textura (%d %%): usa el tapete o spray mate".format((s.textureRecent * 100).toInt()), true, false))
                 }
+                if (s.cloudStatus.isNotEmpty()) add(Triple(s.cloudStatus, s.cloudStatus.startsWith("✗"), s.cloudStatus.startsWith("✓")))
                 if (s.readinessText.isNotEmpty() && (s.scanning || s.analyzed > 0)) add(Triple(s.readinessText, false, s.ready))
                 if (s.scanning) s.hints.firstOrNull()?.let { add(Triple(it, false, false)) }
             }.take(2)
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 toasts.forEach { (text, error, ok) -> Toast(text, error = error, ok = ok) }
+                if (s.cloudProgress >= 0f) {
+                    LinearProgressIndicator(progress = { s.cloudProgress }, modifier = Modifier.fillMaxWidth().height(4.dp),
+                        color = Tisma.Purple, trackColor = Tisma.Field)
+                }
             }
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
@@ -157,7 +162,12 @@ private fun CameraScreen(
                     else -> Spacer(Modifier.size(52.dp))
                 }
                 Shutter(s, vm)
-                if (s.scanning) RoundIcon("◎", "Barrido foco") { vm.focusSweep() } else Spacer(Modifier.size(52.dp))
+                when {
+                    s.scanning -> RoundIcon("◎", "Barrido foco") { vm.focusSweep() }
+                    s.cloudStl != null && !s.cloudBusy -> RoundIcon("⬢", "Pieza STL") { onShare(s.cloudStl) }
+                    s.lastZip != null && !s.busy && !s.cloudBusy -> RoundIcon("☁", "Enviar") { vm.sendToCloud() }
+                    else -> Spacer(Modifier.size(52.dp))
+                }
             }
             Spacer(Modifier.height(8.dp))
             StatusLine(s)
@@ -264,6 +274,7 @@ private fun SettingsScreen(
                 Tab.SCAN -> ScanSettings(s, vm)
                 Tab.QUALITY -> QualityTab(s)
                 Tab.CAMERAS -> CamerasTab(s, vm, onShareText)
+                Tab.CLOUD -> CloudTab(s, vm)
                 Tab.LOG -> LogTab(s, vm)
             }
             Spacer(Modifier.height(24.dp))
@@ -437,6 +448,44 @@ private fun CamerasTab(s: UiState, vm: ScanActions, onShareText: (String) -> Uni
     s.openedStreams.forEach { Mono(it) }
     Section("Cámaras detectadas")
     s.cameras.forEach { Mono(it) }
+}
+
+@Composable
+private fun CloudTab(s: UiState, vm: ScanActions) {
+    Section("Tisma Server")
+    Hint("Los escaneos se procesan en tu servidor (fotogrametría, malla y STL en mm).")
+    TextSetting("Servidor", s.cloudUrl, "https://tismaservidores.net", secret = false, onChange = vm::setCloudUrl)
+    TextSetting("Clave de API", s.cloudKey, "la muestra TismaServer.exe al arrancar", secret = true, onChange = vm::setCloudKey)
+    Section("Último escaneo")
+    when {
+        s.lastZip == null -> Hint("Haz un escaneo y pulsa ☁ Enviar en la pantalla de la cámara.")
+        else -> {
+            Mono(s.lastZip.name + " · %.0f MB".format(s.lastZip.length() / 1e6))
+            if (s.cloudStatus.isNotEmpty()) Mono(s.cloudStatus, if (s.cloudStatus.startsWith("✗")) Tisma.Warn else Tisma.Text)
+            SecondaryButton(if (s.cloudBusy) "Enviando…" else "Enviar a la nube",
+                Modifier.fillMaxWidth().padding(top = 6.dp), enabled = !s.cloudBusy && s.cloudKey.isNotBlank()) { vm.sendToCloud() }
+        }
+    }
+    Hint("La subida se reanuda sola si se corta la conexión. Mejor por Wi-Fi: un escaneo ocupa 0,5-2 GB.")
+}
+
+@Composable
+private fun TextSetting(label: String, value: String, placeholder: String, secret: Boolean, onChange: (String) -> Unit) {
+    var shown by remember { mutableStateOf(!secret) }
+    androidx.compose.material3.OutlinedTextField(
+        value = value, onValueChange = onChange, singleLine = true,
+        label = { Text(label) }, placeholder = { Text(placeholder, color = Tisma.TextOff) },
+        visualTransformation = if (shown) androidx.compose.ui.text.input.VisualTransformation.None
+            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        trailingIcon = if (secret) ({ Text(if (shown) "ocultar" else "ver", color = Tisma.PurpleText, fontSize = 12.sp,
+            modifier = Modifier.clickable { shown = !shown }.padding(8.dp)) }) else null,
+        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Tisma.Purple, unfocusedBorderColor = Tisma.Divider,
+            focusedTextColor = Tisma.Text, unfocusedTextColor = Tisma.Text,
+            focusedLabelColor = Tisma.PurpleText, unfocusedLabelColor = Tisma.TextDim, cursorColor = Tisma.PurpleText,
+        ),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+    )
 }
 
 @Composable

@@ -586,7 +586,17 @@ def make_demo_scan(tmp: Path) -> Path:
     return z
 
 
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", type=Path, default=BASE / "tisma_server.json")
     ap.add_argument("--selftest", action="store_true", help="prueba completa en local y salir")

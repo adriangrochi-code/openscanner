@@ -18,6 +18,7 @@ Uso (tras reconstruct.py con --mat para que el modelo esté en metros):
     python3 ins_accuracy.py out/raw/scan_xxx out/sparse_metric_txt
 """
 import argparse
+import sys
 import csv
 from pathlib import Path
 
@@ -236,7 +237,17 @@ def fmt(m):
     return f"{m * 1000:.1f} mm" if m < 0.01 else (f"{m * 100:.1f} cm" if m < 1 else f"{m:.2f} m")
 
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path, help="carpeta del escaneo (frames.csv, ins_trajectory.csv)")
     ap.add_argument("model", type=Path, help="modelo COLMAP en TXT (mejor el métrico: sparse_metric_txt)")

@@ -19,6 +19,7 @@ Uso:
 Requisitos: pip install open3d numpy  (en Linux sin pantalla: apt install libegl1 libgl1)
 """
 import argparse
+import sys
 import json
 from pathlib import Path
 
@@ -351,7 +352,17 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     return report
 
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cloud", type=Path, help="nube densa (fused.ply de COLMAP o scene_dense.ply de OpenMVS)")
     ap.add_argument("--out", type=Path, default=Path("pieza"), help="prefijo de salida (pieza.stl, …)")

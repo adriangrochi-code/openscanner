@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.tisma.scanner.camera.ScanPass
 import com.tisma.scanner.quality.CoverageMap
+import java.io.File
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -47,6 +48,9 @@ class ScanScreenshotTest {
         override fun setStabilizePreview(v: Boolean) {}
         override fun setUseMacro(v: Boolean) {}
         override fun setFocusDepth(v: Boolean) {}
+        override fun setCloudUrl(v: String) {}
+        override fun setCloudKey(v: String) {}
+        override fun sendToCloud() {}
         override fun setAntiShakeBurst(v: Boolean) {}
         override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int) = null
     }
@@ -108,6 +112,12 @@ class ScanScreenshotTest {
         opticsText = "macro foco fijo · a ~4 cm · ≈0.041 mm/px · acércate hasta verla nítida",
         passCoverage = mapOf(ScanPass.FAR to 0.81, ScanPass.CLOSE to 0.34), textureRecent = 0.6,
     ), 0)
+
+    @Test fun cloudTab() = shot("cloud_tab", UiState(cloudKey = "clave-secreta", lastZip = File("scan_20261102_181500.zip"),
+        cloudStatus = "Procesando: fotogrametría (COLMAP)", cloudBusy = true), 3, settings = true)
+
+    @Test fun cloudDone() = shot("cloud_done", UiState(lastZip = File("scan.zip"), cloudStl = File("scan_pieza.stl"),
+        cloudStatus = "✓ Pieza lista 40.23 × 30.23 × 20.31 mm · cerrada", analyzed = 120, images = 214, ready = true), 0)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 

@@ -31,6 +31,10 @@ interface ScanActions {
     fun setUseMacro(v: Boolean)
     /** Medir distancia con el enfoque (barridos automáticos). */
     fun setFocusDepth(v: Boolean)
+    fun setCloudUrl(v: String)
+    fun setCloudKey(v: String)
+    /** Enviar el último escaneo a Tisma Server y traer la pieza. */
+    fun sendToCloud()
     fun setAntiShakeBurst(v: Boolean)
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */
     fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform?

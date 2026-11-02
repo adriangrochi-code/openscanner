@@ -81,10 +81,14 @@ class MainActivity : ComponentActivity() {
         }, "Compartir diagnóstico"))
     }
 
-    private fun share(zip: File) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", zip)
+    private fun share(file: File) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
         startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "application/zip"
+            type = when (file.extension.lowercase()) {
+                "stl" -> "model/stl"
+                "zip" -> "application/zip"
+                else -> "application/octet-stream"
+            }
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }, "Exportar escaneo"))

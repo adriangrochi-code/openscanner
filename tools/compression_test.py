@@ -14,6 +14,7 @@ Formatos: JPEG a varias calidades y WebP (siempre); AVIF si tu OpenCV lo soporta
 HEIC no lo escribe OpenCV: es ~similar a AVIF en tamaño y lo soporta el codificador del móvil.
 """
 import argparse
+import sys
 import csv
 from pathlib import Path
 
@@ -61,7 +62,17 @@ def neighbour_pairs(scan: Path, n: int):
     return [(scan / lst[i]["file"], scan / lst[i + 1]["file"]) for i in range(0, len(lst) - 1, step)][:n], len(rows)
 
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path)
     ap.add_argument("--pairs", type=int, default=6)

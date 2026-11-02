@@ -68,6 +68,16 @@ data class UiState(
     /** Medir distancia con el enfoque: barrido automático cada pocos disparos (por defecto sí). */
     val focusDepth: Boolean = true,
     val focusSweeps: Int = 0,
+    // --- Nube (Tisma Server) ---
+    val cloudUrl: String = ScanViewModel.DEFAULT_CLOUD_URL,
+    val cloudKey: String = "",
+    /** Texto de estado del envío/proceso en la nube ("" = nada en curso). */
+    val cloudStatus: String = "",
+    /** 0..1 durante la subida; -1 sin barra. */
+    val cloudProgress: Float = -1f,
+    val cloudBusy: Boolean = false,
+    /** Pieza descargada del servidor (STL en mm). */
+    val cloudStl: File? = null,
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -178,6 +188,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val rigMutex = kotlinx.coroutines.sync.Mutex()
     private var previewSurface: Surface? = null
     private val stabilizer = com.tisma.scanner.camera.PreviewStabilizer()
+    private val prefs = app.getSharedPreferences("tisma", Context.MODE_PRIVATE)
+    private var cloudJob: Job? = null
     @Volatile private var trigger = 0
     private var loop: Job? = null
     private var previewTexture: SurfaceTexture? = null
@@ -200,6 +212,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         }
         roles = CameraRoles.detect(lenses)
         updateClockOffsets()
+        _state.update { it.copy(cloudUrl = prefs.getString("cloud_url", DEFAULT_CLOUD_URL) ?: DEFAULT_CLOUD_URL,
+            cloudKey = prefs.getString("cloud_key", "") ?: "") }
         _state.update {
             it.copy(
                 cameras = inventory.values.map { c -> c.label },
@@ -289,6 +303,79 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         _state.update { it.copy(rigText = text, rigWarning = warning) }
         if (warning.isNotEmpty()) log(warning)
         return plan
+    }
+
+    override fun setCloudUrl(v: String) {
+        _state.update { it.copy(cloudUrl = v.trim()) }
+        prefs.edit().putString("cloud_url", v.trim()).apply()
+    }
+
+    override fun setCloudKey(v: String) {
+        _state.update { it.copy(cloudKey = v.trim()) }
+        prefs.edit().putString("cloud_key", v.trim()).apply()
+    }
+
+    /**
+     * Envía el último escaneo a Tisma Server, sigue el proceso y descarga la pieza.
+     * La subida es reanudable: el id del trabajo se guarda por escaneo, así que si se corta o se
+     * cierra la app, el siguiente envío continúa donde quedó en vez de empezar de cero.
+     */
+    override fun sendToCloud() {
+        val zip = _state.value.lastZip ?: return
+        if (cloudJob?.isActive == true) return
+        val ui = _state.value
+        cloudJob = viewModelScope.launch(Dispatchers.IO) {
+            fun st(text: String, progress: Float = -1f, busy: Boolean = true) =
+                _state.update { it.copy(cloudStatus = text, cloudProgress = progress, cloudBusy = busy) }
+            try {
+                val client = com.tisma.scanner.cloud.CloudClient(ui.cloudUrl, ui.cloudKey)
+                st("Conectando con ${ui.cloudUrl}…")
+                val jobKey = "job_" + zip.name + "_" + zip.length()
+                var id = prefs.getString(jobKey, null)
+                var chunk = 16 * 1024 * 1024
+                val existing = id?.let { runCatching { client.status(it) }.getOrNull() }
+                if (existing == null) {
+                    val (newId, c) = client.create(zip.length(), zip.nameWithoutExtension)
+                    id = newId; chunk = c
+                    prefs.edit().putString(jobKey, id).apply()
+                }
+                val jobId = id!!
+                if (existing == null || existing.optString("state") == "uploading") {
+                    client.upload(jobId, zip, chunk, onProgress = { done, total ->
+                        st("Subiendo %.0f / %.0f MB".format(done / 1e6, total / 1e6), done.toFloat() / total)
+                    }, isCancelled = { !isActive })
+                }
+                // Seguimiento del proceso en el servidor.
+                while (true) {
+                    val s = client.status(jobId)
+                    when (s.optString("state")) {
+                        "queued" -> st("En cola en el servidor…")
+                        "processing" -> st("Procesando: ${s.optString("stage", "…")}")
+                        "done" -> break
+                        "error" -> throw java.io.IOException(s.optString("error", "error en el servidor"))
+                    }
+                    delay(5000)
+                }
+                st("Descargando la pieza…")
+                val dir = zip.parentFile!!
+                val stl = File(dir, zip.nameWithoutExtension + "_pieza.stl")
+                client.download(jobId, "pieza.stl", stl)
+                val reportFile = File(dir, zip.nameWithoutExtension + "_informe.json")
+                runCatching { client.download(jobId, "pieza_informe.json", reportFile) }
+                val summary = runCatching {
+                    val r = JSONObject(reportFile.readText())
+                    val d = r.getJSONArray("dimensions_mm_xyz")
+                    "%.2f × %.2f × %.2f mm".format(d.getDouble(0), d.getDouble(1), d.getDouble(2)) +
+                        (if (r.optBoolean("watertight")) " · cerrada" else "")
+                }.getOrDefault("")
+                prefs.edit().remove(jobKey).apply()
+                _state.update { it.copy(cloudStatus = "✓ Pieza lista $summary", cloudProgress = -1f, cloudBusy = false, cloudStl = stl) }
+                log("Pieza descargada: ${stl.name} $summary")
+            } catch (e: Exception) {
+                st("✗ ${e.message ?: e.javaClass.simpleName}", busy = false)
+                log("Nube: ${e.message}")
+            }
+        }
     }
 
     override fun setFocusDepth(v: Boolean) = _state.update { it.copy(focusDepth = v) }
@@ -905,5 +992,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val ANTI_SHAKE_FRAMES = 4
         /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */
         const val AUTO_SWEEP_EVERY = 6
+        const val DEFAULT_CLOUD_URL = "https://tismaservidores.net"
     }
 }

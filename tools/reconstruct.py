@@ -614,7 +614,17 @@ def dense(work, model_dir, mode):
 
 # --------------------------------------------------------------------------- main
 
+
+def _utf8_console():
+    """Consola de Windows (cp1252) no puede imprimir ↔, ≈, ³…: forzar UTF-8 sin romper nunca."""
+    for stream in (sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 def main(argv=None):
+    _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path, help="carpeta scan_* o .zip exportado por la app")
     ap.add_argument("--work", type=Path, default=Path("tisma_work"))
