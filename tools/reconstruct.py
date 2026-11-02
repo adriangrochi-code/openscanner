@@ -368,14 +368,25 @@ def umeyama_scale(src, dst):
     return float(np.trace(np.diag(S) @ D) / var_s)
 
 
-def scale_from_ins(imgs, records):
+def scale_from_ins(imgs, records, scan=None):
+    """Escala por alineación SfM↔INS. Usa la trayectoria suavizada entre paradas si existe."""
     ref = {name: fr for name, fr in records}
+    tt = Ps = None
+    if scan is not None:
+        from ins_accuracy import read_trajectory, zupt_smooth  # mismo directorio
+        tt, Ps = zupt_smooth(read_trajectory(scan))
+        if len(tt) == 0:
+            tt = None
     src, dst = [], []
     for name, im in imgs.items():
         fr = ref.get(name)
         if fr and fr.get("px"):
             src.append(-im["R"].T @ im["t"])  # centro de cámara SfM
-            dst.append([float(fr["px"]), float(fr["py"]), float(fr["pz"])])
+            if tt is not None:
+                t = int(fr["t_ns"]) * 1e-9
+                dst.append([np.interp(t, tt, Ps[:, k]) for k in range(3)])
+            else:
+                dst.append([float(fr["px"]), float(fr["py"]), float(fr["pz"])])
     if len(src) < 5:
         return None
     src, dst = np.array(src), np.array(dst)
@@ -452,9 +463,9 @@ def main():
         if s:
             src = f"ArUco (dispersión {rel * 100:.2f} %)"
     if s is None:
-        s = scale_from_ins(imgs, records)
+        s = scale_from_ins(imgs, records, scan)
         if s:
-            src = "trayectoria INS (aprox. 5-10 %)"
+            src = "trayectoria INS suavizada (aprox. 5-10 %; mídelo con ins_accuracy.py)"
     if s:
         print(f"[scale] factor {s:.6f} m/unidad desde {src}")
         metric = a.work / "sparse_metric_txt"

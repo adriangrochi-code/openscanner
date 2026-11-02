@@ -24,4 +24,6 @@ interface ScanActions {
     fun setPreviewCamera(pass: com.tisma.scanner.camera.ScanPass, id: String?)
     /** Informe de cámaras para compartir y depurar a distancia. */
     fun diagnostics(): String
+    /** Prueba de quietud de 60 s para medir la precisión de la INS. */
+    fun runImuStillTest()
 }

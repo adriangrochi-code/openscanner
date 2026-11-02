@@ -29,6 +29,19 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
     @Volatile var gyroRate: Double = 0.0; private set
     @Volatile var sampleCount: Long = 0; private set
 
+    /** Captura de muestras crudas para la prueba de quietud (null = inactiva). */
+    private var stillAccel: MutableList<com.tisma.scanner.ins.ImuSample>? = null
+    private var stillGyro: MutableList<com.tisma.scanner.ins.ImuSample>? = null
+
+    @Synchronized fun startStillCapture() { stillAccel = ArrayList(40_000); stillGyro = ArrayList(40_000) }
+
+    /** Termina la captura y devuelve (acelerómetro, giróscopo). */
+    @Synchronized fun stopStillCapture(): Pair<List<com.tisma.scanner.ins.ImuSample>, List<com.tisma.scanner.ins.ImuSample>> {
+        val r = (stillAccel ?: emptyList<com.tisma.scanner.ins.ImuSample>()) to (stillGyro ?: emptyList())
+        stillAccel = null; stillGyro = null
+        return r
+    }
+
     /** Tipos de sensor registrados. Los "uncalibrated" incluyen el sesgo estimado por Android. */
     private val types = listOf(
         Sensor.TYPE_ACCELEROMETER,
@@ -81,6 +94,12 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
             }
         }
         sampleCount++
+        if (stillAccel != null) synchronized(this) {
+            when (e.sensor.type) {
+                Sensor.TYPE_ACCELEROMETER -> stillAccel?.add(com.tisma.scanner.ins.ImuSample(t, Vec3.of(e.values)))
+                Sensor.TYPE_GYROSCOPE -> stillGyro?.add(com.tisma.scanner.ins.ImuSample(t, Vec3.of(e.values)))
+            }
+        }
         val w = writer ?: return
         synchronized(this) {
             val sb = StringBuilder(96)

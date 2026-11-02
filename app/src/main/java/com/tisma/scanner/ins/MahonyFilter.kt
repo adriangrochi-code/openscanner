@@ -16,7 +16,15 @@ class MahonyFilter(
         private set
     private var initialized = false
 
-    fun reset() { q = Quat.IDENTITY; gyroBias = Vec3.ZERO; initialized = false }
+    fun reset(bias: Vec3 = Vec3.ZERO) { q = Quat.IDENTITY; gyroBias = bias; initialized = false }
+
+    /**
+     * ZARU (Zero Angular Rate Update): en reposo el giróscopo debería marcar 0, así que lo que
+     * marca es sesgo. Converge mucho más rápido que el término integral de Mahony.
+     */
+    fun zaru(gyroMeasured: Vec3, alpha: Double) {
+        gyroBias = gyroBias * (1 - alpha) + gyroMeasured * alpha
+    }
 
     /** Alinea la orientación inicial con la gravedad medida (pitch/roll), yaw = 0. */
     fun initialize(accel: Vec3) {

@@ -27,7 +27,11 @@ class StrapdownIns(
     private val zuptGyroThreshold: Double = 0.06,    // ‖ω‖ (rad/s)
     private val zuptMinSamples: Int = 40,
     historyCapacity: Int = 20_000,
+    /** false = navegación inercial "libre" (sin ZUPT/ZARU): sólo para medir la deriva bruta. */
+    private val zuptEnabled: Boolean = true,
 ) {
+    /** Sesgo del giróscopo medido en la prueba de quietud: se aplica en cada reset. */
+    @Volatile var gyroBiasPrior: Vec3 = Vec3.ZERO
     val filter = MahonyFilter()
     private var lastGyroT = -1L
     private var lastAccel: Vec3? = null
@@ -50,7 +54,7 @@ class StrapdownIns(
     private val capacity = historyCapacity
 
     @Synchronized fun reset() {
-        filter.reset(); lastGyroT = -1; lastAccel = null; lastMag = null
+        filter.reset(gyroBiasPrior); lastGyroT = -1; lastAccel = null; lastMag = null
         accelBiasWorld = Vec3.ZERO; position = Vec3.ZERO; velocity = Vec3.ZERO
         stillCount = 0; stationary = false; history.clear()
         positionVariance = 0.0; geo = null; gnssUpdates = 0
@@ -113,11 +117,12 @@ class StrapdownIns(
             (w - filter.gyroBias).norm() < zuptGyroThreshold &&
             (linWorld - accelBiasWorld).norm() < zuptAccelThreshold
         stillCount = if (still) stillCount + 1 else 0
-        stationary = stillCount >= zuptMinSamples
+        stationary = zuptEnabled && stillCount >= zuptMinSamples
         if (stationary) {
             // En reposo toda aceleración residual es sesgo: filtro paso bajo.
             accelBiasWorld = accelBiasWorld * 0.98 + linWorld * 0.02
             velocity = Vec3.ZERO
+            filter.zaru(w, 0.01)
         } else {
             // Modelo de ruido: random walk de aceleración ~0.05 m/s² -> var crece ~ t³.
             positionVariance += (0.05 * 0.05) * dt * (1.0 + velocity.norm() * 10)

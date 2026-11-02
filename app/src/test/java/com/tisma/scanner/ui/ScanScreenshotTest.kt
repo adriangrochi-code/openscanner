@@ -43,6 +43,7 @@ class ScanScreenshotTest {
         override fun setRotateCameras(v: Boolean) {}
         override fun setPreviewCamera(pass: ScanPass, id: String?) {}
         override fun diagnostics() = ""
+        override fun runImuStillTest() {}
     }
 
     /** Escena falsa en lugar de la cámara: mesa gris con una pieza violeta. */

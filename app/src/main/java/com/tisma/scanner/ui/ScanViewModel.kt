@@ -63,6 +63,10 @@ data class UiState(
     val cameraChoices: List<Pair<String, String>> = emptyList(),
     /** Elección manual de la vista previa por pasada (null = automática). */
     val previewChoice: Map<ScanPass, String?> = emptyMap(),
+    // --- Precisión de la INS ---
+    /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
+    val imuTestRemaining: Int = 0,
+    val imuReport: List<String> = emptyList(),
     val gpsText: String = "GPS: sin fix",
     val posStdM: Double = 0.0,
     val scanning: Boolean = false,
@@ -274,6 +278,40 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         if (pass == activePass && !sequenceRunning) {
             val plan = planCurrentPass()
             viewModelScope.launch { openRig(plan.groups) }
+        }
+    }
+
+    /**
+     * Prueba de quietud: 60 s con el móvil apoyado. Mide ruido, sesgo y la deriva real de la
+     * INS en este móvil, y deja el sesgo del giróscopo calibrado para los escaneos.
+     */
+    override fun runImuStillTest() {
+        if (_state.value.imuTestRemaining > 0 || session != null) return
+        viewModelScope.launch {
+            imu.startStillCapture()
+            for (s in IMU_TEST_SECONDS downTo 1) {
+                _state.update { it.copy(imuTestRemaining = s, imuReport = listOf("Midiendo… no toques el móvil ($s s)")) }
+                delay(1000)
+            }
+            val (acc, gyr) = imu.stopStillCapture()
+            _state.update { it.copy(imuTestRemaining = 0, imuReport = listOf("Analizando…")) }
+            val report = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                com.tisma.scanner.ins.ImuStillTest.analyze(acc, gyr)
+            }
+            if (report == null) {
+                _state.update { it.copy(imuReport = listOf("No hay datos suficientes del IMU")) }
+                return@launch
+            }
+            if (!report.moved) {
+                ins.gyroBiasPrior = report.gyroBiasDegS * Math.toRadians(1.0)
+                ins.reset()
+            }
+            _state.update { it.copy(imuReport = report.lines()) }
+            report.lines().forEach { log(it) }
+            runCatching {
+                val dir = File(getApplication<Application>().getExternalFilesDir(null), "scans").apply { mkdirs() }
+                File(dir, "imu_test_${System.currentTimeMillis()}.txt").writeText(report.lines().joinToString("\n"))
+            }
         }
     }
 
@@ -780,5 +818,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val MAX_MOTION_BLUR_PX = 1.5
         /** Distancia típica de enfoque de las macro de foco fijo de 2 MP. */
         const val MACRO_FOCUS_M = 0.04
+        const val IMU_TEST_SECONDS = 60
     }
 }

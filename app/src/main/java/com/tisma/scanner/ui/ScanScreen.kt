@@ -87,7 +87,7 @@ fun ScanContent(
                     Tab.SCAN -> ScanSettings(s, vm, onShare)
                     Tab.QUALITY -> QualityTab(s)
                     Tab.CAMERAS -> CamerasTab(s, vm, onShareText)
-                    Tab.LOG -> LogTab(s)
+                    Tab.LOG -> LogTab(s, vm)
                 }
             }
         }
@@ -368,7 +368,15 @@ private fun CamerasTab(s: UiState, vm: ScanActions, onShareText: (String) -> Uni
 }
 
 @Composable
-private fun LogTab(s: UiState) {
+private fun LogTab(s: UiState, vm: ScanActions) {
+    Section("Precisión de la INS")
+    Hint("Apoya el móvil en una mesa y no lo toques: mide el ruido y la deriva reales de tu IMU.")
+    SecondaryButton(
+        if (s.imuTestRemaining > 0) "Midiendo… ${s.imuTestRemaining} s" else "Prueba de quietud (60 s)",
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        enabled = s.imuTestRemaining == 0 && !s.scanning,
+    ) { vm.runImuStillTest() }
+    s.imuReport.forEach { Mono(it) }
     Section("Navegación inercial")
     val (x, y, z) = s.position
     val (r, p, yaw) = s.eulerDeg
