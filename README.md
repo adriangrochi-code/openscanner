@@ -119,6 +119,14 @@ lisa, mate y de un solo color **no tiene puntos**. Esto es lo que más influye e
    pulsa **Detener** y **Compartir** para mandar el `.zip` al PC (o `adb pull` desde
    `Android/data/com.tisma.scanner/files/scans/`).
 
+## Procesar en la nube: Tisma Server (tismaservidores.net)
+
+`TismaServer.exe` (ver [server/README.md](server/README.md)) recibe los escaneos desde la app,
+los procesa con todo el pipeline y devuelve la pieza en STL (mm). En la app: ⚙ → **Nube** →
+servidor y clave de API; tras escanear, **☁ Enviar**. La subida va en trozos y se reanuda sola si
+se corta; al terminar aparece **⬢ Pieza STL** para compartirla. El `.exe` de Windows se compila en
+GitHub Actions (`.github/workflows/server-windows.yml`), que además lo autoprueba en Windows.
+
 ## Reconstrucción en el PC
 
 ```bash
