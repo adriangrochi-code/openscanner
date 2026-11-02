@@ -120,9 +120,12 @@ def main():
         raise SystemExit("No hay barridos de foco en este escaneo (botón 'Barrido foco').")
     for (cam, trig), shots in sweeps.items():
         shots = [s for s in shots if not s[2]] or shots  # descarta fotos con el objetivo en movimiento
-        if len(shots) < 3:
+        # Los planos movidos pueden haberse borrado ya en el móvil.
+        loaded = [(s[0], cv2.imread(str(s[1]))) for s in shots]
+        loaded = [(d, im) for d, im in loaded if im is not None]
+        if len(loaded) < 3:
             continue
-        depth, conf, aif = depth_from_focus([s[0] for s in shots], [cv2.imread(str(s[1])) for s in shots], a.win)
+        depth, conf, aif = depth_from_focus([d for d, _ in loaded], [im for _, im in loaded], a.win)
         out = a.out / f"cam{cam}_trig{trig}"
         out.mkdir(parents=True, exist_ok=True)
         valid = conf >= a.min_conf
@@ -135,7 +138,7 @@ def main():
         cv2.imwrite(str(out / "depth_color.jpg"), color)
         cv2.imwrite(str(out / "confidence.png"), (conf / max(conf.max(), 1e-6) * 255).astype(np.uint8))
         cv2.imwrite(str(out / "all_in_focus.jpg"), aif)
-        print(f"{out}: {len(shots)} planos, profundidad {lo * 100:.1f}-{hi * 100:.1f} cm, "
+        print(f"{out}: {len(loaded)} planos, profundidad {lo * 100:.1f}-{hi * 100:.1f} cm, "
               f"{valid.mean() * 100:.0f}% píxeles fiables, calibración del foco: {calib.get(cam)}")
 
 

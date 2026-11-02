@@ -63,6 +63,10 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         @Volatile var lastExposureNs: Long = 0
         @Volatile var lastIso: Int = 0
         @Volatile var lastFocus: Float = 0f
+        /** Fotogramas de previsualización recibidos desde que se abrió la cámara. */
+        @Volatile var frames = 0
+        /** AE/AF han tenido tiempo de converger: sólo entonces se puede bloquear. */
+        val settled get() = frames >= SETTLE_FRAMES
         lateinit var characteristics: CameraCharacteristics
     }
 
@@ -75,6 +79,12 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      *    microtextura que necesita el emparejamiento de puntos en superficies lisas.
      */
     @Volatile var torch = false
+    /**
+     * Calidad JPEG. 92 es el punto dulce para fotogrametría: ~35-45 % menos que 98 sin pérdida
+     * medible de puntos SIFT. Por debajo de ~85 empieza a borrar microtextura.
+     * (Medirlo con fotos propias: tools/compression_test.py.)
+     */
+    @Volatile var jpegQuality = 92
     @Volatile var lock3A = false
 
     /** Aplica a una petición los ajustes comunes de calidad. */
@@ -90,7 +100,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         if (torch && ch.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) {
             set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
         }
-        if (lock3A) {
+        // Bloquear antes de converger congelaría una exposición/enfoque arbitrarios
+        // (pasaba al abrir cada cámara en el modo rotativo).
+        if (lock3A && a.settled) {
             set(CaptureRequest.CONTROL_AE_LOCK, true)
             set(CaptureRequest.CONTROL_AWB_LOCK, true)
             val minFocus = ch.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
@@ -105,52 +117,28 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     data class ShotTag(val ev: Int = 0, val focusDiopters: Float? = null)
 
     /**
-     * Barrido de enfoque (depth from focus): ráfaga moviendo el objetivo de cerca a lejos con
-     * exposición fija. Para cada píxel, la foto en la que está más nítido da su distancia
-     * (1/dioptrías), así se sabe qué está delante y qué detrás. Con una sola foto no se puede:
-     * el desenfoque es igual por delante y por detrás del plano de enfoque.
-     *
-     * @param nearDiopters distancia más cercana (dioptrías = 1/m); null = mínima del objetivo.
-     * @param farDiopters distancia más lejana (1.0 = 1 m).
+     * Plan de enfoque para una cámara: recibe (enfoque mínimo, enfoque actual) en dioptrías y
+     * devuelve las distancias de enfoque a fotografiar. Lista vacía = foto normal.
      */
-    fun captureFocusSweep(steps: Int = 12, nearDiopters: Float? = null, farDiopters: Float = 1.0f): Int {
-        var n = 0
-        for (a in active) {
-            val ch = a.characteristics
-            val minFocus = ch.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-            if (minFocus <= 0f) { listener.onLog("Cámara ${a.group.deviceId}: foco fijo, sin barrido"); continue }
-            val near = (nearDiopters ?: minFocus).coerceAtMost(minFocus)
-            val far = farDiopters.coerceIn(0f, near)
-            try {
-                val burst = (0 until steps).map { i ->
-                    val d = near + (far - near) * i / (steps - 1).coerceAtLeast(1)
-                    a.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                        addTarget(a.streamSurface)
-                        a.readers.values.forEach { addTarget(it.surface) }
-                        set(CaptureRequest.JPEG_ORIENTATION, 0)
-                        set(CaptureRequest.JPEG_QUALITY, 95.toByte())
-                        set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                        set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
-                        applyQuality(a)
-                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                        set(CaptureRequest.LENS_FOCUS_DISTANCE, d)
-                        // Exposición constante: si no, el brillo cambiaría la medida de nitidez.
-                        if (a.manualSensor && a.lastExposureNs > 0) {
-                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                            set(CaptureRequest.SENSOR_EXPOSURE_TIME, a.lastExposureNs)
-                            set(CaptureRequest.SENSOR_SENSITIVITY, a.lastIso)
-                        } else set(CaptureRequest.CONTROL_AE_LOCK, true)
-                        setTag(ShotTag(focusDiopters = d))
-                    }.build()
-                }
-                a.session.captureBurst(burst, metadataCallback(a), camHandler)
-                n += a.readers.size * burst.size
-            } catch (e: Exception) {
-                listener.onLog("Barrido de foco en ${a.group.deviceId}: ${e.message}")
-            }
-        }
-        return n
-    }
+    fun interface FocusPlan { fun diopters(cameraId: String, minFocus: Float, current: Float): List<Float> }
+
+    /**
+     * Barrido de enfoque completo (depth from focus) de cerca a lejos. Para cada píxel, la foto
+     * en la que está más nítido da su distancia, así se sabe qué está delante y qué detrás.
+     * Con una sola foto no se puede: el desenfoque es igual a ambos lados del plano de enfoque.
+     */
+    fun captureFocusSweep(steps: Int = 12, farDiopters: Float = 1.0f): Int =
+        capture(focusPlan = { _, minFocus, _ ->
+            val far = farDiopters.coerceIn(0f, minFocus)
+            (0 until steps).map { i -> minFocus + (far - minFocus) * i / (steps - 1).coerceAtLeast(1) }
+        })
+
+    /** Tiempo de exposición actual de la cámara (o de la lógica que la contiene). */
+    fun exposureNsFor(cameraId: String): Long =
+        active.firstOrNull { cameraId in it.readers.keys || it.group.deviceId == cameraId }?.lastExposureNs ?: 0L
+
+    /** Distancia de enfoque actual de la cámara principal (dioptrías; 0 = infinito/desconocido). */
+    fun primaryFocusDiopters(): Float = active.firstOrNull()?.lastFocus ?: 0f
 
     /** Re-aplica la petición repetitiva (tras cambiar torch / lock3A). */
     fun refreshRepeating() {
@@ -160,20 +148,30 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     private fun startRepeating(act: Active) {
         val repeating = act.device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(act.streamSurface)
-            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            setAf(act.characteristics, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             applyQuality(act)
         }.build()
         act.session.setRepeatingRequest(repeating, object : CameraCaptureSession.CaptureCallback() {
             override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                 res.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { act.lastExposureNs = it }
                 res.get(CaptureResult.SENSOR_SENSITIVITY)?.let { act.lastIso = it }
-                if (!lock3A) res.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { act.lastFocus = it }
+                val locked = lock3A && act.settled
+                if (!locked) res.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { act.lastFocus = it }
+                // Al converger, re-emitir la petición para que el bloqueo surta efecto.
+                if (++act.frames == SETTLE_FRAMES && lock3A) camHandler.post { runCatching { startRepeating(act) } }
             }
         }, camHandler)
     }
 
-    private val active = mutableListOf<Active>()
-    val openedStreams = mutableListOf<OpenedStream>()
+    // Se leen desde el hilo de E/S de cámara (onImage) y se modifican desde el principal.
+    private val active = java.util.concurrent.CopyOnWriteArrayList<Active>()
+    val openedStreams = java.util.concurrent.CopyOnWriteArrayList<OpenedStream>()
+
+    /** Pone el modo de AF sólo si el objetivo lo admite (los de foco fijo sólo admiten OFF). */
+    private fun CaptureRequest.Builder.setAf(ch: CameraCharacteristics, mode: Int) {
+        val modes = ch.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: IntArray(0)
+        if (mode in modes) set(CaptureRequest.CONTROL_AF_MODE, mode)
+    }
 
     /**
      * @param preview superficie de previsualización para el grupo primario.
@@ -194,56 +192,76 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         }
     }
 
+    /** Petición de foto común a todos los modos. */
+    private fun stillRequest(a: Active): CaptureRequest.Builder =
+        a.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
+            addTarget(a.streamSurface)
+            a.readers.values.forEach { addTarget(it.surface) }
+            // Sin rotación: la imagen queda en la orientación nativa del sensor,
+            // coherente con los intrínsecos de LENS_INTRINSIC_CALIBRATION.
+            set(CaptureRequest.JPEG_ORIENTATION, 0)
+            set(CaptureRequest.JPEG_QUALITY, jpegQuality.coerceIn(50, 100).toByte())
+            setAf(a.characteristics, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+            // El OIS/EIS mueve el centro óptico: malo para la geometría.
+            set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+            set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+            set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
+            applyQuality(a)
+        }
+
     /**
      * Dispara una captura en todas las cámaras abiertas. Devuelve el nº de imágenes pedidas.
      *
-     * @param bracketEv si no está vacío y la cámara admite control manual, hace una ráfaga
-     *   con esas compensaciones de exposición (p.ej. [-2, 0, 2]) para fusión HDR posterior.
-     *   La ráfaga mantiene ISO fijo y escala el tiempo de exposición 2^EV.
+     * Por cámara, en este orden de preferencia:
+     *  1. `focusPlan` y objetivo con foco ajustable -> ráfaga de enfoques (focus stacking).
+     *  2. `bracketEv` y control manual -> ráfaga HDR (ISO fijo, tiempo × 2^EV).
+     *  3. Foto normal (p.ej. la macro de foco fijo cuando se pide un apilado).
      */
-    fun capture(bracketEv: List<Int> = emptyList()): Int {
+    fun capture(bracketEv: List<Int> = emptyList(), focusPlan: FocusPlan? = null): Int {
         var n = 0
         for (a in active) {
             try {
-                val base = a.device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
-                    addTarget(a.streamSurface)
-                    a.readers.values.forEach { addTarget(it.surface) }
-                    // Sin rotación: la imagen queda en la orientación nativa del sensor,
-                    // coherente con los intrínsecos de LENS_INTRINSIC_CALIBRATION.
-                    set(CaptureRequest.JPEG_ORIENTATION, 0)
-                    set(CaptureRequest.JPEG_QUALITY, 95.toByte())
-                    set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                    // El OIS/EIS mueve el centro óptico: malo para la geometría.
-                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
-                    set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-                    set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
-                    applyQuality(a)
-                }
-                val canBracket = bracketEv.isNotEmpty() && a.manualSensor && a.lastExposureNs > 0 && a.lastIso > 0
-                if (!canBracket) {
-                    a.session.capture(base.build(), metadataCallback(a), camHandler)
-                    n += a.readers.size
-                } else {
-                    val burst = bracketEv.map { ev ->
-                        var exp = (a.lastExposureNs * Math.pow(2.0, ev.toDouble())).toLong()
-                        var iso = a.lastIso
-                        // Si el tiempo no cabe en el rango, compensa con ISO.
-                        a.exposureRange?.let { r ->
-                            val clamped = exp.coerceIn(r.lower, minOf(r.upper, 250_000_000L))
-                            iso = (iso * exp.toDouble() / clamped).toInt()
-                            exp = clamped
-                        }
-                        a.isoRange?.let { r -> iso = iso.coerceIn(r.lower, r.upper) }
-                        base.apply {
-                            set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                            set(CaptureRequest.SENSOR_EXPOSURE_TIME, exp)
-                            set(CaptureRequest.SENSOR_SENSITIVITY, iso)
-                            setTag(ShotTag(ev = ev))
+                val minFocus = a.characteristics.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+                val focusList = if (focusPlan != null && minFocus > 0f) {
+                    focusPlan.diopters(a.group.deviceId, minFocus, a.lastFocus).map { it.coerceIn(0f, minFocus) }.distinct()
+                } else emptyList()
+                val burst: List<CaptureRequest> = when {
+                    focusList.size > 1 -> focusList.map { d ->
+                        stillRequest(a).apply {
+                            set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                            set(CaptureRequest.LENS_FOCUS_DISTANCE, d)
+                            // Exposición constante entre planos: si no, cambiaría la medida de nitidez.
+                            if (a.manualSensor && a.lastExposureNs > 0 && a.lastIso > 0) {
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                                set(CaptureRequest.SENSOR_EXPOSURE_TIME, a.lastExposureNs)
+                                set(CaptureRequest.SENSOR_SENSITIVITY, a.lastIso)
+                            } else set(CaptureRequest.CONTROL_AE_LOCK, true)
+                            setTag(ShotTag(focusDiopters = d))
                         }.build()
                     }
-                    a.session.captureBurst(burst, metadataCallback(a), camHandler)
-                    n += a.readers.size * burst.size
+                    bracketEv.isNotEmpty() && a.manualSensor && a.lastExposureNs > 0 && a.lastIso > 0 ->
+                        bracketEv.map { ev ->
+                            var exp = (a.lastExposureNs * Math.pow(2.0, ev.toDouble())).toLong()
+                            var iso = a.lastIso
+                            // Si el tiempo no cabe en el rango, compensa con ISO.
+                            a.exposureRange?.let { r ->
+                                val clamped = exp.coerceIn(r.lower, minOf(r.upper, 250_000_000L))
+                                iso = (iso * exp.toDouble() / clamped).toInt()
+                                exp = clamped
+                            }
+                            a.isoRange?.let { r -> iso = iso.coerceIn(r.lower, r.upper) }
+                            stillRequest(a).apply {
+                                set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                                set(CaptureRequest.SENSOR_EXPOSURE_TIME, exp)
+                                set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                                setTag(ShotTag(ev = ev))
+                            }.build()
+                        }
+                    else -> listOf(stillRequest(a).build())
                 }
+                if (burst.size == 1) a.session.capture(burst[0], metadataCallback(a), camHandler)
+                else a.session.captureBurst(burst, metadataCallback(a), camHandler)
+                n += a.readers.size * burst.size
             } catch (e: Exception) {
                 listener.onLog("Error al capturar en ${a.group.deviceId}: ${e.message}")
             }
@@ -271,7 +289,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     private suspend fun openDevice(id: String): CameraDevice? = suspendCancellableCoroutine { cont ->
         try {
             manager.openCamera(id, executor, object : CameraDevice.StateCallback() {
-                override fun onOpened(camera: CameraDevice) { if (cont.isActive) cont.resume(camera) }
+                // Si quien esperaba ya se canceló, cerrar: si no, la cámara quedaría ocupada.
+                override fun onOpened(camera: CameraDevice) { if (cont.isActive) cont.resume(camera) else camera.close() }
                 override fun onDisconnected(camera: CameraDevice) {
                     camera.close(); if (cont.isActive) cont.resume(null)
                 }
@@ -349,7 +368,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         suspendCancellableCoroutine { cont ->
             val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outputs, executor,
                 object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) { if (cont.isActive) cont.resume(session) }
+                    override fun onConfigured(session: CameraCaptureSession) { if (cont.isActive) cont.resume(session) else session.close() }
                     override fun onConfigureFailed(session: CameraCaptureSession) { if (cont.isActive) cont.resume(null) }
                 })
             try {
@@ -427,5 +446,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     fun sensorOrientation(cameraId: String): Int =
         manager.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
 
-    companion object { private const val TAG = "MultiCamera" }
+    companion object {
+        private const val TAG = "MultiCamera"
+        /** ~0,7 s a 30 fps: suficiente para que AE/AF/AWB converjan tras abrir. */
+        private const val SETTLE_FRAMES = 20
+    }
 }

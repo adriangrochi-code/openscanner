@@ -18,6 +18,7 @@ data class CameraInfo(
     val sensorSizeMm: Pair<Float, Float>?,
     val pixelArray: Size?,
     val activeArray: android.graphics.Rect?,
+    val preCorrectionArray: android.graphics.Rect?,
     /** [fx, fy, cx, cy, s] en píxeles del active array (puede ser null si el fabricante no lo publica). */
     val intrinsics: FloatArray?,
     /** [k1, k2, k3, p1, p2] modelo Brown-Conrady de Android. */
@@ -63,6 +64,8 @@ data class CameraInfo(
         sensorSizeMm?.let { put("sensor_size_mm", JSONArray(listOf(it.first.toDouble(), it.second.toDouble()))) }
         pixelArray?.let { put("pixel_array", JSONArray(listOf(it.width, it.height))) }
         activeArray?.let { put("active_array", JSONArray(listOf(it.left, it.top, it.right, it.bottom))) }
+        // Desde API 28 los intrínsecos se refieren a este array (sin corrección de distorsión).
+        preCorrectionArray?.let { put("pre_correction_active_array", JSONArray(listOf(it.left, it.top, it.right, it.bottom))) }
         intrinsics?.let { put("intrinsics_fx_fy_cx_cy_s", JSONArray(it.map { v -> v.toDouble() })) }
         distortion?.let { put("distortion_k1_k2_k3_p1_p2", JSONArray(it.map { v -> v.toDouble() })) }
         poseRotation?.let { put("pose_rotation_xyzw", JSONArray(it.map { v -> v.toDouble() })) }
@@ -119,6 +122,7 @@ object CameraInventory {
             sensorSizeMm = sensor?.let { it.width to it.height },
             pixelArray = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE),
             activeArray = c.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
+            preCorrectionArray = c.get(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE),
             intrinsics = c.get(CameraCharacteristics.LENS_INTRINSIC_CALIBRATION),
             distortion = c.get(CameraCharacteristics.LENS_DISTORTION),
             poseRotation = c.get(CameraCharacteristics.LENS_POSE_ROTATION),

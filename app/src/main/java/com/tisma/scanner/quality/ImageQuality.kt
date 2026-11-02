@@ -90,15 +90,27 @@ object ImageQuality {
  * Lleva la cuenta de nitidez por cámara para juzgar cada foto respecto a las anteriores
  * (la nitidez absoluta depende mucho de la escena; la relativa no).
  */
-class BlurJudge(private val window: Int = 15, private val ratio: Double = 0.5) {
+class BlurJudge(private val window: Int = 15, private val ratio: Double = 0.5, private val sceneChange: Int = 4) {
     private val history = HashMap<String, ArrayDeque<Double>>()
+    private val streak = HashMap<String, Int>()
 
     @Synchronized fun isBlurry(cameraId: String, sharpness: Double): Boolean {
         val h = history.getOrPut(cameraId) { ArrayDeque() }
-        val blurry = if (h.size >= 5) sharpness < h.sorted()[h.size / 2] * ratio else false
-        if (!blurry) { h.addLast(sharpness); while (h.size > window) h.removeFirst() }
+        val median = if (h.size >= 5) h.sorted()[h.size / 2] else null
+        var blurry = median != null && sharpness < median * ratio
+        if (blurry) {
+            // Varias "movidas" seguidas = cambio de escena (p.ej. del tapete a la pieza lisa),
+            // no movimiento: se reinicia la referencia en vez de descartar todo lo que venga.
+            val n = (streak[cameraId] ?: 0) + 1
+            streak[cameraId] = n
+            if (n >= sceneChange) { h.clear(); streak[cameraId] = 0; blurry = false }
+        } else streak[cameraId] = 0
+        // Siempre se aprende, pero las movidas entran recortadas: la referencia se adapta
+        // poco a poco sin que unas pocas fotos malas la hundan.
+        h.addLast(if (median != null) maxOf(sharpness, median * ratio) else sharpness)
+        while (h.size > window) h.removeFirst()
         return blurry
     }
 
-    @Synchronized fun reset() = history.clear()
+    @Synchronized fun reset() { history.clear(); streak.clear() }
 }

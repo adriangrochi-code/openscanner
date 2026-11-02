@@ -39,6 +39,7 @@ class GpsRecorder(context: Context, private val onFix: (tNs: Long, loc: Location
                 runCatching { lm.requestLocationUpdates(p, 200L, 0f, this, t.looper); any = true }
             }
         }
+        if (!any) { t.quitSafely(); thread = null }
         return any
     }
 

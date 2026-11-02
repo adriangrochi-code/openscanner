@@ -29,6 +29,12 @@ class CoverageMap(
 
     @Synchronized fun reset() { counts.forEach { it.fill(0) }; azOrigin = null; below = 0 }
 
+    /** Origen de azimut (grados absolutos) o null si aún no hay fotos. */
+    @Synchronized fun origin(): Double? = azOrigin
+
+    /** Comparte el origen con otro mapa (otra pasada) para que "0°" signifique lo mismo. */
+    @Synchronized fun adoptOrigin(o: Double) { if (azOrigin == null) azOrigin = o }
+
     /** Azimut relativo al punto de inicio, en [0, 360). */
     @Synchronized fun relativeAz(azDeg: Double): Double {
         val o = azOrigin ?: return 0.0

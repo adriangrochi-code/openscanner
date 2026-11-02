@@ -19,6 +19,16 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   fotografiados y hacia dónde apunta la cámara. Cada foto se analiza (nitidez, textura,
   exposición), y la app solo dice **"Listo para enviar"** cuando el escaneo merece el cómputo.
 
+- **Pasadas lejos + cerca**: *Lejos* da la geometría global (ultra gran angular + principal, HDR) y
+  *Cerca* el detalle (principal + macro). El autoenfoque mide la distancia a la pieza; con ella la app
+  calcula la resolución (mm/px) y la profundidad de campo, y en *Cerca* cada disparo es un **apilado
+  de enfoques** con los planos justos para que toda la pieza salga nítida.
+- **Descarte de fotos movidas en el propio móvil**: giro medido por el giróscopo durante la exposición
+  (> 1,5 px de arrastre), más nitidez relativa. Así no se guardan ni se suben. **JPEG ajustable**
+  (92 por defecto) y una herramienta para medir cuánto se puede comprimir sin perder calidad.
+
+![Interfaz](docs/screenshots/scan_tab.png)
+
 La reconstrucción 3D se hace en el PC (COLMAP + OpenMVS) con los scripts de `tools/`. El móvil se
 dedica a capturar los datos más ricos y mejor sincronizados posibles.
 
@@ -67,13 +77,19 @@ lisa, mate y de un solo color **no tiene puntos**. Esto es lo que más influye e
 5. **Movimiento**: rodea la pieza en 2-3 alturas (unos 30°, 50° y 70° sobre la mesa), con un
    solape grande. El disparo automático salta cada ~8° de giro. Si aparece "¡DEMASIADO RÁPIDO!",
    ve más despacio. Párate un instante de vez en cuando: así la INS se recalibra (ZUPT) y se hace el HDR.
-6. **Mira la cúpula** (abajo a la derecha de la vista previa). El centro es la vista desde arriba
+6. **Dos pasadas.** Arriba a la derecha elige **Lejos**: la pieza entera en el encuadre, a 2-3 veces
+   su tamaño. Rodéala hasta que esté "Listo". Después elige **Cerca**: acércate 2-3 veces más,
+   indica la profundidad de la pieza y repasa las zonas con detalle. Al cambiar de pasada, la app
+   vuelve a enfocar y bloquea el foco: cada distancia tiene su propia calibración.
+   No te acerques más de 3 veces de golpe respecto a la pasada lejana: si la escala cambia mucho,
+   las fotos de cerca no se emparejan con las de lejos.
+7. **Mira la cúpula** (abajo a la derecha de la vista previa). El centro es la vista desde arriba
    y el borde, las vistas rasantes. Gris = falta, amarillo = 1 foto, verde = 2 o más. El punto
    blanco es hacia dónde apuntas ahora; "arriba" en el dibujo es donde empezaste. Debajo aparecen
    avisos del tipo *"A 10–30° de altura: falta el sector 90°–150°"*.
    Si sale **"⚠ Poca textura"**, la pieza no tiene puntos que emparejar: pon el tapete o usa spray.
-7. **Barrido de foco**: con el móvil apoyado y quieto, pulsa "Barrido foco" en las zonas con relieve.
-8. Cuando ponga **"✓ Listo para enviar"** (≥ 75 % de cobertura, ≥ 40 fotos y < 20 % movidas),
+8. **Barrido de foco**: con el móvil apoyado y quieto, pulsa "Barrido foco" en las zonas con relieve.
+9. Cuando ponga **"✓ Listo para enviar"** (≥ 75 % de cobertura, ≥ 40 fotos y < 20 % movidas),
    pulsa **Detener** y **Compartir** para mandar el `.zip` al PC (o `adb pull` desde
    `Android/data/com.tisma.scanner/files/scans/`).
 
@@ -87,10 +103,17 @@ python3 tools/reconstruct.py scan_20261102_101500.zip --work out --mat tapete.js
 python3 tools/depth_from_focus.py out/raw/scan_20261102_101500 --out out/dff
 ```
 
+Para decidir la compresión con tus propias fotos:
+`python3 tools/compression_test.py out/raw/scan_xxx` muestra MB por foto y cuántos emparejamientos
+se conservan con JPEG 95/92/90/85/80/70, WebP y AVIF. Elige el nivel más comprimido que mantenga
+≥ 95 % de los emparejamientos. En pruebas sintéticas incluso JPEG 85 lo cumplía, pero la
+microtextura real es más delicada: mídelo.
+
 `reconstruct.py` hace lo siguiente:
+0. Une cada **apilado de enfoque** en una sola imagen totalmente enfocada (y guarda su mapa de profundidad).
 1. Descarta las fotos que la app marcó como movidas y fusiona las ráfagas HDR (Mertens).
 2. Aplica CLAHE (realce de microtextura) **solo** a las imágenes que se usan para detectar puntos.
-3. Lanza COLMAP con una cámara por objetivo y los intrínsecos de fábrica del móvil como punto de
+3. Lanza COLMAP con una cámara por objetivo **y por distancia de enfoque** y los intrínsecos de fábrica del móvil como punto de
    partida. Usa SIFT con DSP + forma afín, que funciona mejor con poca textura.
 4. Pone el modelo en **metros**: con los marcadores ArUco si los hay (error ~0,1 %); si no, alineando
    la trayectoria con la de la INS (error ~5-10 %).
@@ -139,14 +162,17 @@ app/src/main/java/com/tisma/scanner/
   ins/MahonyFilter.kt              orientación (ganancia adaptativa)
   ins/StrapdownIns.kt              navegación inercial + ZUPT + corrección GNSS
   ins/KeyframeSelector.kt          disparo automático guiado por la INS
+  camera/Optics.kt                 profundidad de campo, mm/px, planos del apilado de enfoque
+  camera/ScanPass.kt               pasadas lejos/cerca y qué cámaras usa cada una
   quality/CoverageMap.kt           cúpula de cobertura a partir de la orientación INS
   quality/ImageQuality.kt          nitidez normalizada, textura por baldosas, recorte
   session/ScanSession.kt           escritura del dataset y .zip
-  ui/                              Compose: vista previa, telemetría INS, controles
+  ui/                              Compose con el estilo de TISMA: vista previa, cúpula, avisos, ajustes
 tools/
   make_scan_mat.py                 tapete imprimible con textura + ArUco
   reconstruct.py                   HDR → COLMAP → escala métrica → malla
   depth_from_focus.py              mapas de profundidad a partir de barridos de foco
+  compression_test.py              cuánto comprimir sin perder emparejamientos
 ```
 
 ## Próximos pasos posibles

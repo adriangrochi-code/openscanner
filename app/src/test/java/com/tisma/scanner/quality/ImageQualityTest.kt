@@ -50,4 +50,12 @@ class ImageQualityTest {
         assertTrue(j.isBlurry("0", 3.0))
         assertFalse(j.isBlurry("2", 3.0)) // otra cámara, sin historial
     }
+
+    @Test fun blurJudgeAdaptsToSceneChangeInsteadOfDiscardingEverything() {
+        val j = BlurJudge()
+        repeat(6) { j.isBlurry("0", 10.0) }          // tapete con mucha textura
+        // La cámara pasa a encuadrar la pieza lisa: nitidez 3 de forma sostenida.
+        val verdicts = (0 until 12).map { j.isBlurry("0", 3.0) }
+        assertTrue("no debe marcar todo como movido: $verdicts", verdicts.takeLast(6).none { it })
+    }
 }

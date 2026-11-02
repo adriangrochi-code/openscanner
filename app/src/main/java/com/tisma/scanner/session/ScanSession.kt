@@ -39,14 +39,14 @@ class ScanSession(baseDir: File) {
     init {
         imagesDir.mkdirs()
         frames = File(dir, "frames.csv").bufferedWriter().apply {
-            write("frame,trigger,camera_id,t_ns,file,width,height,px,py,pz,qw,qx,qy,qz,stationary\n")
+            write("frame,trigger,pass,camera_id,t_ns,file,width,height,px,py,pz,qw,qx,qy,qz,stationary\n")
         }
         trajectory = File(dir, "ins_trajectory.csv").bufferedWriter().apply {
             write("t_ns,px,py,pz,vx,vy,vz,qw,qx,qy,qz,stationary\n")
         }
         meta = File(dir, "capture_meta.jsonl").bufferedWriter()
         quality = File(dir, "quality.csv").bufferedWriter().apply {
-            write("t_ns,camera_id,sharpness,texture,clipped_high,clipped_low,mean_luma,blurry,view_az_deg,view_el_deg,coverage_ring,coverage_bin\n")
+            write("t_ns,pass,camera_id,sharpness,texture,clipped_high,clipped_low,mean_luma,blurry,motion_blur_px,deleted,view_az_deg,view_el_deg,coverage_ring,coverage_bin\n")
         }
     }
 
@@ -69,7 +69,7 @@ class ScanSession(baseDir: File) {
     }
 
     @Synchronized
-    fun addImage(trigger: Int, cameraId: String, tNs: Long, w: Int, h: Int, jpeg: ByteArray, pose: InsState?) {
+    fun addImage(trigger: Int, pass: String, cameraId: String, tNs: Long, w: Int, h: Int, jpeg: ByteArray, pose: InsState?) {
         val camDir = File(imagesDir, cameraId).apply { mkdirs() }
         val f = File(camDir, "$tNs.jpg")
         FileOutputStream(f).use { it.write(jpeg) }
@@ -77,16 +77,23 @@ class ScanSession(baseDir: File) {
         val rel = "images/$cameraId/${f.name}"
         val p = pose
         frames.write(buildString {
-            append(n).append(',').append(trigger).append(',').append(cameraId).append(',').append(tNs).append(',')
+            append(n).append(',').append(trigger).append(',').append(pass).append(',').append(cameraId).append(',').append(tNs).append(',')
             append(rel).append(',').append(w).append(',').append(h).append(',')
             if (p != null) {
                 append(p.position.x).append(',').append(p.position.y).append(',').append(p.position.z).append(',')
                 append(p.orientation.w).append(',').append(p.orientation.x).append(',')
                 append(p.orientation.y).append(',').append(p.orientation.z).append(',')
                 append(if (p.stationary) 1 else 0)
-            } else append(",,,,,,,,")
+            } else append(",,,,,,,") // 8 campos vacíos (px..stationary)
             append('\n')
         })
+    }
+
+    /** Borra una foto descartada (movida). Devuelve los bytes liberados. */
+    fun deleteImage(cameraId: String, tNs: Long): Long {
+        val f = File(File(imagesDir, cameraId), "$tNs.jpg")
+        val len = f.length()
+        return if (f.delete()) len else 0L
     }
 
     @Synchronized
@@ -103,10 +110,10 @@ class ScanSession(baseDir: File) {
     }
 
     @Synchronized
-    fun addQuality(cameraId: String, tNs: Long, q: com.tisma.scanner.quality.QualityReport, blurry: Boolean,
-                   azEl: Pair<Double, Double>?, bin: Pair<Int, Int>?) {
-        quality.write("$tNs,$cameraId,${q.sharpness},${q.texture},${q.clippedHigh},${q.clippedLow},${q.meanLuma}," +
-            "${if (blurry) 1 else 0},${azEl?.first ?: ""},${azEl?.second ?: ""},${bin?.first ?: ""},${bin?.second ?: ""}\n")
+    fun addQuality(pass: String, cameraId: String, tNs: Long, q: com.tisma.scanner.quality.QualityReport, blurry: Boolean,
+                   motionBlurPx: Double, deleted: Boolean, azEl: Pair<Double, Double>?, bin: Pair<Int, Int>?) {
+        quality.write("$tNs,$pass,$cameraId,${q.sharpness},${q.texture},${q.clippedHigh},${q.clippedLow},${q.meanLuma}," +
+            "${if (blurry) 1 else 0},${"%.2f".format(java.util.Locale.US, motionBlurPx)},${if (deleted) 1 else 0},${azEl?.first ?: ""},${azEl?.second ?: ""},${bin?.first ?: ""},${bin?.second ?: ""}\n")
     }
 
     /** Resumen para decidir en el servidor (o antes de subir) si merece la pena procesar. */
@@ -124,9 +131,10 @@ class ScanSession(baseDir: File) {
     fun zip(): File {
         val out = File(dir.parentFile, dir.name + ".zip")
         ZipOutputStream(FileOutputStream(out).buffered()).use { zos ->
+            // Los JPEG ya están comprimidos: compresión mínima = zip mucho más rápido.
+            zos.setLevel(java.util.zip.Deflater.BEST_SPEED)
             dir.walkTopDown().filter { it.isFile }.forEach { f ->
                 val entry = ZipEntry(dir.name + "/" + f.relativeTo(dir).invariantSeparatorsPath)
-                // Los JPEG ya están comprimidos: STORED sería ideal pero exige CRC previo; DEFLATE nivel bajo basta.
                 zos.putNextEntry(entry)
                 f.inputStream().use { it.copyTo(zos) }
                 zos.closeEntry()

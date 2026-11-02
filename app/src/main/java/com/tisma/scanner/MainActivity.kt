@@ -6,12 +6,21 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.tisma.scanner.ui.Tisma
+import com.tisma.scanner.ui.TismaTheme
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -32,6 +41,11 @@ class MainActivity : ComponentActivity() {
     private val vm: ScanViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Barras del sistema oscuras, como la barra superior de TISMA.
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(0xFF1E1E22.toInt()),
+            navigationBarStyle = SystemBarStyle.dark(0xFF1E1E22.toInt()),
+        )
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         cameraGranted.value = hasCamera()
@@ -44,9 +58,11 @@ class MainActivity : ComponentActivity() {
         }
         if (cameraGranted.value) vm.onLocationPermission(hasLocation())
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            TismaTheme {
                 if (cameraGranted.value) ScanScreen(vm, ::share)
-                else Text("Se necesita permiso de cámara")
+                else Box(Modifier.fillMaxSize().background(Tisma.Bg).padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("Tisma Scanner necesita permiso de cámara para escanear.", color = Tisma.Text)
+                }
             }
         }
     }

@@ -18,9 +18,9 @@ class KeyframeSelector(
     private var lastP: Vec3? = null
     private var lastT = 0L
 
-    fun reset() { lastQ = null; lastP = null; lastT = 0 }
+    @Synchronized fun reset() { lastQ = null; lastP = null; lastT = 0 }
 
-    fun shouldTrigger(state: InsState, gyroRate: Double): Boolean {
+    @Synchronized fun shouldTrigger(state: InsState, gyroRate: Double): Boolean {
         val t = state.timestampNs
         val elapsedMs = (t - lastT) / 1_000_000
         if (lastQ == null) return true
@@ -31,7 +31,7 @@ class KeyframeSelector(
         return angle >= minAngleDeg || trans >= minTranslationM || elapsedMs >= maxIntervalMs
     }
 
-    fun markTriggered(state: InsState) {
+    @Synchronized fun markTriggered(state: InsState) {
         lastQ = state.orientation; lastP = state.position; lastT = state.timestampNs
     }
 }

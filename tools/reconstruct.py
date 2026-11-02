@@ -87,7 +87,10 @@ def meta_for(meta, cam, t, tol_ns=2_000_000):
 # --------------------------------------------------------------------------- HDR + realce
 
 def group_brackets(frames, meta, max_gap_ns=600_000_000):
-    """Agrupa fotos consecutivas de la misma cámara y disparo con EV distintos."""
+    """
+    Agrupa las ráfagas: fotos consecutivas de la misma cámara y disparo que difieren en EV
+    (HDR) o en distancia de enfoque (apilado). Cada grupo acaba siendo una sola imagen.
+    """
     by_cam = defaultdict(list)
     for fr in frames:
         by_cam[fr["camera_id"]].append(fr)
@@ -96,11 +99,15 @@ def group_brackets(frames, meta, max_gap_ns=600_000_000):
         lst.sort(key=lambda r: int(r["t_ns"]))
         cur = []
         for fr in lst:
-            ev = meta_for(meta, cam, int(fr["t_ns"])).get("bracket_ev", 0)
+            m = meta_for(meta, cam, int(fr["t_ns"]))
+            ev = m.get("bracket_ev", 0)
             fr["_ev"] = ev
+            fr["_focus_target"] = m.get("focus_sweep_target_diopters")
+            fr["_focus"] = m.get("focus_distance_diopters", fr["_focus_target"])
+            key = (ev, fr["_focus_target"])
             if cur and (fr["trigger"] != cur[-1]["trigger"]
                         or int(fr["t_ns"]) - int(cur[-1]["t_ns"]) > max_gap_ns
-                        or ev in [c["_ev"] for c in cur]):
+                        or key in [(c["_ev"], c["_focus_target"]) for c in cur]):
                 groups.append(cur); cur = []
             cur.append(fr)
         if cur:
@@ -109,7 +116,10 @@ def group_brackets(frames, meta, max_gap_ns=600_000_000):
 
 
 def fuse(paths):
-    imgs = [cv2.imread(str(p)) for p in paths]
+    # Las fotos movidas pueden haberse borrado ya en el móvil.
+    imgs = [im for im in (cv2.imread(str(p)) for p in paths) if im is not None]
+    if not imgs:
+        return None
     if len(imgs) == 1:
         return imgs[0]
     # Alinear por si hubo micro-movimiento entre exposiciones.
@@ -125,22 +135,49 @@ def enhance_for_features(img, clip=3.0):
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def focus_stack(group, scan, work):
+    """Apilado de enfoque -> imagen todo-enfocada alineada con el plano central (+ mapa de profundidad)."""
+    from depth_from_focus import depth_from_focus  # mismo directorio
+    shots = [(r["_focus"], cv2.imread(str(scan / r["file"])), r) for r in group]
+    shots = [s for s in shots if s[1] is not None and s[0]]
+    if len(shots) < 2:
+        return (shots[0][1], shots[0][2]) if shots else (None, None)
+    shots.sort(key=lambda s: -s[0])
+    ref = shots[len(shots) // 2][2]  # el plano central define la pose y la calibración
+    # 4096 px cubre 12 MP sin reducir y acota la RAM del servidor (~1 GB por apilado de 9).
+    depth, conf, aif = depth_from_focus([s[0] for s in shots], [s[1] for s in shots], max_side=4096)
+    if aif.shape[:2] != shots[0][1].shape[:2]:
+        aif = cv2.resize(aif, (shots[0][1].shape[1], shots[0][1].shape[0]), interpolation=cv2.INTER_CUBIC)
+    ddir = work / "depth" / ref["camera_id"]
+    ddir.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(ddir / f"{ref['t_ns']}_mm.png"), np.where(conf > 0.5, depth * 1000, 0).clip(0, 65535).astype(np.uint16))
+    return aif, ref
+
+
 def prepare_images(scan, work, frames, meta, clahe):
     color_dir, feat_dir = work / "images", work / "images_feat"
     records = []  # (nombre relativo, frame representativo)
+    n_hdr = n_stack = 0
     for g in group_brackets(frames, meta):
-        ref = min(g, key=lambda r: abs(r["_ev"]))  # la de 0 EV como referencia de pose
+        if len({r["_focus_target"] for r in g}) > 1:
+            img, ref = focus_stack(g, scan, work)
+            n_stack += 1
+        else:
+            ref = min(g, key=lambda r: abs(r["_ev"]))  # la de 0 EV como referencia de pose
+            img = fuse([scan / r["file"] for r in g])
+            n_hdr += len(g) > 1
+        if img is None:
+            continue
         cam = ref["camera_id"]
         name = f"{cam}/{ref['t_ns']}.jpg"
         out = color_dir / name
         out.parent.mkdir(parents=True, exist_ok=True)
-        img = fuse([scan / r["file"] for r in g])
         cv2.imwrite(str(out), img, [cv2.IMWRITE_JPEG_QUALITY, 97])
         f = feat_dir / name
         f.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(f), enhance_for_features(img) if clahe else img, [cv2.IMWRITE_JPEG_QUALITY, 97])
         records.append((name, ref))
-    print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({sum(len(g) > 1 for g in group_brackets(frames, meta))} fusiones HDR)")
+    print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({n_hdr} fusiones HDR, {n_stack} apilados de enfoque)")
     return records
 
 
@@ -153,28 +190,40 @@ def colmap(*args):
 
 
 def camera_params(session, cam_id, width, height):
-    """OPENCV: fx,fy,cx,cy,k1,k2,p1,p2 escalados del active array al tamaño de la imagen."""
+    """
+    OPENCV: fx,fy,cx,cy,k1,k2,p1,p2 llevados del array del sensor al tamaño de la imagen.
+
+    Desde Android 9 los intrínsecos se refieren al array *pre-corrección* (la app desactiva la
+    corrección de distorsión, así que la salida también). Si la imagen tiene otro aspecto que
+    el array, la cámara recorta centrado y escala de forma uniforme.
+    """
     cam = next((c for c in session["cameras"] if c["id"] == cam_id), None)
-    if not cam or "intrinsics_fx_fy_cx_cy_s" not in cam or "active_array" not in cam:
+    arr = cam and (cam.get("pre_correction_active_array") or cam.get("active_array"))
+    if not cam or "intrinsics_fx_fy_cx_cy_s" not in cam or not arr:
         return None
     fx, fy, cx, cy, _ = cam["intrinsics_fx_fy_cx_cy_s"]
     if fx <= 0:
         return None
-    l, t, r, b = cam["active_array"]
-    sx, sy = width / (r - l), height / (b - t)
+    l, t, r, b = arr
+    W, H = r - l, b - t
+    s = max(width / W, height / H)          # escala uniforme con recorte centrado
+    ox, oy = (W * s - width) / 2, (H * s - height) / 2
     k1, k2, _k3, p1, p2 = cam.get("distortion_k1_k2_k3_p1_p2", [0, 0, 0, 0, 0])
-    return [fx * sx, fy * sy, cx * sx, cy * sy, k1, k2, p1, p2]
+    return [fx * s, fy * s, cx * s - ox, cy * s - oy, k1, k2, p1, p2]
 
 
 def run_sfm(work, session, records, matcher):
     db = work / "database.db"
     if db.exists():
         db.unlink()
+    # Una cámara COLMAP por (objetivo, enfoque): al cambiar el enfoque cambian la focal
+    # efectiva y la distorsión, así que cada pasada (lejos/cerca) se calibra por separado.
     by_cam = defaultdict(list)
     for name, fr in records:
-        by_cam[fr["camera_id"]].append((name, fr))
-    for cam, items in by_cam.items():
-        lst = work / f"list_{cam}.txt"
+        f = fr.get("_focus") or 0.0
+        by_cam[(fr["camera_id"], round(f / 0.25) * 0.25)].append((name, fr))
+    for (cam, fbucket), items in by_cam.items():
+        lst = work / f"list_{cam}_f{fbucket:.2f}.txt"
         lst.write_text("\n".join(n for n, _ in items) + "\n")
         w, h = int(items[0][1]["width"]), int(items[0][1]["height"])
         params = camera_params(session, cam, w, h)
@@ -186,7 +235,7 @@ def run_sfm(work, session, records, matcher):
                 "--SiftExtraction.domain_size_pooling", 1]
         if params:
             args += ["--ImageReader.camera_params", ",".join(f"{p:.6f}" for p in params)]
-            print(f"[sfm] cámara {cam}: intrínsecos de fábrica {params[:4]}")
+            print(f"[sfm] cámara {cam} enfoque {fbucket:.2f} D: intrínsecos de fábrica {params[:4]}")
         colmap(*args)
     if matcher == "sequential":
         colmap("sequential_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
