@@ -140,13 +140,32 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     val ins = StrapdownIns()
     private val imu = ImuRecorder(app, ins)
     private val selector = KeyframeSelector()
-    private val gps = GpsRecorder(app) { _, loc ->
+    /** Último fix del chip GPS (el "fused" sólo se usa si el GPS se calla: no trae Doppler fiable). */
+    @Volatile private var lastGpsChipNs = 0L
+
+    private val gps = GpsRecorder(app) { tNs, loc ->
+        val fromChip = loc.provider == android.location.LocationManager.GPS_PROVIDER
+        if (fromChip) lastGpsChipNs = tNs
+        else if (tNs - lastGpsChipNs < 3_000_000_000L) return@GpsRecorder   // ya hay GPS: ignorar el fused
+        if (ins.geo == null) {
+            // Declinación magnética del lugar (modelo magnético mundial de Android).
+            ins.declinationDeg = android.hardware.GeomagneticField(
+                loc.latitude.toFloat(), loc.longitude.toFloat(), loc.altitude.toFloat(), System.currentTimeMillis()
+            ).declination.toDouble()
+            log("Declinación magnética: %.1f°".format(ins.declinationDeg))
+        }
         ins.onGnss(
             loc.latitude, loc.longitude, loc.altitude, loc.accuracy.toDouble(),
             if (loc.hasVerticalAccuracy()) loc.verticalAccuracyMeters.toDouble() else null,
+            speedMps = if (loc.hasSpeed()) loc.speed.toDouble() else null,
+            bearingDeg = if (loc.hasBearing()) loc.bearing.toDouble() else null,
+            speedAccMps = if (loc.hasSpeedAccuracy()) loc.speedAccuracyMetersPerSecond.toDouble() else null,
         )
         _state.update {
-            it.copy(gpsText = "GPS: %.6f, %.6f ±%.1f m".format(loc.latitude, loc.longitude, loc.accuracy))
+            it.copy(gpsText = "GPS: %.6f, %.6f ±%.1f m".format(loc.latitude, loc.longitude, loc.accuracy) +
+                (if (loc.hasSpeed()) " · %.2f m/s".format(loc.speed) else "") +
+                (if (loc.hasSpeedAccuracy()) " ±%.2f".format(loc.speedAccuracyMetersPerSecond) else "") +
+                if (fromChip) "" else " (fused)")
         }
     }
     private val coverageMaps = ScanPass.entries.associateWith { CoverageMap() }

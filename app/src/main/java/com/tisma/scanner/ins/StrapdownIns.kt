@@ -81,18 +81,53 @@ class StrapdownIns(
      * pocos mm), un GNSS de ±3 m prácticamente no mueva la solución; en recorridos largos
      * (P grande) el GNSS domina y frena la deriva.
      */
-    @Synchronized fun onGnss(lat: Double, lon: Double, alt: Double, horizAccM: Double, vertAccM: Double?) {
+    @Synchronized fun onGnss(lat: Double, lon: Double, alt: Double, horizAccM: Double, vertAccM: Double?,
+                             speedMps: Double? = null, bearingDeg: Double? = null, speedAccMps: Double? = null) {
         val g = geo ?: GeoReference(lat, lon, alt).also {
             geo = it
             // Anclar el origen ENU a la posición INS actual.
             originOffset = kf.p
         }
         val enu = g.toEnu(lat, lon, alt)
-        val meas = Vec3(enu.y, -enu.x, enu.z) + originOffset
+        val meas = enuToIns(enu.x, enu.y, enu.z) + originOffset
         if (gnssUpdates++ == 0) return
         kf.positionAxis(0, meas.x, horizAccM)
         kf.positionAxis(1, meas.y, horizAccM)
         kf.positionAxis(2, meas.z, vertAccM ?: (horizAccM * 1.5))
+
+        // Velocidad Doppler del GNSS: mucho más precisa (~0,1-0,3 m/s) que la posición (±3-10 m).
+        // Frena la deriva de velocidad y, con ella, la de posición entre fixes.
+        if (speedMps == null || stationary || horizAccM > GNSS_MAX_ACC_FOR_VELOCITY) return
+        val sigma = maxOf(speedAccMps ?: DEFAULT_SPEED_ACC, 0.05)
+        val vIns = if (speedMps < 0.5 || bearingDeg == null) {
+            // Casi parado: el rumbo GNSS no significa nada; sólo "velocidad horizontal ≈ 0".
+            Vec3.ZERO
+        } else {
+            val b = Math.toRadians(bearingDeg)
+            enuToIns(speedMps * kotlin.math.sin(b), speedMps * kotlin.math.cos(b), 0.0)
+        }
+        val s = if (speedMps < 0.5) maxOf(sigma, speedMps) else sigma
+        kf.velocityAlong(Vec3(1.0, 0.0, 0.0), vIns.x, s)
+        kf.velocityAlong(Vec3(0.0, 1.0, 0.0), vIns.y, s)
+    }
+
+    /**
+     * Declinación magnética local (grados, positiva al este; GeomagneticField de Android).
+     * El marco INS tiene X hacia el norte MAGNÉTICO (lo fija la brújula), y el GNSS da norte
+     * VERDADERO: en Uruguay difieren ~10°, y sin corregirlo cada corrección GNSS empujaba la
+     * INS 10° de lado.
+     */
+    @Volatile var declinationDeg = 0.0
+
+    /**
+     * Este/norte/arriba (norte verdadero) -> marco INS (X = norte magnético, Y = oeste, Z arriba).
+     * El norte magnético está `declinationDeg` al este del verdadero.
+     */
+    fun enuToIns(e: Double, n: Double, u: Double): Vec3 {
+        val d = Math.toRadians(declinationDeg)
+        val nMag = n * kotlin.math.cos(d) + e * kotlin.math.sin(d)
+        val eMag = e * kotlin.math.cos(d) - n * kotlin.math.sin(d)
+        return Vec3(nMag, -eMag, u)
     }
 
     /**
@@ -212,5 +247,9 @@ class StrapdownIns(
         const val ZARU_ALPHA = 0.0012
         /** Incertidumbre de "velocidad nula" en reposo (m/s): el pulso de la mano mueve algo. */
         const val ZUPT_SIGMA = 0.01
+        /** Por encima de esta incertidumbre horizontal (interior, multitrayecto) no se usa la velocidad GNSS. */
+        const val GNSS_MAX_ACC_FOR_VELOCITY = 25.0
+        /** Incertidumbre de velocidad GNSS si el móvil no la informa (m/s). */
+        const val DEFAULT_SPEED_ACC = 0.3
     }
 }
