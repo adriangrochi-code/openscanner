@@ -33,6 +33,10 @@ interface ScanActions {
     fun setFocusDepth(v: Boolean)
     /** Velocímetro de cámara (flujo óptico + enfoque) para frenar la deriva de la INS. */
     fun setCameraVelocity(v: Boolean)
+    /** Calibración base a tiempo (deriva en N minutos + registro). */
+    fun runDriftTest()
+    fun cancelDriftTest()
+    fun setDriftMinutes(m: Int)
     fun setCloudUrl(v: String)
     fun setCloudKey(v: String)
     /** Enviar el último escaneo a Tisma Server y traer la pieza. */

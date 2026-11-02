@@ -49,6 +49,9 @@ class ScanScreenshotTest {
         override fun setUseMacro(v: Boolean) {}
         override fun setFocusDepth(v: Boolean) {}
         override fun setCameraVelocity(v: Boolean) {}
+        override fun runDriftTest() {}
+        override fun cancelDriftTest() {}
+        override fun setDriftMinutes(m: Int) {}
         override fun setCloudUrl(v: String) {}
         override fun setCloudKey(v: String) {}
         override fun sendToCloud() {}
@@ -119,6 +122,18 @@ class ScanScreenshotTest {
 
     @Test fun cloudDone() = shot("cloud_done", UiState(lastZip = File("scan.zip"), cloudStl = File("scan_pieza.stl"),
         cloudStatus = "✓ Pieza lista 40.23 × 30.23 × 20.31 mm · cerrada", analyzed = 120, images = 214, ready = true), 0)
+
+    @Test fun calibrationLog() = shot("calibration", UiState(
+        calibrationText = "02/11 18:40 · giróscopo 0.004 °/s · acelerómetro 0.045 m/s²",
+        driftProgress = "Terminada",
+        driftReport = listOf(
+            "Calibración base: 300 s · 300 muestras · 100 % del tiempo quieto",
+            "Deriva INS (horizontal): 30 s → 2.1 mm · 1 min → 3.0 mm · 2 min → 3.4 mm · 5 min → 4.1 mm",
+            "Máximo: horizontal 4.6 mm · vertical 2.0 mm · error estimado final ±3.1 mm",
+            "Rumbo: +0.52° en total (0.10 °/min)",
+            "✓ Calibración guardada y aplicada"),
+        driftFiles = listOf(File("deriva_20261102_184000.csv"), File("deriva_20261102_184000.txt")),
+    ), 4, settings = true)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 

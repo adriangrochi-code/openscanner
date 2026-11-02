@@ -87,6 +87,9 @@ class MainActivity : ComponentActivity() {
             type = when (file.extension.lowercase()) {
                 "stl" -> "model/stl"
                 "zip" -> "application/zip"
+                "csv" -> "text/csv"
+                "txt" -> "text/plain"
+                "json" -> "application/json"
                 else -> "application/octet-stream"
             }
             putExtra(Intent.EXTRA_STREAM, uri)

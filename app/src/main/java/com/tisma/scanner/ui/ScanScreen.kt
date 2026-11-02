@@ -83,7 +83,7 @@ fun ScanContent(
     BackHandler(enabled = settings) { settings = false }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         CameraScreen(s, vm, onShare, preview, onOpenSettings = { settings = true })
-        if (settings) SettingsScreen(s, vm, onShareText, tab, { tab = it }, onClose = { settings = false })
+        if (settings) SettingsScreen(s, vm, onShare, onShareText, tab, { tab = it }, onClose = { settings = false })
     }
 }
 
@@ -179,7 +179,8 @@ private fun CameraScreen(
 @Composable
 private fun PassSwitch(s: UiState, vm: ScanActions) {
     Row(Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xCC2C2C31)).padding(3.dp)) {
-        for (p in ScanPass.entries) {
+        // Sin la macro activada no hay pasada "Cerca": sólo se muestra "Lejos".
+        for (p in ScanPass.entries.filter { it == ScanPass.FAR || s.useMacro }) {
             val sel = s.pass == p
             val pct = s.passCoverage[p]?.let { " ${(it * 100).toInt()}%" } ?: ""
             Column(
@@ -251,7 +252,7 @@ private fun StatusLine(s: UiState) {
 
 @Composable
 private fun SettingsScreen(
-    s: UiState, vm: ScanActions, onShareText: (String) -> Unit,
+    s: UiState, vm: ScanActions, onShare: (File) -> Unit, onShareText: (String) -> Unit,
     tab: Tab, onTab: (Tab) -> Unit, onClose: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().background(Tisma.Panel).statusBarsPadding().navigationBarsPadding()) {
@@ -275,7 +276,7 @@ private fun SettingsScreen(
                 Tab.QUALITY -> QualityTab(s)
                 Tab.CAMERAS -> CamerasTab(s, vm, onShareText)
                 Tab.CLOUD -> CloudTab(s, vm)
-                Tab.LOG -> LogTab(s, vm)
+                Tab.LOG -> LogTab(s, vm, onShare)
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -490,7 +491,28 @@ private fun TextSetting(label: String, value: String, placeholder: String, secre
 }
 
 @Composable
-private fun LogTab(s: UiState, vm: ScanActions) {
+private fun LogTab(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
+    Section("Calibración base")
+    Hint("Mide la deriva real de la INS durante un tiempo y deja un registro (CSV + resumen). " +
+        "Quieto sobre una mesa: deriva de base y calibración. Caminando: comparación con el GPS.")
+    if (s.calibrationText.isNotEmpty()) Mono("En uso: ${s.calibrationText}", Tisma.Ok)
+    SettingRow("Duración") {
+        val opts = listOf(1, 5, 10)
+        ValueField("${s.driftMinutes} min") { if (!s.driftRunning) vm.setDriftMinutes(opts[(opts.indexOf(s.driftMinutes) + 1) % opts.size]) }
+    }
+    SecondaryButton(
+        if (s.driftRunning) "Cancelar" else "Empezar calibración (${s.driftMinutes} min)",
+        Modifier.fillMaxWidth().padding(vertical = 4.dp), enabled = !s.scanning,
+    ) { if (s.driftRunning) vm.cancelDriftTest() else vm.runDriftTest() }
+    if (s.driftProgress.isNotEmpty()) Mono(s.driftProgress, Tisma.PurpleText)
+    s.driftReport.forEach { Mono(it) }
+    if (s.driftFiles.isNotEmpty()) {
+        Hint("Registros guardados (pulsa para compartir):")
+        s.driftFiles.take(6).forEach { f ->
+            Text("⇪ ${f.name}", color = Tisma.PurpleText, fontSize = 12.sp, fontFamily = FontFamily.Monospace,
+                modifier = Modifier.fillMaxWidth().clickable { onShare(f) }.padding(vertical = 4.dp))
+        }
+    }
     Section("Precisión de la INS")
     Hint("Apoya el móvil en una mesa y no lo toques: mide el ruido y la deriva reales de tu IMU.")
     SecondaryButton(

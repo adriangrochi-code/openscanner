@@ -108,8 +108,12 @@ object ImuStillTest {
         ins.reset()
         var first: InsState? = null
         var last: InsState? = null
-        for ((t, isAccel, v) in events) {
-            if (t < from) continue
+        // Búsqueda binaria del inicio: con 5-10 min de datos (cientos de miles de muestras)
+        // recorrer desde el principio en cada ventana sería demasiado lento en el móvil.
+        var lo = 0; var hi = events.size
+        while (lo < hi) { val m = (lo + hi) ushr 1; if (events[m].first < from) lo = m + 1 else hi = m }
+        for (k in lo until events.size) {
+            val (t, isAccel, v) = events[k]
             if (t > from + lenNs) break
             if (isAccel) ins.onAccel(t, v) else ins.onGyro(t, v)
             val s = ins.latest() ?: continue

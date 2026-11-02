@@ -82,6 +82,16 @@ data class UiState(
     val cameraVelocity: Boolean = true,
     /** "12 medidas/s · 0,06 m/s" o "" si no mide. */
     val flowText: String = "",
+    // --- Calibración base a tiempo ---
+    val driftMinutes: Int = 5,
+    val driftRunning: Boolean = false,
+    /** "2:13 / 5:00 · deriva 0,4 cm · ±1,2 cm" mientras corre. */
+    val driftProgress: String = "",
+    val driftReport: List<String> = emptyList(),
+    /** Registros guardados (más recientes primero). */
+    val driftFiles: List<File> = emptyList(),
+    /** Calibración en uso: "02/11 18:40 · giro 0,004 °/s · acel 0,045 m/s²" o "". */
+    val calibrationText: String = "",
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -213,6 +223,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val stabilizer = com.tisma.scanner.camera.PreviewStabilizer()
     private val prefs = app.getSharedPreferences("tisma", Context.MODE_PRIVATE)
     private var cloudJob: Job? = null
+    private var driftJob: Job? = null
     // Velocímetro óptico: fotograma anterior y estadísticas.
     private var prevFlow: Triple<Long, FloatArray, String>? = null
     private val flowAccepted = java.util.concurrent.atomic.AtomicInteger(0)
@@ -255,6 +266,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val hidden = inventory.values.filter { it.probed }.map { it.id }
         if (hidden.isNotEmpty()) log("Cámaras ocultas encontradas por número: ${hidden.joinToString()}")
         log("Objetivos: ${roles.describe()}")
+        loadCalibration()
+        refreshDriftFiles()
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
@@ -452,6 +465,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     override fun setUseMacro(v: Boolean) {
         _state.update { it.copy(useMacro = v) }
+        // Sin macro no hay pasada "Cerca": volver a Lejos.
+        if (!v && activePass == ScanPass.CLOSE && !sequenceRunning) { setPass(ScanPass.FAR); return }
         if (!sequenceRunning) {
             val plan = planCurrentPass()
             if (activePass == ScanPass.CLOSE) viewModelScope.launch { openRig(plan.groups) }
@@ -490,11 +505,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 log(why)
                 return@launch
             }
-            if (!report.moved) {
-                ins.gyroBiasPrior = report.gyroBiasDegS * Math.toRadians(1.0)
-                ins.accelBiasPrior = report.accelBias
-                ins.reset()
-            }
+            if (!report.moved) applyCalibration(report)
             _state.update { it.copy(imuReport = report.lines()) }
             report.lines().forEach { log(it) }
             runCatching {
@@ -503,6 +514,127 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             }
         }
     }
+
+    // ------------------------------------------------------------------ calibración base
+
+    private fun calDir() = File(getApplication<Application>().getExternalFilesDir(null), "scans/calibraciones").apply { mkdirs() }
+
+    private fun refreshDriftFiles() {
+        val files = calDir().listFiles { f -> f.name.startsWith("deriva_") && (f.extension == "csv" || f.extension == "txt") }
+            ?.sortedByDescending { it.lastModified() }?.take(10) ?: emptyList()
+        _state.update { it.copy(driftFiles = files) }
+    }
+
+    /** Aplica los sesgos medidos, los guarda (se recuperan al abrir la app) y reinicia la INS. */
+    private fun applyCalibration(report: com.tisma.scanner.ins.StillReport) {
+        val gb = report.gyroBiasDegS * Math.toRadians(1.0)
+        val ab = report.accelBias
+        ins.gyroBiasPrior = gb
+        ins.accelBiasPrior = ab
+        ins.reset()
+        prefs.edit()
+            .putString("cal", listOf(gb.x, gb.y, gb.z, ab.x, ab.y, ab.z).joinToString(","))
+            .putLong("cal_time", System.currentTimeMillis()).apply()
+        loadCalibration()
+    }
+
+    private fun loadCalibration() {
+        val v = prefs.getString("cal", null)?.split(",")?.mapNotNull { it.toDoubleOrNull() } ?: return
+        if (v.size != 6) return
+        ins.gyroBiasPrior = com.tisma.scanner.ins.Vec3(v[0], v[1], v[2])
+        ins.accelBiasPrior = com.tisma.scanner.ins.Vec3(v[3], v[4], v[5])
+        if (session == null) ins.reset()
+        val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(prefs.getLong("cal_time", 0)))
+        _state.update {
+            it.copy(calibrationText = "$date · giróscopo %.3f °/s · acelerómetro %.3f m/s²".format(
+                Math.toDegrees(ins.gyroBiasPrior.norm()), ins.accelBiasPrior.norm()))
+        }
+    }
+
+    override fun setDriftMinutes(m: Int) = _state.update { it.copy(driftMinutes = m.coerceIn(1, 30)) }
+
+    /**
+     * Calibración base a tiempo: la INS real (Kalman + paradas + GPS) corre N minutos desde el
+     * origen y cada segundo se registra en un CSV su posición, velocidad, error estimado, rumbo,
+     * sesgos y la posición GPS. Al final: resumen (deriva a 30 s, 1, 2, 5 min…), análisis del IMU
+     * con todo el periodo (mejores sesgos que en 60 s) y, si el móvil estuvo quieto, se guarda
+     * como calibración. Quieto = deriva de base; caminando = comparación con el GPS.
+     */
+    override fun runDriftTest() {
+        if (driftJob?.isActive == true || session != null) return
+        val minutes = _state.value.driftMinutes
+        driftJob = viewModelScope.launch {
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+            val csvFile = File(calDir(), "deriva_$stamp.csv")
+            val rows = ArrayList<com.tisma.scanner.ins.DriftRow>()
+            ins.reset()
+            imu.startStillCapture()
+            val csv = csvFile.bufferedWriter()
+            csv.write(com.tisma.scanner.ins.DriftRow.CSV_HEADER + "\n")
+            _state.update { it.copy(driftRunning = true, driftReport = emptyList()) }
+            log("Calibración base de $minutes min: deja el móvil quieto (o camina para compararlo con el GPS)")
+            var gpsRef: com.tisma.scanner.ins.GeoReference? = null
+            val start = SystemClock.elapsedRealtime()
+            val total = minutes * 60_000L
+            var finished = false
+            try {
+                while (SystemClock.elapsedRealtime() - start < total) {
+                    delay(1000)
+                    val st = ins.latest() ?: continue
+                    val q = st.orientation
+                    val yaw = Math.toDegrees(atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
+                    val loc = gps.last?.takeIf { SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos < 3_000_000_000L }
+                    val gpsPos = loc?.let { l ->
+                        val ref = gpsRef ?: com.tisma.scanner.ins.GeoReference(l.latitude, l.longitude, l.altitude).also { gpsRef = it }
+                        val e = ref.toEnu(l.latitude, l.longitude, l.altitude)
+                        ins.enuToIns(e.x, e.y, e.z)
+                    }
+                    val row = com.tisma.scanner.ins.DriftRow(
+                        (SystemClock.elapsedRealtime() - start) / 1000.0, st.position, st.velocity,
+                        kotlin.math.sqrt(ins.positionVariance), st.stationary, yaw,
+                        ins.filter.gyroBias, ins.accelBias(), gpsPos, loc?.accuracy?.toDouble(),
+                    )
+                    // La referencia GPS empieza con la primera fila con GPS: la INS se compara desde ahí.
+                    rows += row
+                    csv.write(row.csv() + "\n")
+                    val el = (SystemClock.elapsedRealtime() - start) / 1000
+                    val d = st.position - rows.first().p
+                    _state.update {
+                        it.copy(driftProgress = "%d:%02d / %d:00 · deriva %.1f cm · ±%.1f cm %s".format(
+                            el / 60, el % 60, minutes, kotlin.math.hypot(d.x, d.y) * 100, row.std * 100,
+                            if (st.stationary) "· quieto" else "· en movimiento"))
+                    }
+                }
+                finished = true
+            } finally {
+                runCatching { csv.close() }
+                val (acc, gyr) = imu.stopStillCapture()
+                if (!finished) {
+                    _state.update { it.copy(driftRunning = false, driftProgress = "Cancelada (CSV parcial guardado)") }
+                    refreshDriftFiles()
+                } else {
+                    _state.update { it.copy(driftProgress = "Analizando…") }
+                    val report = kotlinx.coroutines.withContext(Dispatchers.Default + kotlinx.coroutines.NonCancellable) {
+                        com.tisma.scanner.ins.ImuStillTest.analyze(acc, gyr, listOf(1.0, 2.0, 5.0, 10.0, 30.0, 60.0))
+                    }
+                    val lines = com.tisma.scanner.ins.DriftLog.lines(rows) + (report?.lines() ?: emptyList())
+                    val applied = report != null && !report.moved
+                    if (applied) applyCalibration(report!!)
+                    val summary = lines + (if (applied) "✓ Calibración guardada y aplicada" else "Calibración NO guardada (el móvil se movió)")
+                    runCatching {
+                        File(calDir(), "deriva_$stamp.txt").writeText(summary.joinToString("\n") + "\n")
+                        File(calDir(), "deriva_$stamp.json").writeText(
+                            com.tisma.scanner.ins.DriftLog.json(rows).put("calibration_applied", applied).toString(2))
+                    }
+                    summary.forEach { log(it) }
+                    _state.update { it.copy(driftRunning = false, driftProgress = "Terminada", driftReport = summary) }
+                    refreshDriftFiles()
+                }
+            }
+        }
+    }
+
+    override fun cancelDriftTest() { driftJob?.cancel() }
 
     override fun setStabilizePreview(v: Boolean) = _state.update { it.copy(stabilizePreview = v) }
     override fun setAntiShakeBurst(v: Boolean) = _state.update { it.copy(antiShakeBurst = v) }
