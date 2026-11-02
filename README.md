@@ -30,6 +30,16 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   mapa de profundidad en mm por cada barrido y una **escala métrica sin tapete**, comparando la
   profundidad medida por enfoque con la de la fotogrametría en cada punto. Las fuentes de escala
   se muestran juntas para contrastarlas: tapete ArUco > enfoque > INS.
+- **Postprocesado completo en el servidor**:
+  - *Imágenes*: exposición y color iguales en todas las fotos; para detectar puntos, ruido
+    quitado sólo si hace falta y **filtro de Wallis** (2-4,6× más emparejamientos que CLAHE en
+    superficies lisas, medido).
+  - *INS*: quita del modelo las fotos que la fotogrametría registró mal (su giro contradice
+    al giróscopo) y aporta la gravedad para orientar la pieza.
+  - *Nube y malla* (`tools/postprocess.py`): limpieza, quita la mesa (con la gravedad, para no
+    confundirla con una cara plana de la pieza), aísla la pieza, base plana, malla cerrada y
+    **STL en mm listo para imprimir** con informe de medidas, volumen y desviación. En una prueba
+    sintética: 40,23 × 30,23 × 20,31 mm frente a los 40 × 30 × 20 reales, volumen +0,2 %.
 - **Descarte de fotos movidas en el propio móvil**: giro medido por el giróscopo durante la exposición
   (> 1,5 px de arrastre), más nitidez relativa. Así no se guardan ni se suben. **JPEG ajustable**
   (92 por defecto) y una herramienta para medir cuánto se puede comprimir sin perder calidad.
@@ -190,6 +200,7 @@ tools/
   depth_from_focus.py              mapas de profundidad a partir de barridos de foco
   compression_test.py              cuánto comprimir sin perder emparejamientos
   ins_accuracy.py                  error real de la INS frente a la fotogrametría (+ suavizado ZUPT)
+  postprocess.py                   nube densa -> pieza limpia, cerrada, en mm (STL) + informe
 ```
 
 ## Próximos pasos posibles

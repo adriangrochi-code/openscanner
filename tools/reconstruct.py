@@ -3,14 +3,17 @@
 Reconstrucción fotogramétrica de un escaneo de Tisma Scanner (carpeta scan_* o .zip).
 
 Pasos:
-  1. HDR: fusiona cada ráfaga −2/0/+2 EV con Mertens (sin necesitar curva de respuesta).
-  2. Realce para superficies lisas/opacas: CLAHE sólo en las imágenes usadas para
-     *detectar* puntos (las originales se usan para color/textura).
-  3. COLMAP: una cámara por objetivo físico, con los intrínsecos de fábrica del móvil como
-     punto de partida si existen; SIFT denso con DSP-SIFT y forma afín (mejor en poca textura).
-  4. Escala métrica: marcadores ArUco del tapete (precisión ~0.1 %) o, si no hay, alineando
-     la trayectoria SfM con la de la INS (Umeyama; precisión ~5-10 %).
-  5. Densificado/malla opcional con COLMAP (CUDA) o OpenMVS.
+  1. Une ráfagas: HDR (Mertens), apilados de enfoque (todo enfocado + mapa de profundidad) y
+     ráfagas anti-movimiento (alineadas y promediadas). Descarta las fotos movidas.
+  2. Imágenes: iguala exposición y color entre fotos (textura sin parches). Para DETECTAR
+     puntos: quita ruido sólo si la foto lo tiene (estimado) y aplica el filtro de Wallis, que
+     en superficies de textura débil da 2-4,6× más emparejamientos que CLAHE.
+  3. COLMAP: una cámara por objetivo y distancia de enfoque, con intrínsecos de fábrica.
+  4. INS: las fotos cuyo giro contradice al giróscopo (registro erróneo) se quitan del modelo
+     antes del denso; la gravedad orienta la pieza y distingue la mesa de una cara plana.
+  5. Escala métrica: ArUco > distancia por enfoque > INS (se muestran todas para contrastar).
+  6. Densificado (COLMAP con CUDA u OpenMVS) y POSTPROCESADO (postprocess.py): limpieza,
+     mesa fuera, pieza aislada, base plana, malla cerrada y STL en mm con informe de calidad.
 
 Requisitos: python3, numpy, opencv-contrib-python, y `colmap` en el PATH
 (opcional: OpenMVS para malla texturizada).
@@ -129,11 +132,77 @@ def fuse(paths):
     return np.clip(fused * 255, 0, 255).astype(np.uint8)
 
 
-def enhance_for_features(img, clip=3.0):
-    """CLAHE en luminancia: saca la microtextura de superficies mates y uniformes."""
+def wallis(L, win=31, target_mean=127.0, target_std=50.0, c=0.95, b=0.9):
+    """
+    Filtro de Wallis (clásico en fotogrametría): lleva la media y el contraste LOCALES de cada
+    zona a unos objetivos comunes. En superficies lisas o en sombra hace visible la microtextura
+    y deja comparables fotos con distinta exposición, sin la saturación por bloques del CLAHE.
+      c: fuerza del realce de contraste (0-1; la ganancia máxima es 1/(1-c)) · b: brillo (0-1)
+    Valores elegidos midiendo emparejamientos válidos en superficies de textura débil:
+    c=0.95 y ventana 31 dan 2-4,6× más que CLAHE y lo igualan en textura normal.
+    """
+    f = L.astype(np.float32)
+    m = cv2.blur(f, (win, win))
+    sd = np.sqrt(np.maximum(cv2.blur(f * f, (win, win)) - m * m, 0))
+    gain = (c * target_std) / (c * sd + (1 - c) * target_std)
+    out = (f - m) * gain + b * target_mean + (1 - b) * m
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def estimate_noise(L):
+    """Desviación del ruido (niveles de gris), método de Immerkær: robusto a la textura."""
+    k = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], np.float32)
+    h, w = L.shape
+    conv = np.abs(cv2.filter2D(L.astype(np.float32), -1, k))[1:-1, 1:-1]
+    return float(np.sqrt(np.pi / 2) * conv.sum() / (6 * (w - 2) * (h - 2)))
+
+
+def enhance_for_features(img, mode="wallis", denoise=-1):
+    """
+    Imagen sólo para DETECTAR puntos (la textura final usa la foto sin realzar):
+      1. Quitar ruido de la luminancia ANTES de realzar (si no, el realce lo convierte en
+         falsos puntos). denoise = -1: automático (sólo si la foto tiene ruido apreciable, con
+         fuerza igual al ruido medido; en fotos limpias filtrar borra textura débil y empeora);
+         0 = nunca; > 0 = fuerza fija.
+      2. Realce local: Wallis (por defecto) o CLAHE.
+    """
+    if mode == "none" and not denoise:
+        return img
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
-    lab[..., 0] = cv2.createCLAHE(clipLimit=clip, tileGridSize=(16, 16)).apply(lab[..., 0])
+    L = lab[..., 0]
+    h = estimate_noise(L) if denoise < 0 else float(denoise)
+    if h >= 2.0 or (denoise > 0):
+        L = cv2.fastNlMeansDenoising(L, None, h=h, templateWindowSize=7, searchWindowSize=21)
+    if mode == "wallis":
+        L = wallis(L)
+    elif mode == "clahe":
+        L = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(16, 16)).apply(L)
+    lab[..., 0] = L
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def normalize_colors(paths):
+    """
+    Exposición y color iguales en todas las fotos (para una textura sin parches): cada canal de
+    cada foto se escala para que su media coincida con la mediana del escaneo. Ganancias
+    limitadas (0,6-1,6) para no estropear fotos realmente distintas.
+    """
+    means = {}
+    for p in paths:
+        im = cv2.imread(str(p))
+        if im is not None:
+            small = cv2.resize(im, None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+            means[p] = small.reshape(-1, 3).mean(0)
+    if len(means) < 2:
+        return 0
+    target = np.median(np.array(list(means.values())), axis=0)
+    for p, m in means.items():
+        gain = np.clip(target / np.maximum(m, 1), 0.6, 1.6)
+        if np.all(np.abs(gain - 1) < 0.02):
+            continue
+        im = cv2.imread(str(p)).astype(np.float32) * gain
+        cv2.imwrite(str(p), np.clip(im, 0, 255).astype(np.uint8), [cv2.IMWRITE_JPEG_QUALITY, 97])
+    return len(means)
 
 
 def sharpness(gray):
@@ -196,7 +265,7 @@ def focus_stack(group, scan, work):
     return aif, ref
 
 
-def prepare_images(scan, work, frames, meta, clahe):
+def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, color_norm=True):
     color_dir, feat_dir = work / "images", work / "images_feat"
     records = []  # (nombre relativo, frame representativo)
     n_hdr = n_stack = n_burst = 0
@@ -219,10 +288,15 @@ def prepare_images(scan, work, frames, meta, clahe):
         out = color_dir / name
         out.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(out), img, [cv2.IMWRITE_JPEG_QUALITY, 97])
+        records.append((name, ref))
+    # Color/exposición comunes (textura) y, a partir de ahí, imágenes realzadas para los puntos.
+    if color_norm:
+        normalize_colors([color_dir / n for n, _ in records])
+    for name, _ in records:
+        img = cv2.imread(str(color_dir / name))
         f = feat_dir / name
         f.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(f), enhance_for_features(img) if clahe else img, [cv2.IMWRITE_JPEG_QUALITY, 97])
-        records.append((name, ref))
+        cv2.imwrite(str(f), enhance_for_features(img, filter_mode, denoise), [cv2.IMWRITE_JPEG_QUALITY, 97])
     print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({n_hdr} fusiones HDR, "
           f"{n_stack} apilados de enfoque, {n_burst} ráfagas anti-movimiento)")
     return records
@@ -528,10 +602,15 @@ def main():
     ap.add_argument("scan", type=Path, help="carpeta scan_* o .zip exportado por la app")
     ap.add_argument("--work", type=Path, default=Path("tisma_work"))
     ap.add_argument("--mat", help="JSON del tapete (make_scan_mat.py) para escala ArUco")
-    ap.add_argument("--no-clahe", action="store_true", help="desactiva el realce de microtextura")
+    ap.add_argument("--filter", choices=["wallis", "clahe", "none"], default="wallis",
+                    help="realce de las imágenes usadas para detectar puntos (wallis = clásico de fotogrametría)")
+    ap.add_argument("--no-clahe", action="store_true", help="(compatibilidad) equivale a --filter none")
+    ap.add_argument("--denoise", type=float, default=-1, help="quitar ruido antes de realzar: -1 automático (según el ruido medido), 0 no, >0 fuerza fija")
+    ap.add_argument("--no-color-norm", action="store_true", help="no igualar exposición/color entre fotos")
     ap.add_argument("--matcher", choices=["exhaustive", "sequential"], default="exhaustive")
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
+    ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
     a = ap.parse_args()
 
     a.work.mkdir(parents=True, exist_ok=True)
@@ -545,7 +624,8 @@ def main():
         for h in q.get("hints", []):
             print(f"[quality]   aviso: {h}")
     print(f"[load] {scan.name}: {len(frames)} fotos, {session['device']['manufacturer']} {session['device']['model']}")
-    records = prepare_images(scan, a.work, frames, meta, clahe=not a.no_clahe)
+    records = prepare_images(scan, a.work, frames, meta, "none" if a.no_clahe else a.filter,
+                             a.denoise, not a.no_color_norm)
     if a.prepare_only:
         return
     if not shutil.which("colmap"):
@@ -555,6 +635,22 @@ def main():
     txt = a.work / "sparse_txt"
     txt.mkdir(exist_ok=True)
     colmap("model_converter", "--input_path", model, "--output_path", txt, "--output_type", "TXT")
+
+    # INS -> calidad final: fotos mal registradas (su giro contradice al giróscopo) fuera del
+    # modelo antes del denso, y la gravedad para orientar la pieza y elegir bien la mesa.
+    from ins_accuracy import gravity_and_outliers
+    up, bad, rot_med = gravity_and_outliers(scan, txt)
+    if rot_med is not None:
+        print(f"[ins] giro SfM vs giróscopo: error mediano {rot_med:.2f}° · {len(bad)} fotos mal registradas")
+    if bad:
+        lst = a.work / "mal_registradas.txt"
+        lst.write_text("\n".join(bad) + "\n")
+        clean = a.work / "sparse_clean"
+        clean.mkdir(exist_ok=True)
+        colmap("image_deleter", "--input_path", model, "--output_path", clean, "--image_names_path", lst)
+        colmap("bundle_adjuster", "--input_path", clean, "--output_path", clean)
+        model = clean
+        colmap("model_converter", "--input_path", model, "--output_path", txt, "--output_type", "TXT")
     cams, imgs = read_model_txt(txt)
     print(f"[sfm] {len(imgs)}/{len(records)} imágenes registradas")
 
@@ -588,6 +684,13 @@ def main():
     else:
         print("[scale] sin escala métrica (usa --mat con el tapete ArUco)")
     dense(a.work, model, a.dense)
+
+    # Postprocesado de la nube densa -> pieza limpia, cerrada y en mm (STL para imprimir).
+    cloud = {"colmap": a.work / "fused.ply", "openmvs": a.work / "undistorted" / "scene_dense.ply"}.get(a.dense)
+    if cloud is not None and cloud.exists() and not a.no_post:
+        from postprocess import postprocess
+        centers = [(-im["R"].T @ im["t"]) * (s or 1.0) for im in imgs.values()]
+        postprocess(cloud, a.work / "pieza", units="m" if s else "unit", up=up, cameras=centers)
 
 
 if __name__ == "__main__":

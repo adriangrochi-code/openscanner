@@ -88,8 +88,11 @@ def read_frames(scan: Path):
 def read_sfm(model: Path):
     """nombre -> (R_mundo_desde_cámara, centro de cámara)."""
     out = {}
-    lines = [l for l in (model / "images.txt").read_text().splitlines() if l and not l.startswith("#")]
+    # Dos líneas por foto; la segunda (puntos 2D) puede estar VACÍA: no filtrar líneas vacías.
+    lines = [l for l in (model / "images.txt").read_text().splitlines() if not l.startswith("#")]
     for l in lines[0::2]:
+        if not l.strip():
+            continue
         p = l.split()
         R_cw = quat_to_rot(*map(float, p[1:5]))
         t = np.array(list(map(float, p[5:8])))
@@ -142,6 +145,74 @@ def zupt_smooth(traj):
     return t, out
 
 
+# --------------------------------------------------------------------------- uso en el pipeline
+
+def match_pairs(scan: Path, model: Path):
+    """(t, Wc, c, Wd, p, nombre) de cada foto con pose SfM y pose INS, ordenadas por tiempo."""
+    ins = read_frames(scan)
+    pairs = []
+    for name, (Wc, c) in read_sfm(model).items():
+        cam, stem = name.split("/")[0], Path(name).stem
+        key = (cam, int(stem)) if stem.isdigit() else None
+        if key in ins:
+            p, Wd = ins[key]
+            pairs.append((key[1] * 1e-9, Wc, c, Wd, p, name))
+    pairs.sort(key=lambda x: x[0])
+    return pairs
+
+
+def hand_eye(pairs, min_turn_deg=3, iters=3):
+    """
+    Rotación cámara↔dispositivo (Y) y mundo INS→mundo SfM (G) a partir de los giros entre fotos
+    consecutivas. Robusta: se estima, se descartan los pares que no encajan (fotos mal
+    registradas, que además suelen tener giros enormes y dominarían la estimación) y se repite.
+    """
+    A, B = [], []
+    for a, b in zip(pairs, pairs[1:]):
+        ra, rb = rot_log(a[1].T @ b[1]), rot_log(a[3].T @ b[3])
+        if np.linalg.norm(ra) > np.radians(min_turn_deg):
+            A.append(ra); B.append(rb)
+    if len(A) < 3:
+        return None, None
+    A, B = np.array(A), np.array(B)
+    w = np.minimum(np.linalg.norm(A, axis=1), np.radians(30))      # que ningún par pese demasiado
+    keep = np.ones(len(A), bool)
+    for _ in range(iters):
+        Yt = kabsch(A[keep], B[keep], w[keep])
+        res = np.linalg.norm(A - (Yt @ B.T).T, axis=1)
+        thr = max(3 * np.median(res[keep]), np.radians(1.0))
+        new = res < thr
+        if new.sum() < 3 or np.array_equal(new, keep):
+            break
+        keep = new
+    # Mundo: media de las fotos coherentes (las incoherentes también estropearían G).
+    Gs = [x[1] @ Yt @ x[3].T for x in pairs]
+    G = chordal_mean(Gs)
+    dev = np.array([rot_angle(Gi.T @ G) for Gi in Gs])
+    G = chordal_mean([Gi for Gi, d in zip(Gs, dev) if d < max(3 * np.median(dev), 2.0)])
+    return Yt.T, G
+
+
+def gravity_and_outliers(scan: Path, model: Path, max_err_deg=5.0):
+    """
+    Para el postprocesado:
+      * up: dirección "arriba" (contra la gravedad, de la INS) en coordenadas del modelo SfM;
+      * bad: fotos cuyo giro respecto a sus vecinas contradice al giróscopo en más de
+        max_err_deg en AMBOS lados (registro erróneo de la fotogrametría).
+    Devuelve (up, bad, error_mediano_deg) o (None, [], None) si no hay datos suficientes.
+    """
+    pairs = match_pairs(scan, model)
+    if len(pairs) < 10:
+        return None, [], None
+    Y, G = hand_eye(pairs)
+    if G is None:
+        return None, [], None
+    Yt = Y.T
+    errs = [rot_angle((a[1].T @ b[1]).T @ (Yt @ (a[3].T @ b[3]) @ Y)) for a, b in zip(pairs, pairs[1:])]
+    bad = [pairs[i][5] for i in range(1, len(pairs) - 1) if errs[i - 1] > max_err_deg and errs[i] > max_err_deg]
+    return G @ np.array([0.0, 0.0, 1.0]), bad, float(np.median(errs))
+
+
 # --------------------------------------------------------------------------- análisis
 
 BUCKETS = [0.5, 1, 2, 5, 10]
@@ -172,37 +243,26 @@ def main():
     ap.add_argument("--not-metric", action="store_true", help="el modelo no está en metros (se estima la escala)")
     a = ap.parse_args()
 
-    ins = read_frames(a.scan)
-    sfm = read_sfm(a.model)
-    pairs = []
-    for name, (Wc, c) in sfm.items():
-        cam, stem = name.split("/")[0], Path(name).stem
-        key = (cam, int(stem)) if stem.isdigit() else None
-        if key in ins:
-            p, Wd = ins[key]
-            pairs.append((key[1] * 1e-9, Wc, c, Wd, p))
-    pairs.sort(key=lambda x: x[0])
+    pairs = match_pairs(a.scan, a.model)
     if len(pairs) < 10:
         raise SystemExit(f"Sólo {len(pairs)} fotos con pose SfM e INS: hacen falta ≥ 10.")
+    _, bad, _ = gravity_and_outliers(a.scan, a.model)
+    if bad:
+        print(f"{len(bad)} fotos mal registradas por la fotogrametría (se excluyen): {', '.join(bad[:5])}"
+              + (" …" if len(bad) > 5 else ""))
+        pairs = [x for x in pairs if x[5] not in set(bad)]
     times = np.array([x[0] for x in pairs])
     print(f"{len(pairs)} fotos comparadas, {times[-1] - times[0]:.0f} s de escaneo\n")
 
-    # Calibración cámara↔IMU (rotación) a partir de los giros entre fotos consecutivas.
-    A, B, w = [], [], []
-    for (_, Wc1, _, Wd1, _), (_, Wc2, _, Wd2, _) in zip(pairs, pairs[1:]):
-        ra, rb = rot_log(Wc1.T @ Wc2), rot_log(Wd1.T @ Wd2)
-        if np.linalg.norm(ra) > np.radians(3):
-            A.append(ra); B.append(rb); w.append(np.linalg.norm(ra))
-    if len(A) < 3:
+    # Calibración cámara↔IMU (rotación), robusta, a partir de los giros entre fotos consecutivas.
+    Y, G = hand_eye(pairs)
+    if G is None:
         raise SystemExit("Muy poco giro entre fotos para calibrar cámara↔IMU.")
-    Yt = kabsch(np.array(A), np.array(B), np.array(w))     # rv_cámara = Yᵀ rv_dispositivo
-    Y = Yt.T
-    G = chordal_mean([Wc @ Yt @ Wd.T for _, Wc, _, Wd, _ in pairs])
+    Yt = Y.T
 
-    rel_rot = [rot_angle((Wc1.T @ Wc2).T @ (Yt @ (Wd1.T @ Wd2) @ Y))
-               for (_, Wc1, _, Wd1, _), (_, Wc2, _, Wd2, _) in zip(pairs, pairs[1:])]
+    rel_rot = [rot_angle((a_[1].T @ b_[1]).T @ (Yt @ (a_[3].T @ b_[3]) @ Y)) for a_, b_ in zip(pairs, pairs[1:])]
     # Residuo de orientación en el mundo SfM; su pendiente en el tiempo es la deriva (sobre todo rumbo).
-    resid = np.array([rot_log((G @ Wd @ Y) @ Wc.T) for _, Wc, _, Wd, _ in pairs])
+    resid = np.array([rot_log((G @ x[3] @ Y) @ x[1].T) for x in pairs])
     slope = np.polyfit(times - times[0], np.degrees(resid), 1)[0]          # °/s por eje
     abs_rot = np.linalg.norm(np.degrees(resid - resid.mean(0)), axis=1)
     print("ORIENTACIÓN")
