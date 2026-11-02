@@ -245,7 +245,8 @@ private fun Viewport(s: UiState, vm: ScanActions, onShare: (File) -> Unit, previ
             if (s.rigText.isNotEmpty()) Chip(s.rigText.substringBefore(" — "), Tisma.PurpleText)
             s.opticsText.split(" · ").filter { it.isNotBlank() }.chunked(2).forEach { Chip(it.joinToString(" · ")) }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Chip(if (s.stationary) "● quieto" else "○ en movimiento", if (s.stationary) Tisma.Ok else Tisma.Text)
+                if (s.sensorStatus.isNotEmpty() && s.imuSamples == 0L) Chip("⚠ IMU sin datos", Tisma.Warn)
+                else Chip(if (s.stationary) "● quieto" else "○ en movimiento", if (s.stationary) Tisma.Ok else Tisma.Text)
                 Chip("ω %.2f".format(s.gyroRate), if (s.gyroRate > 0.6) Tisma.Warn else Tisma.Text)
             }
         }
@@ -395,6 +396,9 @@ private fun LogTab(s: UiState, vm: ScanActions) {
         enabled = s.imuTestRemaining == 0 && !s.scanning,
     ) { vm.runImuStillTest() }
     s.imuReport.forEach { Mono(it) }
+    Section("Sensores")
+    if (s.sensorStatus.isEmpty()) Hint("Leyendo…")
+    s.sensorStatus.forEach { Mono(it, if ("RECHAZADO" in it || "NO EXISTE" in it || " 0 muestras" in it) Tisma.Warn else Tisma.Text) }
     Section("Navegación inercial")
     val (x, y, z) = s.position
     val (r, p, yaw) = s.eulerDeg

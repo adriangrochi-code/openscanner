@@ -67,6 +67,8 @@ data class UiState(
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
     val imuReport: List<String> = emptyList(),
+    /** Estado de cada sensor inercial (registrado, muestras, Hz). */
+    val sensorStatus: List<String> = emptyList(),
     // --- Estabilización por software ---
     val stabilizePreview: Boolean = true,
     /** Ráfaga anti-movimiento: N fotos con exposición 1/N que el servidor alinea y promedia. */
@@ -304,7 +306,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 com.tisma.scanner.ins.ImuStillTest.analyze(acc, gyr)
             }
             if (report == null) {
-                _state.update { it.copy(imuReport = listOf("No hay datos suficientes del IMU")) }
+                val why = "No hay datos suficientes del IMU: acelerómetro ${acc.size}, giróscopo ${gyr.size} muestras en $IMU_TEST_SECONDS s"
+                _state.update { it.copy(imuReport = listOf(why) + imu.status()) }
+                log(why)
                 return@launch
             }
             if (!report.moved) {
@@ -349,6 +353,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 plan.groups.joinToString { "${it.deviceId}${it.physicalStreams}${it.previewPhysicalId?.let { v -> "/vista $v" } ?: ""}" } +
                 (if (plan.separate.isNotEmpty()) " · por turnos " + plan.separate.joinToString { it.deviceId } else ""))
         }
+        appendLine("Sensores inerciales:")
+        imu.status().forEach { appendLine("  $it") }
+        imu.inventory().forEach { appendLine("  $it") }
+        appendLine("INS: " + (ins.latest()?.let { "activa, %d estados".format(imu.sampleCount) } ?: "SIN ESTADO (no recibe acelerómetro+giróscopo)"))
         appendLine("Flujos abiertos: " + cameras.openedStreams.joinToString { "${it.cameraId}@${it.size.width}x${it.size.height}" })
         appendLine("Registro:")
         _state.value.log.forEach { appendLine("  $it") }
@@ -639,6 +647,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     /** Bucle a ~100 Hz: refresca la UI, guarda trayectoria y decide disparos automáticos. */
     private suspend fun insLoop() {
         var lastUi = 0L
+        var lastSensorUi = 0L
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             val st = ins.latest()
             val s = session
@@ -649,6 +658,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 }
             }
             val now = SystemClock.uptimeMillis()
+            if (now - lastSensorUi > 1000) {
+                lastSensorUi = now
+                val status = imu.status()
+                _state.update { it.copy(sensorStatus = status, imuSamples = imu.sampleCount) }
+            }
             if (st != null && now - lastUi > 100) {
                 lastUi = now
                 val q = st.orientation
