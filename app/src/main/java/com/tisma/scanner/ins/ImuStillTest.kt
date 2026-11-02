@@ -20,16 +20,23 @@ data class StillReport(
     val headingDriftDegPerMin: Double,
     val freeDriftM: List<Pair<Double, Double>>,
     val moved: Boolean,
+    /** Sesgo del acelerómetro en la dirección de la gravedad (marco del dispositivo). */
+    val accelBias: Vec3 = Vec3.ZERO,
+    /** Deriva sin paradas SIN compensar ese sesgo (para comparar). */
+    val freeDriftRawM: List<Pair<Double, Double>> = emptyList(),
 ) {
     fun lines(): List<String> = buildList {
         add("IMU: acelerómetro %.0f Hz · giróscopo %.0f Hz · %.0f s".format(accelHz, gyroHz, durationS))
         add("Giróscopo: ruido %.3f °/s · sesgo %.2f °/s (ya compensado)".format(gyroNoiseDegS, gyroBiasDegS.norm()))
-        add("Acelerómetro: ruido %.4f m/s² · error de g %.3f m/s²".format(accelNoise, gravityError))
+        add("Acelerómetro: ruido %.4f m/s² · error de g %.3f m/s² (ya compensado)".format(accelNoise, gravityError))
         add("Rumbo: deriva %.2f °/min con el sesgo compensado".format(headingDriftDegPerMin))
         // Quieto, un sesgo del acelerómetro es indistinguible de una inclinación y el filtro lo
         // absorbe: esto es la deriva MÍNIMA (ruido). La real en movimiento se mide contra la
         // fotogrametría (tools/ins_accuracy.py).
-        add("Sin paradas (mínimo, por ruido): " + freeDriftM.joinToString(" · ") { (t, m) -> "%.0f s → %s".format(t, fmtM(m)) })
+        if (freeDriftRawM.isNotEmpty()) {
+            add("Sin paradas, sin compensar: " + freeDriftRawM.joinToString(" · ") { (t, m) -> "%.0f s → %s".format(t, fmtM(m)) })
+        }
+        add("Sin paradas, compensado (mínimo): " + freeDriftM.joinToString(" · ") { (t, m) -> "%.0f s → %s".format(t, fmtM(m)) })
         if (moved) add("⚠ El móvil se movió durante la prueba: repítela apoyado en una mesa")
     }
 
@@ -60,18 +67,23 @@ object ImuStillTest {
         // (como quedaría la app tras esta prueba), en ventanas de T segundos.
         val events = (accel.map { Triple(it.tNs, true, it.v) } + gyro.map { Triple(it.tNs, false, it.v) })
             .sortedBy { it.first }
-        val drift = horizons.filter { it <= dur }.map { T ->
+        // Sesgo del acelerómetro observable quieto: la diferencia de módulo con g, en la dirección
+        // de la gravedad medida (lo perpendicular es indistinguible de una inclinación).
+        val accelBias = aMean.normalized() * (aMean.norm() - MahonyFilter.GRAVITY)
+        fun driftCurve(aBias: Vec3) = horizons.filter { it <= dur }.map { T ->
             val step = maxOf(1.0, T / 2)
             val results = mutableListOf<Double>()
             var start = 0.0
             while (start + T <= dur) {
-                results += freeRun(events, t0 + (start * 1e9).toLong(), (T * 1e9).toLong(), gMean).first
+                results += freeRun(events, t0 + (start * 1e9).toLong(), (T * 1e9).toLong(), gMean, aBias).first
                 start += step
             }
             T to results.sorted()[results.size / 2]
         }
+        val drift = driftCurve(accelBias)
+        val driftRaw = driftCurve(Vec3.ZERO)
         // Deriva de rumbo: ángulo girado en la ventana más larga posible / tiempo.
-        val (_, angle) = freeRun(events, t0, ((dur - 0.5) * 1e9).toLong(), gMean)
+        val (_, angle) = freeRun(events, t0, ((dur - 0.5) * 1e9).toLong(), gMean, accelBias)
         return StillReport(
             durationS = dur,
             accelHz = accel.size / ((accel.last().tNs - accel.first().tNs) * 1e-9),
@@ -83,13 +95,16 @@ object ImuStillTest {
             headingDriftDegPerMin = Math.toDegrees(angle) / (dur - 0.5) * 60,
             freeDriftM = drift,
             moved = moved,
+            accelBias = accelBias,
+            freeDriftRawM = driftRaw,
         )
     }
 
     /** Integra sin ZUPT desde `from` durante `lenNs`. Devuelve (desplazamiento m, giro rad). */
-    private fun freeRun(events: List<Triple<Long, Boolean, Vec3>>, from: Long, lenNs: Long, bias: Vec3): Pair<Double, Double> {
+    private fun freeRun(events: List<Triple<Long, Boolean, Vec3>>, from: Long, lenNs: Long, bias: Vec3, accelBias: Vec3): Pair<Double, Double> {
         val ins = StrapdownIns(zuptEnabled = false, historyCapacity = 4)
         ins.gyroBiasPrior = bias
+        ins.accelBiasPrior = accelBias
         ins.reset()
         var first: InsState? = null
         var last: InsState? = null

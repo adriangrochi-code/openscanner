@@ -48,4 +48,16 @@ class ImuStillTestTest {
         val shaken = a.mapIndexed { i, s -> if (i % 200 < 20) s.copy(v = s.v + Vec3(1.5, 0.0, 0.0)) else s }
         assertTrue(ImuStillTest.analyze(shaken, g)!!.moved)
     }
+
+    /** El caso medido en el Honor: g leída 0,049 m/s² baja -> deriva cuadrática sin compensar. */
+    @Test fun gravityErrorIsCompensated() {
+        val (a, g) = simulate(30, Vec3(0.0, 0.0, -0.049), Vec3.ZERO)
+        val rep = ImuStillTest.analyze(a, g)!!
+        assertEquals(-0.049, rep.gravityError, 0.003)
+        val raw = rep.freeDriftRawM.toMap().getValue(10.0)
+        val comp = rep.freeDriftM.toMap().getValue(10.0)
+        assertTrue("sin compensar ~2,4 m: $raw", raw > 1.5)
+        assertTrue("compensado mucho menor: $comp vs $raw", comp < raw / 5)
+        rep.lines().forEach(::println)
+    }
 }

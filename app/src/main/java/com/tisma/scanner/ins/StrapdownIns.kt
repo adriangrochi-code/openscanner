@@ -23,8 +23,9 @@ data class InsState(
  * fotogrametría, no como sustituto de ella.
  */
 class StrapdownIns(
-    private val zuptAccelThreshold: Double = 0.25,   // |‖a‖ - g| (m/s²)
-    private val zuptGyroThreshold: Double = 0.06,    // ‖ω‖ (rad/s)
+    private val zuptAccelThreshold: Double = 0.25,   // |‖a‖ - g| y ‖a lineal‖ (m/s²)
+    private val zuptGyroThreshold: Double = 0.10,    // ‖ω‖ medio en la ventana (rad/s): admite el pulso de la mano
+    private val zuptAccelStd: Double = 0.06,         // desviación de ‖a‖ en la ventana (m/s²)
     private val zuptMinSamples: Int = 40,
     historyCapacity: Int = 20_000,
     /** false = navegación inercial "libre" (sin ZUPT/ZARU): sólo para medir la deriva bruta. */
@@ -32,11 +33,24 @@ class StrapdownIns(
 ) {
     /** Sesgo del giróscopo medido en la prueba de quietud: se aplica en cada reset. */
     @Volatile var gyroBiasPrior: Vec3 = Vec3.ZERO
-    val filter = MahonyFilter()
+    /** Sesgo del acelerómetro (marco del dispositivo) medido en la prueba de quietud. */
+    @Volatile var accelBiasPrior: Vec3 = Vec3.ZERO
+    private var accelBiasBody = Vec3.ZERO
+    private val aWin = DoubleArray(WINDOW)
+    private val wWin = DoubleArray(WINDOW)
+    /** Giro (vector) en la ventana: su media cancela el temblor de la mano para el ZARU. */
+    private val gxWin = DoubleArray(WINDOW); private val gyWin = DoubleArray(WINDOW); private val gzWin = DoubleArray(WINDOW)
+    private var winPos = 0
+    private var winFill = 0
+
+    // El giróscopo de un móvil actual es muy bueno (Honor: 0,006 °/s de ruido, 0,11 °/min de
+    // deriva de rumbo): se confía más en él que en el acelerómetro para la actitud (kp bajo).
+    // ki bajo: el ZARU ya estima el sesgo del giróscopo; un integral fuerte confundía el sesgo
+    // del acelerómetro con sesgo del giróscopo.
+    val filter = MahonyFilter(kp = 0.3, ki = 0.004)
     private var lastGyroT = -1L
     private var lastAccel: Vec3? = null
     private var lastMag: Vec3? = null
-    private var accelBiasWorld = Vec3.ZERO
     private var position = Vec3.ZERO
     private var velocity = Vec3.ZERO
     private var stillCount = 0
@@ -55,7 +69,8 @@ class StrapdownIns(
 
     @Synchronized fun reset() {
         filter.reset(gyroBiasPrior); lastGyroT = -1; lastAccel = null; lastMag = null
-        accelBiasWorld = Vec3.ZERO; position = Vec3.ZERO; velocity = Vec3.ZERO
+        accelBiasBody = accelBiasPrior; position = Vec3.ZERO; velocity = Vec3.ZERO
+        winPos = 0; winFill = 0
         stillCount = 0; stationary = false; history.clear()
         positionVariance = 0.0; geo = null; gnssUpdates = 0
     }
@@ -91,7 +106,7 @@ class StrapdownIns(
 
     @Synchronized fun onAccel(tNs: Long, a: Vec3) {
         lastAccel = a
-        if (!filter.isInitialized) filter.initialize(a)
+        if (!filter.isInitialized) filter.initialize(a - accelBiasBody)
     }
 
     @Synchronized fun onMag(tNs: Long, m: Vec3) { lastMag = m }
@@ -103,35 +118,63 @@ class StrapdownIns(
         val dt = (tNs - lastGyroT) * 1e-9
         lastGyroT = tNs
         if (dt <= 0 || dt > 0.2) return
+        val g0 = Vec3(0.0, 0.0, MahonyFilter.GRAVITY)
+
+        // El error del acelerómetro es del SENSOR: se corrige en el marco del dispositivo, así
+        // sigue siendo válido al girar el móvil (en el marco mundo dejaba de serlo al rotar).
+        val aCorr = accel - accelBiasBody
 
         // Ganancia adaptativa: si con la actitud predicha aparece aceleración lineal, no usar el
-        // acelerómetro para corregir inclinación (se "comería" el movimiento real).
-        val linPred = (filter.q.rotate(accel) - Vec3(0.0, 0.0, MahonyFilter.GRAVITY) - accelBiasWorld).norm()
-        val accelWeight = (1.0 - linPred / 0.4).coerceIn(0.0, 1.0)
-        filter.update(w, accel, lastMag, dt, accelWeight)
+        // acelerómetro para corregir inclinación (se "comería" el movimiento real). En reposo se
+        // usa poco: la actitud la lleva el giróscopo y el acelerómetro estima su propio sesgo.
+        val linPred = (filter.q.rotate(aCorr) - g0).norm()
+        val accelWeight = (1.0 - linPred / 0.4).coerceIn(0.0, 1.0) * (if (stationary) 0.2 else 1.0)
+        filter.update(w, aCorr, lastMag, dt, accelWeight)
 
-        val linWorld = filter.q.rotate(accel) - Vec3(0.0, 0.0, MahonyFilter.GRAVITY)
-        // Reposo = módulo ≈ g, sin giro Y sin aceleración lineal en el marco mundo
-        // (el módulo solo no detecta empujes horizontales suaves: √(1²+g²) ≈ g).
-        val still = abs(accel.norm() - MahonyFilter.GRAVITY) < zuptAccelThreshold &&
-            (w - filter.gyroBias).norm() < zuptGyroThreshold &&
-            (linWorld - accelBiasWorld).norm() < zuptAccelThreshold
+        val linWorld = filter.q.rotate(aCorr) - g0
+
+        // Detector de reposo por ventana (~0,1 s): con el móvil en la mano nunca está
+        // perfectamente quieto, pero el temblor tiene poca varianza y giro pequeño.
+        aWin[winPos] = aCorr.norm(); wWin[winPos] = (w - filter.gyroBias).norm()
+        gxWin[winPos] = w.x; gyWin[winPos] = w.y; gzWin[winPos] = w.z
+        winPos = (winPos + 1) % WINDOW; if (winFill < WINDOW) winFill++
+        val still = winFill == WINDOW && run {
+            var m = 0.0; var m2 = 0.0; var wm = 0.0
+            for (i in 0 until WINDOW) { m += aWin[i]; m2 += aWin[i] * aWin[i]; wm += wWin[i] }
+            m /= WINDOW; wm /= WINDOW
+            val std = kotlin.math.sqrt((m2 / WINDOW - m * m).coerceAtLeast(0.0))
+            std < zuptAccelStd && wm < zuptGyroThreshold &&
+                abs(m - MahonyFilter.GRAVITY) < zuptAccelThreshold &&
+                // El módulo solo no detecta empujes suaves y uniformes (√(1²+g²) ≈ g).
+                linWorld.norm() < zuptAccelThreshold
+        }
         stillCount = if (still) stillCount + 1 else 0
         stationary = zuptEnabled && stillCount >= zuptMinSamples
         if (stationary) {
-            // En reposo toda aceleración residual es sesgo: filtro paso bajo.
-            accelBiasWorld = accelBiasWorld * 0.98 + linWorld * 0.02
             velocity = Vec3.ZERO
-            filter.zaru(w, 0.01)
+            // ZARU lento (τ ≈ 2 s): el pulso de la mano (7-10 Hz) se promedia casi del todo.
+            // Uno rápido metía el temblor en el sesgo del giróscopo, eso inclinaba la actitud en
+            // cada giro posterior y la gravedad "se filtraba" como aceleración (deriva sin fin).
+            val wMean = Vec3(gxWin.average(), gyWin.average(), gzWin.average())
+            if ((wMean - filter.gyroBias).norm() < ZARU_MAX_RATE) filter.zaru(w, ZARU_ALPHA)
+            // En reposo, lo que el acelerómetro mide de más o de menos respecto a la gravedad
+            // esperada (con la actitud del giróscopo) es su sesgo, en el marco del dispositivo.
+            val expected = filter.q.conj().rotate(g0)
+            accelBiasBody = accelBiasBody * 0.99 + (accel - expected) * 0.01
         } else {
             // Modelo de ruido: random walk de aceleración ~0.05 m/s² -> var crece ~ t³.
             positionVariance += (0.05 * 0.05) * dt * (1.0 + velocity.norm() * 10)
-            val a = linWorld - accelBiasWorld
-            position = position + velocity * dt + a * (0.5 * dt * dt)
-            velocity = velocity + a * dt
+            position = position + velocity * dt + linWorld * (0.5 * dt * dt)
+            velocity = velocity + linWorld * dt
+            // Una mano no mueve el móvil a más de ~2 m/s: evita que un error se dispare.
+            val v = velocity.norm()
+            if (v > MAX_SPEED) velocity = velocity * (MAX_SPEED / v)
         }
         push(InsState(tNs, filter.q, position, velocity, stationary))
     }
+
+    /** Sesgo del acelerómetro estimado (marco del dispositivo, m/s²). */
+    @Synchronized fun accelBias(): Vec3 = accelBiasBody
 
     private fun push(s: InsState) {
         history.addLast(s)
@@ -163,4 +206,15 @@ class StrapdownIns(
 
     /** Velocidad angular actual (sin sesgo) para descartar fotos movidas. */
     @Synchronized fun isStationary() = stationary
+
+    companion object {
+        /** Ventana del detector de reposo (≈0,1 s a 400 Hz). */
+        const val WINDOW = 40
+        /** Velocidad máxima plausible de un móvil en la mano (m/s). */
+        const val MAX_SPEED = 2.0
+        /** Sólo se recalibra el giróscopo si el giro medio en reposo es muy pequeño (rad/s). */
+        const val ZARU_MAX_RATE = 0.03
+        /** Paso del ZARU por muestra a ~400 Hz (τ ≈ 1/(400·0,0012) ≈ 2 s). */
+        const val ZARU_ALPHA = 0.0012
+    }
 }

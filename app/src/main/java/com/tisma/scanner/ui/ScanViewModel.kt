@@ -313,6 +313,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             }
             if (!report.moved) {
                 ins.gyroBiasPrior = report.gyroBiasDegS * Math.toRadians(1.0)
+                ins.accelBiasPrior = report.accelBias
                 ins.reset()
             }
             _state.update { it.copy(imuReport = report.lines()) }
