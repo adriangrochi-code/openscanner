@@ -372,6 +372,7 @@ private fun ScanSettings(s: UiState, vm: ScanActions) {
     }
     SettingSwitch("Disparo automático (INS)", s.autoTrigger, onChange = vm::setAutoTrigger)
     SettingSwitch("Medir distancia con el enfoque", s.focusDepth, onChange = vm::setFocusDepth)
+    SettingSwitch("Velocímetro de cámara (frena la deriva)", s.cameraVelocity, onChange = vm::setCameraVelocity)
     Hint("Cada ${ScanViewModel.AUTO_SWEEP_EVERY} disparos, quieto, barre el enfoque: mapa de profundidad en mm y escala real sin tapete." +
         if (s.focusSweeps > 0) " Barridos hechos: ${s.focusSweeps}." else "")
     SettingSwitch("HDR −2/0/+2 EV en reposo", s.hdr, enabled = s.pass.hdr, onChange = vm::setHdr)
@@ -502,6 +503,7 @@ private fun LogTab(s: UiState, vm: ScanActions) {
     if (s.sensorStatus.isEmpty()) Hint("Leyendo…")
     s.sensorStatus.forEach { Mono(it, if ("RECHAZADO" in it || "NO EXISTE" in it || " 0 muestras" in it) Tisma.Warn else Tisma.Text) }
     Section("Navegación inercial")
+    if (s.flowText.isNotEmpty()) Mono(s.flowText)
     val (x, y, z) = s.position
     val (r, p, yaw) = s.eulerDeg
     Mono("pos  %+.3f %+.3f %+.3f m (±%.2f)".format(x, y, z, s.posStdM))

@@ -36,6 +36,11 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         /** Metadatos de captura por cámara (exposición, foco, intrínsecos dinámicos...). */
         fun onCaptureMetadata(cameraId: String, timestampNs: Long, meta: JSONObject)
         fun onLog(msg: String)
+        /**
+         * Fotograma pequeño en grises de la vista previa (p.ej. 160×120) para el velocímetro
+         * óptico. `cameraId` es el objetivo que se ve.
+         */
+        fun onFlowFrame(cameraId: String, timestampNs: Long, w: Int, h: Int, gray: FloatArray) {}
     }
 
     /** Lo que finalmente se ha conseguido abrir. */
@@ -46,6 +51,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     private val ioThread = HandlerThread("camera-io").apply { start() }
     private val camHandler = Handler(camThread.looper)
     private val ioHandler = Handler(ioThread.looper)
+    private val flowThread = HandlerThread("camera-flow").apply { start() }
+    private val flowHandler = Handler(flowThread.looper)
     private val executor = Executor { camHandler.post(it) }
 
     private inner class Active(
@@ -55,6 +62,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         val streamSurface: Surface,           // previsualización o flujo "sumidero"
         val readers: Map<String, ImageReader>, // cameraId -> lector JPEG
         val sink: ImageReader?,
+        /** Flujo YUV pequeño para el velocímetro óptico (null si el móvil no admite el flujo extra). */
+        val flow: ImageReader?,
         val manualSensor: Boolean,
         val exposureRange: android.util.Range<Long>?,
         val isoRange: android.util.Range<Int>?,
@@ -148,6 +157,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     private fun startRepeating(act: Active) {
         val repeating = act.device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(act.streamSurface)
+            act.flow?.let { addTarget(it.surface) }
             setAf(act.characteristics, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             applyQuality(act)
         }.build()
@@ -296,12 +306,13 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             runCatching { a.device.close() }
             a.readers.values.forEach { runCatching { it.close() } }
             runCatching { a.sink?.close() }
+            runCatching { a.flow?.close() }
         }
         active.clear(); openedStreams.clear()
     }
 
     fun release() {
-        close(); camThread.quitSafely(); ioThread.quitSafely()
+        close(); camThread.quitSafely(); ioThread.quitSafely(); flowThread.quitSafely()
     }
 
     // ---------------------------------------------------------------------------------------
@@ -353,47 +364,91 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             }
             if (readers.isEmpty()) continue
 
-            var sink: ImageReader? = null
-            val streamSurface = preview ?: ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2).also {
-                sink = it
-                it.setOnImageAvailableListener({ rd -> rd.acquireLatestImage()?.close() }, ioHandler)
-            }.surface
+            // Con vista previa se intenta añadir un flujo YUV pequeño para el velocímetro óptico;
+            // si el móvil no admite esa combinación, se abre sin él (como antes).
+            for (withFlow in if (preview != null) listOf(true, false) else listOf(false)) {
+                var sink: ImageReader? = null
+                val streamSurface = preview ?: ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2).also {
+                    sink = it
+                    it.setOnImageAvailableListener({ rd -> rd.acquireLatestImage()?.close() }, ioHandler)
+                }.surface
 
-            // La vista previa puede mostrar un objetivo físico concreto (la macro) en vez del
-            // que elija la cámara lógica. Sólo si en este intento se piden flujos físicos.
-            val previewPhys = g.previewPhysicalId?.takeIf { preview != null && physical.isNotEmpty() && it != g.deviceId }
-            val outputs = mutableListOf(OutputConfiguration(streamSurface).apply {
-                if (previewPhys != null) setPhysicalCameraId(previewPhys)
-            })
-            if (preview != null && g.previewPhysicalId != null && previewPhys == null && physical.isEmpty()) {
-                listener.onLog("La vista previa no puede mostrar #${g.previewPhysicalId}: se ve la cámara #${g.deviceId}")
-            }
-            for ((id, r) in readers) {
-                outputs += OutputConfiguration(r.surface).apply {
-                    if (physical.isNotEmpty()) setPhysicalCameraId(id)
+                // La vista previa puede mostrar un objetivo físico concreto (la macro) en vez del
+                // que elija la cámara lógica. Sólo si en este intento se piden flujos físicos.
+                val previewPhys = g.previewPhysicalId?.takeIf { preview != null && physical.isNotEmpty() && it != g.deviceId }
+                val outputs = mutableListOf(OutputConfiguration(streamSurface).apply {
+                    if (previewPhys != null) setPhysicalCameraId(previewPhys)
+                })
+                val flowCam = previewPhys ?: g.deviceId
+                val flow = if (withFlow) flowReaderFor(flowCam) else null
+                flow?.let { fr ->
+                    outputs += OutputConfiguration(fr.surface).apply { if (previewPhys != null) setPhysicalCameraId(previewPhys) }
                 }
-            }
-            val session = createSession(device, outputs)
-            if (session != null) {
-                if (preview != null) previewCameraId = previewPhys ?: g.deviceId
-                val ch = manager.getCameraCharacteristics(g.deviceId)
-                val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
-                val act = Active(
-                    g, device, session, streamSurface, readers, sink,
-                    manualSensor = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
-                    exposureRange = ch.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
-                    isoRange = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
-                )
-                act.characteristics = ch
-                startRepeating(act)
-                listener.onLog("Cámara ${g.deviceId}: " + readers.entries.joinToString { "${it.key}@${it.value.width}x${it.value.height}" } +
-                    if (act.manualSensor) " (manual/HDR ok)" else " (sin control manual)")
-                return act
+                if (preview != null && g.previewPhysicalId != null && previewPhys == null && physical.isEmpty()) {
+                    listener.onLog("La vista previa no puede mostrar #${g.previewPhysicalId}: se ve la cámara #${g.deviceId}")
+                }
+                for ((id, r) in readers) {
+                    outputs += OutputConfiguration(r.surface).apply {
+                        if (physical.isNotEmpty()) setPhysicalCameraId(id)
+                    }
+                }
+                val session = createSession(device, outputs)
+                if (session != null) {
+                    if (preview != null) previewCameraId = previewPhys ?: g.deviceId
+                    val ch = manager.getCameraCharacteristics(g.deviceId)
+                    val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
+                    val act = Active(
+                        g, device, session, streamSurface, readers, sink, flow,
+                        manualSensor = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
+                        exposureRange = ch.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+                        isoRange = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+                    )
+                    act.characteristics = ch
+                    startRepeating(act)
+                    listener.onLog("Cámara ${g.deviceId}: " + readers.entries.joinToString { "${it.key}@${it.value.width}x${it.value.height}" } +
+                        (if (act.manualSensor) " (manual/HDR ok)" else " (sin control manual)") +
+                        (if (flow != null) " + velocímetro ${flow.width}x${flow.height}" else ""))
+                    return act
+                }
+                flow?.close()
+                sink?.close()
             }
             readers.values.forEach { it.close() }
-            sink?.close()
         }
         return null
+    }
+
+    /** Lector YUV ~320×240 (4:3) para el flujo óptico; entrega fotogramas 160×120 en grises. */
+    private fun flowReaderFor(cameraId: String): ImageReader? {
+        val sizes = runCatching {
+            manager.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(ImageFormat.YUV_420_888)
+        }.getOrNull() ?: return null
+        val size = sizes.filter { it.width >= 320 && kotlin.math.abs(it.width * 3 - it.height * 4) < 8 }
+            .minByOrNull { it.width * it.height } ?: return null
+        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
+        r.setOnImageAvailableListener({ rd ->
+            val img = rd.acquireLatestImage() ?: return@setOnImageAvailableListener
+            try {
+                val plane = img.planes[0]
+                val buf = plane.buffer
+                val step = img.width / FLOW_W
+                val out = FloatArray(FLOW_W * FLOW_H)
+                // Promedio de bloques step×step de la luminancia (Y): reduce ruido y tamaño.
+                for (y in 0 until FLOW_H) for (x in 0 until FLOW_W) {
+                    var acc = 0
+                    for (j in 0 until step) for (i in 0 until step) {
+                        acc += buf.get((y * step + j) * plane.rowStride + (x * step + i) * plane.pixelStride).toInt() and 0xFF
+                    }
+                    out[y * FLOW_W + x] = acc.toFloat() / (step * step)
+                }
+                listener.onFlowFrame(cameraId, img.timestamp, FLOW_W, FLOW_H, out)
+            } catch (_: Exception) {
+            } finally {
+                img.close()
+            }
+        }, flowHandler)
+        return r
     }
 
     private suspend fun createSession(device: CameraDevice, outputs: List<OutputConfiguration>): CameraCaptureSession? =
@@ -483,5 +538,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         private const val TAG = "MultiCamera"
         /** ~0,7 s a 30 fps: suficiente para que AE/AF/AWB converjan tras abrir. */
         private const val SETTLE_FRAMES = 20
+        /** Tamaño de la imagen del velocímetro óptico. */
+        const val FLOW_W = 160
+        const val FLOW_H = 120
     }
 }

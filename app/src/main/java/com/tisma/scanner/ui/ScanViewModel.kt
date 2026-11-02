@@ -78,6 +78,10 @@ data class UiState(
     val cloudBusy: Boolean = false,
     /** Pieza descargada del servidor (STL en mm). */
     val cloudStl: File? = null,
+    // --- Velocímetro de cámara (flujo óptico + enfoque) ---
+    val cameraVelocity: Boolean = true,
+    /** "12 medidas/s · 0,06 m/s" o "" si no mide. */
+    val flowText: String = "",
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -190,6 +194,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val stabilizer = com.tisma.scanner.camera.PreviewStabilizer()
     private val prefs = app.getSharedPreferences("tisma", Context.MODE_PRIVATE)
     private var cloudJob: Job? = null
+    // Velocímetro óptico: fotograma anterior y estadísticas.
+    private var prevFlow: Triple<Long, FloatArray, String>? = null
+    private val flowAccepted = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var lastFlowSpeed = 0.0
+    private val sensorOrientationCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
     @Volatile private var trigger = 0
     private var loop: Job? = null
     private var previewTexture: SurfaceTexture? = null
@@ -376,6 +385,48 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 log("Nube: ${e.message}")
             }
         }
+    }
+
+    override fun setCameraVelocity(v: Boolean) {
+        _state.update { it.copy(cameraVelocity = v, flowText = "") }
+        prevFlow = null
+    }
+
+    /**
+     * Velocímetro de cámara: flujo óptico entre fotogramas de la vista previa, menos el giro
+     * (INS/giróscopo), por la distancia a la escena (enfoque) -> velocidad en m/s que corrige la
+     * deriva del Kalman entre paradas. Corre en el hilo propio del flujo (camera-flow).
+     */
+    override fun onFlowFrame(cameraId: String, timestampNs: Long, w: Int, h: Int, gray: FloatArray) {
+        if (!_state.value.cameraVelocity) return
+        val t = timestampNs + (clockOffset[cameraId] ?: 0L)
+        val prev = prevFlow
+        prevFlow = Triple(t, gray, cameraId)
+        if (prev == null || prev.third != cameraId) return
+        val dt = (t - prev.first) * 1e-9
+        if (dt <= 0 || dt > 0.2) return
+        val depth = flowDepthM(cameraId) ?: return
+        val info = inventory[cameraId] ?: return
+        val focal = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return
+        val sw = info.sensorSizeMm?.first?.toDouble() ?: return
+        val s0 = ins.stateAt(prev.first) ?: return
+        val s1 = ins.stateAt(t) ?: return
+        val flow = com.tisma.scanner.ins.OpticalFlow.track(
+            com.tisma.scanner.ins.OpticalFlow.Image(w, h, prev.second), com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray))
+        val orient = sensorOrientationCache.getOrPut(cameraId) { cameras.sensorOrientation(cameraId) }
+        val m = com.tisma.scanner.ins.OpticalVelocity.estimate(
+            flow, Optics.fxPixels(focal, sw, w), depth, dt, s0.orientation, s1.orientation, orient) ?: return
+        ins.onVelocity(m.dirWorld1, m.v1, m.sigma)
+        ins.onVelocity(m.dirWorld2, m.v2, m.sigma)
+        flowAccepted.incrementAndGet()
+        lastFlowSpeed = kotlin.math.sqrt(m.v1 * m.v1 + m.v2 * m.v2)
+    }
+
+    /** Distancia a la escena para el velocímetro: enfoque (autofoco) o la de la macro de foco fijo. */
+    private fun flowDepthM(cameraId: String): Double? {
+        val info = inventory[cameraId] ?: return null
+        return if ((info.minFocusDiopters ?: 0f) > 0f) Optics.distanceM(cameras.primaryFocusDiopters())
+        else if (cameraId == roles.macro) MACRO_FOCUS_M else null
     }
 
     override fun setFocusDepth(v: Boolean) = _state.update { it.copy(focusDepth = v) }
@@ -634,6 +685,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("jpeg_quality", _state.value.jpegQuality)
                 put("discard_blurry", _state.value.discardBlurry)
                 put("use_macro", _state.value.useMacro)
+                put("camera_velocity", _state.value.cameraVelocity)
                 put("focus_depth_every", if (_state.value.focusDepth) AUTO_SWEEP_EVERY else 0)
                 put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
@@ -788,7 +840,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             if (now - lastSensorUi > 1000) {
                 lastSensorUi = now
                 val status = imu.status()
-                _state.update { it.copy(sensorStatus = status, imuSamples = imu.sampleCount) }
+                val n = flowAccepted.getAndSet(0)
+                val flowText = if (!_state.value.cameraVelocity) "" else if (n == 0) "velocímetro: sin medida (poca textura o sin enfoque)"
+                    else "velocímetro: $n/s · %.2f m/s".format(lastFlowSpeed)
+                _state.update { it.copy(sensorStatus = status, imuSamples = imu.sampleCount, flowText = flowText) }
             }
             if (st != null && now - lastUi > 100) {
                 lastUi = now

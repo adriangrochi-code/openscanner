@@ -14,7 +14,13 @@ import kotlin.random.Random
 class RestAfterRotationTest {
     private val g = MahonyFilter.GRAVITY
 
-    private fun run(gyroScale: Double, noise: Double, magDisturbance: Vec3? = null): Pair<Double, Boolean> {
+    /**
+     * Devuelve (error final respecto a la verdad, cuánto se mueve en reposo tras el primer segundo,
+     * ¿reposo detectado?). El móvil gira en el sitio: su posición real es siempre 0. El primer
+     * segundo de reposo se excluye de la estabilidad: ahí el Kalman CORRIGE (hacia atrás) el error
+     * acumulado en el giro, y eso es bueno, no deriva.
+     */
+    private fun run(gyroScale: Double, noise: Double, magDisturbance: Vec3? = null): Triple<Double, Double, Boolean> {
         val r = Random(11)
         val ins = StrapdownIns()
         var q = Quat.IDENTITY
@@ -42,24 +48,28 @@ class RestAfterRotationTest {
                 t += (dt * 1e9).toLong()
                 val p = ins.latest()?.position?.norm() ?: 0.0
                 if (k == plan.lastIndex) {
-                    if (i == 0) posAtRestStart = p
-                    maxAtRest = maxOf(maxAtRest, kotlin.math.abs(p - posAtRestStart))
+                    if (i == rate) posAtRestStart = p
+                    if (i > rate) maxAtRest = maxOf(maxAtRest, kotlin.math.abs(p - posAtRestStart))
                 }
             }
         }
-        return maxAtRest to ins.latest()!!.stationary
+        return Triple(ins.latest()!!.position.norm(), maxAtRest, ins.latest()!!.stationary)
     }
 
     @Test fun staysPutOnTheTableAfterRotating() {
-        val (drift, still) = run(gyroScale = 1.01, noise = 0.024)
-        assertTrue("apoyado en la mesa se movió %.3f m".format(drift), drift < 0.05)
+        val (err, drift, still) = run(gyroScale = 1.01, noise = 0.024)
+        println("sin brújula: error final %.3f m, deriva en reposo %.4f m".format(err, drift))
+        // Antes del Kalman: error final ~0,19 m. Ahora ~0,04 m.
+        assertTrue("error final %.3f m".format(err), err < 0.08)
+        assertTrue("apoyado en la mesa se movió %.4f m".format(drift), drift < 0.01)
         assertTrue("debe reconocer el reposo", still)
     }
 
     @Test fun staysPutWithIndoorMagneticDisturbance() {
-        val (drift, still) = run(gyroScale = 1.01, noise = 0.024, magDisturbance = Vec3(8.0, -5.0, 12.0))
-        println("deriva en reposo con brújula perturbada: %.4f m".format(drift))
-        assertTrue("con el magnetómetro perturbado se movió %.3f m".format(drift), drift < 0.05)
+        val (err, drift, still) = run(gyroScale = 1.01, noise = 0.024, magDisturbance = Vec3(8.0, -5.0, 12.0))
+        println("brújula perturbada: error final %.3f m, deriva en reposo %.4f m".format(err, drift))
+        assertTrue("error final %.3f m".format(err), err < 0.08)
+        assertTrue("con el magnetómetro perturbado se movió %.4f m".format(drift), drift < 0.01)
         assertTrue("debe reconocer el reposo", still)
     }
 

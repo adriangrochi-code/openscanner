@@ -48,6 +48,7 @@ class ScanScreenshotTest {
         override fun setStabilizePreview(v: Boolean) {}
         override fun setUseMacro(v: Boolean) {}
         override fun setFocusDepth(v: Boolean) {}
+        override fun setCameraVelocity(v: Boolean) {}
         override fun setCloudUrl(v: String) {}
         override fun setCloudKey(v: String) {}
         override fun sendToCloud() {}

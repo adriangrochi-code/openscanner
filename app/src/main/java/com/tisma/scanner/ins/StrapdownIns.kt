@@ -12,11 +12,10 @@ data class InsState(
 )
 
 /**
- * Sistema de navegación inercial "strapdown" con:
- *  - Orientación por filtro de Mahony.
- *  - Doble integración de la aceleración lineal (sin gravedad).
- *  - ZUPT (Zero-velocity UPdaTe): cuando se detecta reposo, la velocidad se fuerza a 0 y
- *    se estima el sesgo del acelerómetro. Esto acota la deriva, que de otro modo crece ~t³.
+ * Sistema de navegación inercial "strapdown":
+ *  - Orientación: filtro de Mahony (brújula sólo para el rumbo) + ZARU en reposo.
+ *  - Traslación: filtro de Kalman ([TranslationKalman]) con posición, velocidad y sesgo del
+ *    acelerómetro en 3 ejes, corregido por ZUPT (reposo), velocidad de la cámara y GNSS.
  *
  * Importante: con sensores MEMS de móvil la posición sólo es fiable unos segundos entre
  * paradas. Por eso aquí se usa como *prior* (pose inicial y escala métrica) para la
@@ -35,7 +34,8 @@ class StrapdownIns(
     @Volatile var gyroBiasPrior: Vec3 = Vec3.ZERO
     /** Sesgo del acelerómetro (marco del dispositivo) medido en la prueba de quietud. */
     @Volatile var accelBiasPrior: Vec3 = Vec3.ZERO
-    private var accelBiasBody = Vec3.ZERO
+    /** Posición, velocidad y sesgo del acelerómetro (Kalman). */
+    val kf = TranslationKalman()
     private val aWin = DoubleArray(WINDOW)
     private val wWin = DoubleArray(WINDOW)
     /** Giro (vector) en la ventana: su media cancela el temblor de la mano para el ZARU. */
@@ -51,14 +51,11 @@ class StrapdownIns(
     private var lastGyroT = -1L
     private var lastAccel: Vec3? = null
     private var lastMag: Vec3? = null
-    private var position = Vec3.ZERO
-    private var velocity = Vec3.ZERO
     private var stillCount = 0
     private var stationary = false
 
-    /** Varianza (m²) de la posición INS; crece con el tiempo desde el último ZUPT/GNSS. */
-    var positionVariance = 0.0
-        private set
+    /** Varianza (m²) de la posición INS, la que estima el Kalman. */
+    val positionVariance get() = synchronized(this) { kf.positionVariance }
     var geo: GeoReference? = null
         private set
     /** Nº de fixes GNSS recibidos (el primero sólo fija el origen ENU). */
@@ -69,14 +66,14 @@ class StrapdownIns(
 
     @Synchronized fun reset() {
         filter.reset(gyroBiasPrior); lastGyroT = -1; lastAccel = null; lastMag = null
-        accelBiasBody = accelBiasPrior; position = Vec3.ZERO; velocity = Vec3.ZERO
+        kf.reset(accelBiasPrior)
         winPos = 0; winFill = 0
         stillCount = 0; stationary = false; history.clear()
-        positionVariance = 0.0; geo = null; gnssUpdates = 0
+        geo = null; gnssUpdates = 0
     }
 
     /**
-     * Corrección GNSS débilmente acoplada (actualización de Kalman escalar por eje).
+     * Corrección GNSS débilmente acoplada (actualización del Kalman por eje).
      * El marco INS tiene X≈norte magnético, Y≈oeste, Z arriba (ver MahonyFilter), así que
      * ENU -> INS: (x, y, z) = (norte, -este, arriba).
      *
@@ -88,25 +85,29 @@ class StrapdownIns(
         val g = geo ?: GeoReference(lat, lon, alt).also {
             geo = it
             // Anclar el origen ENU a la posición INS actual.
-            originOffset = position
+            originOffset = kf.p
         }
         val enu = g.toEnu(lat, lon, alt)
         val meas = Vec3(enu.y, -enu.x, enu.z) + originOffset
-        val rH = horizAccM * horizAccM
-        val rV = (vertAccM ?: (horizAccM * 1.5)).let { it * it }
         if (gnssUpdates++ == 0) return
-        val kH = positionVariance / (positionVariance + rH)
-        val kV = positionVariance / (positionVariance + rV)
-        val innov = meas - position
-        position = position + Vec3(innov.x * kH, innov.y * kH, innov.z * kV)
-        positionVariance *= (1 - kH)
+        kf.positionAxis(0, meas.x, horizAccM)
+        kf.positionAxis(1, meas.y, horizAccM)
+        kf.positionAxis(2, meas.z, vertAccM ?: (horizAccM * 1.5))
+    }
+
+    /**
+     * Velocidad medida por la cámara (flujo óptico + distancia del enfoque): componente a lo
+     * largo de `dirWorld` (unitario). Sólo se usa en movimiento: en reposo manda el ZUPT.
+     */
+    @Synchronized fun onVelocity(dirWorld: Vec3, value: Double, sigma: Double) {
+        if (!stationary) kf.velocityAlong(dirWorld, value, sigma)
     }
 
     private var originOffset = Vec3.ZERO
 
     @Synchronized fun onAccel(tNs: Long, a: Vec3) {
         lastAccel = a
-        if (!filter.isInitialized) filter.initialize(a - accelBiasBody)
+        if (!filter.isInitialized) filter.initialize(a - kf.b)
     }
 
     @Synchronized fun onMag(tNs: Long, m: Vec3) { lastMag = m }
@@ -122,7 +123,7 @@ class StrapdownIns(
 
         // El error del acelerómetro es del SENSOR: se corrige en el marco del dispositivo, así
         // sigue siendo válido al girar el móvil (en el marco mundo dejaba de serlo al rotar).
-        val aCorr = accel - accelBiasBody
+        val aCorr = accel - kf.b
 
         // Ganancia adaptativa: si con la actitud predicha aparece aceleración lineal, no usar el
         // acelerómetro para corregir inclinación (se "comería" el movimiento real). En reposo se
@@ -151,30 +152,23 @@ class StrapdownIns(
         stillCount = if (still) stillCount + 1 else 0
         stationary = zuptEnabled && stillCount >= zuptMinSamples
         if (stationary) {
-            velocity = Vec3.ZERO
+            // ZUPT: velocidad nula como medida del Kalman (corrige también posición y sesgo).
+            kf.predict(filter.q, accel, dt, MAX_SPEED)
+            kf.zeroVelocity(ZUPT_SIGMA)
             // ZARU lento (τ ≈ 2 s): el pulso de la mano (7-10 Hz) se promedia casi del todo.
             // Uno rápido metía el temblor en el sesgo del giróscopo, eso inclinaba la actitud en
             // cada giro posterior y la gravedad "se filtraba" como aceleración (deriva sin fin).
             val wMean = Vec3(gxWin.average(), gyWin.average(), gzWin.average())
             if ((wMean - filter.gyroBias).norm() < ZARU_MAX_RATE) filter.zaru(w, ZARU_ALPHA)
-            // En reposo, lo que el acelerómetro mide de más o de menos respecto a la gravedad
-            // esperada (con la actitud del giróscopo) es su sesgo, en el marco del dispositivo.
-            val expected = filter.q.conj().rotate(g0)
-            accelBiasBody = accelBiasBody * 0.99 + (accel - expected) * 0.01
         } else {
-            // Modelo de ruido: random walk de aceleración ~0.05 m/s² -> var crece ~ t³.
-            positionVariance += (0.05 * 0.05) * dt * (1.0 + velocity.norm() * 10)
-            position = position + velocity * dt + linWorld * (0.5 * dt * dt)
-            velocity = velocity + linWorld * dt
-            // Una mano no mueve el móvil a más de ~2 m/s: evita que un error se dispare.
-            val v = velocity.norm()
-            if (v > MAX_SPEED) velocity = velocity * (MAX_SPEED / v)
+            // Una mano no mueve el móvil a más de ~2 m/s: el Kalman lo limita.
+            kf.predict(filter.q, accel, dt, MAX_SPEED)
         }
-        push(InsState(tNs, filter.q, position, velocity, stationary))
+        push(InsState(tNs, filter.q, kf.p, kf.v, stationary))
     }
 
     /** Sesgo del acelerómetro estimado (marco del dispositivo, m/s²). */
-    @Synchronized fun accelBias(): Vec3 = accelBiasBody
+    @Synchronized fun accelBias(): Vec3 = kf.b
 
     private fun push(s: InsState) {
         history.addLast(s)
@@ -216,5 +210,7 @@ class StrapdownIns(
         const val ZARU_MAX_RATE = 0.03
         /** Paso del ZARU por muestra a ~400 Hz (τ ≈ 1/(400·0,0012) ≈ 2 s). */
         const val ZARU_ALPHA = 0.0012
+        /** Incertidumbre de "velocidad nula" en reposo (m/s): el pulso de la mano mueve algo. */
+        const val ZUPT_SIGMA = 0.01
     }
 }

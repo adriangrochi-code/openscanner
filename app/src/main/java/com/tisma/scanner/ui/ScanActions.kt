@@ -31,6 +31,8 @@ interface ScanActions {
     fun setUseMacro(v: Boolean)
     /** Medir distancia con el enfoque (barridos automáticos). */
     fun setFocusDepth(v: Boolean)
+    /** Velocímetro de cámara (flujo óptico + enfoque) para frenar la deriva de la INS. */
+    fun setCameraVelocity(v: Boolean)
     fun setCloudUrl(v: String)
     fun setCloudKey(v: String)
     /** Enviar el último escaneo a Tisma Server y traer la pieza. */

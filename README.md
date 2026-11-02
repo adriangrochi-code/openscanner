@@ -49,6 +49,14 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
   **ráfaga anti-movimiento** toma 4 fotos con 1/4 de exposición, menos arrastre en cada una, y el
   servidor las alinea con la más nítida y las promedia: menos movimiento sin más ruido. Las fotos
   no se recortan, para que la calibración de la cámara sea la misma en todas.
+- **INS con filtro de Kalman y velocímetro de cámara**: posición, velocidad y sesgo del acelerómetro
+  (3 ejes) en un Kalman de 9 estados, corregido por las paradas (ZUPT), por la **velocidad que mide
+  la cámara** (flujo óptico de la vista previa, sin el giro del giróscopo, por la distancia del
+  enfoque) y por el GPS. La brújula sólo corrige el rumbo. Medido en simulación con los errores
+  del Honor: error final 4 cm frente a 19 cm antes.
+- **Superresolución de las ráfagas** en el servidor: el temblor de la mano desplaza cada foto
+  fracciones de píxel; alineadas a resolución completa y combinadas en una rejilla 2× dan
+  +2,5 dB de PSNR frente a la mejor foto sola (prueba sintética).
 - **Precisión de la INS medible**: prueba de quietud en la app (ruido, sesgo, deriva) y
   `tools/ins_accuracy.py`, que mide el error real en movimiento contra las poses de la
   fotogrametría. Incluye ZARU y suavizado entre paradas.

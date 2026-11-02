@@ -210,41 +210,103 @@ def sharpness(gray):
     return cv2.Laplacian(gray, cv2.CV_32F).var() / (gray.var() + 1.0)
 
 
-def burst_merge(paths):
+def align_ecc(ref_gray, gray, coarse=1000):
     """
-    Ráfaga anti-movimiento: alinea las fotos cortas con la más nítida y las promedia.
-    La referencia conserva su geometría completa (sin recorte), así que su calibración no
-    cambia; donde otra foto no cubre (bordes) se usan sólo las que sí cubren.
-    Devuelve (imagen, índice de la referencia) o (None, None).
+    Homografía que lleva la foto a la referencia (para warpPerspective con WARP_INVERSE_MAP).
+    Primero en pequeño (rápido, robusto) y luego refinada a resolución completa: la
+    superresolución necesita ~0,1 px de precisión, y alinear sólo en pequeño deja ~0,5 px.
+    """
+    h, w = ref_gray.shape
+    s = min(1.0, coarse / max(h, w))
+    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5)
+    warp = np.eye(3, dtype=np.float32)
+    _, warp = cv2.findTransformECC(cv2.resize(ref_gray, None, fx=s, fy=s).astype(np.float32),
+                                   cv2.resize(gray, None, fx=s, fy=s).astype(np.float32),
+                                   warp, cv2.MOTION_HOMOGRAPHY, crit, None, 5)
+    S = np.diag([s, s, 1]).astype(np.float32)
+    H = (np.linalg.inv(S) @ warp @ S).astype(np.float32)
+    if s < 1.0:
+        try:
+            _, H = cv2.findTransformECC(ref_gray.astype(np.float32), gray.astype(np.float32), H,
+                                        cv2.MOTION_HOMOGRAPHY, (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 1e-6), None, 3)
+        except cv2.error:
+            pass
+    return H
+
+
+def shift_and_add(imgs, Hs, scale=2):
+    """
+    Superresolución multi-imagen ("shift-and-add"): el temblor de la mano desplaza cada foto de
+    la ráfaga fracciones de píxel; una vez alineadas con precisión, sus píxeles caen en puntos
+    distintos de una rejilla `scale` veces más fina. Se reparten (bilineal) y se normalizan.
+    imgs[0] es la referencia (H = identidad). Huecos: la referencia ampliada. Al final, un
+    realce suave compensa el reparto bilineal.
+    """
+    ref = imgs[0]
+    h, w = ref.shape[:2]
+    H2, W2 = h * scale, w * scale
+    acc = np.zeros((H2 * W2, 3), np.float64)
+    wsum = np.zeros(H2 * W2, np.float64)
+    ys, xs = np.mgrid[0:h, 0:w]
+    pts = np.stack([xs.ravel(), ys.ravel(), np.ones(h * w)]).astype(np.float64)
+    for im, H in zip(imgs, Hs):
+        # Píxel de esta foto -> coordenadas de la referencia -> rejilla fina (centros de píxel).
+        q = np.linalg.inv(H.astype(np.float64)) @ pts
+        X = (q[0] / q[2] + 0.5) * scale - 0.5
+        Y = (q[1] / q[2] + 0.5) * scale - 0.5
+        x0 = np.floor(X).astype(np.int64); y0 = np.floor(Y).astype(np.int64)
+        fx = X - x0; fy = Y - y0
+        cols = im.reshape(-1, 3).astype(np.float64)
+        for dx, dy, wt in ((0, 0, (1 - fx) * (1 - fy)), (1, 0, fx * (1 - fy)), (0, 1, (1 - fx) * fy), (1, 1, fx * fy)):
+            xi = x0 + dx; yi = y0 + dy
+            ok = (xi >= 0) & (xi < W2) & (yi >= 0) & (yi < H2) & (wt > 1e-6)
+            idx = yi[ok] * W2 + xi[ok]
+            wv = wt[ok]
+            wsum += np.bincount(idx, weights=wv, minlength=H2 * W2)
+            for c in range(3):
+                acc[:, c] += np.bincount(idx, weights=wv * cols[ok, c], minlength=H2 * W2)
+    up = cv2.resize(ref, (W2, H2), interpolation=cv2.INTER_CUBIC).reshape(-1, 3).astype(np.float64)
+    good = wsum > 0.3
+    out = up.copy()
+    out[good] = acc[good] / wsum[good, None]
+    out = out.reshape(H2, W2, 3).astype(np.float32)
+    blur = cv2.GaussianBlur(out, (0, 0), 1.0)
+    out = cv2.addWeighted(out, 1.6, blur, -0.6, 0)          # deshace el emborronado del reparto
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def burst_merge(paths, superres=2):
+    """
+    Ráfaga anti-movimiento: alinea las fotos cortas con la más nítida (la referencia conserva su
+    geometría completa: la calibración no cambia) y:
+      * superres > 1: superresolución "shift-and-add" a `superres`× (aprovecha el temblor);
+      * superres <= 1: media (menos ruido, misma resolución).
+    Devuelve (imagen, índice de la referencia, escala) o (None, None, 1).
     """
     imgs = [cv2.imread(str(p)) for p in paths]
     idx = [i for i, im in enumerate(imgs) if im is not None]
     if not idx:
-        return None, None
+        return None, None, 1
     grays = {i: cv2.cvtColor(imgs[i], cv2.COLOR_BGR2GRAY) for i in idx}
     sharp = {i: sharpness(grays[i]) for i in idx}
     ref = max(idx, key=lambda i: sharp[i])
     h, w = grays[ref].shape
-    s = min(1.0, 1000 / max(h, w))
-    small_ref = cv2.resize(grays[ref], None, fx=s, fy=s).astype(np.float32)
-    acc = imgs[ref].astype(np.float32)
-    weight = np.ones((h, w, 1), np.float32)
+    used, Hs = [imgs[ref]], [np.eye(3, dtype=np.float32)]
     for i in idx:
         if i == ref or sharp[i] < 0.6 * sharp[ref]:
-            continue  # una foto de la ráfaga salió movida: no ensuciar la media
-        warp = np.eye(3, dtype=np.float32)
+            continue  # una foto de la ráfaga salió movida: no ensuciar el resultado
         try:
-            _, warp = cv2.findTransformECC(small_ref, cv2.resize(grays[i], None, fx=s, fy=s).astype(np.float32),
-                                           warp, cv2.MOTION_HOMOGRAPHY,
-                                           (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 80, 1e-5), None, 5)
+            Hs.append(align_ecc(grays[ref], grays[i])); used.append(imgs[i])
         except cv2.error:
             continue
-        S = np.diag([s, s, 1]).astype(np.float32)
-        H = np.linalg.inv(S) @ warp @ S  # homografía a resolución completa
-        flags = cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
-        acc += cv2.warpPerspective(imgs[i].astype(np.float32), H, (w, h), flags=flags)
+    if superres > 1 and len(used) >= 3:
+        return shift_and_add(used, Hs, superres), ref, superres
+    acc = np.zeros((h, w, 3), np.float32); weight = np.zeros((h, w, 1), np.float32)
+    flags = cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+    for im, H in zip(used, Hs):
+        acc += cv2.warpPerspective(im.astype(np.float32), H, (w, h), flags=flags)
         weight += cv2.warpPerspective(np.ones((h, w), np.float32), H, (w, h), flags=flags)[..., None]
-    return np.clip(acc / weight, 0, 255).astype(np.uint8), ref
+    return np.clip(acc / np.maximum(weight, 1e-6), 0, 255).astype(np.uint8), ref, 1
 
 
 def focus_stack(group, scan, work):
@@ -266,17 +328,21 @@ def focus_stack(group, scan, work):
     return aif, ref
 
 
-def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, color_norm=True):
+def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, color_norm=True, superres=2):
     color_dir, feat_dir = work / "images", work / "images_feat"
     records = []  # (nombre relativo, frame representativo)
-    n_hdr = n_stack = n_burst = 0
+    n_hdr = n_stack = n_burst = n_sr = 0
     for g in group_brackets(frames, meta):
         if len({r["_focus_target"] for r in g}) > 1:
             img, ref = focus_stack(g, scan, work)
             n_stack += 1
         elif len(g) > 1 and any(r["_burst"] is not None for r in g):
-            img, k = burst_merge([scan / r["file"] for r in g])
-            ref = g[k] if k is not None else g[0]
+            img, k, sc = burst_merge([scan / r["file"] for r in g], superres)
+            ref = dict(g[k] if k is not None else g[0])
+            if sc > 1:
+                # La imagen superresuelta es sc× mayor: su "cámara" para COLMAP también.
+                ref["width"] = str(int(ref["width"]) * sc); ref["height"] = str(int(ref["height"]) * sc)
+                n_sr += 1
             n_burst += 1
         else:
             ref = min(g, key=lambda r: abs(r["_ev"]))  # la de 0 EV como referencia de pose
@@ -299,7 +365,7 @@ def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, c
         f.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(f), enhance_for_features(img, filter_mode, denoise), [cv2.IMWRITE_JPEG_QUALITY, 97])
     print(f"[hdr] {len(frames)} fotos -> {len(records)} imágenes ({n_hdr} fusiones HDR, "
-          f"{n_stack} apilados de enfoque, {n_burst} ráfagas anti-movimiento)")
+          f"{n_stack} apilados de enfoque, {n_burst} ráfagas anti-movimiento, {n_sr} con superresolución)")
     return records
 
 
@@ -359,9 +425,10 @@ def run_sfm(work, session, records, matcher):
     by_cam = defaultdict(list)
     for name, fr in records:
         f = fr.get("_focus") or 0.0
-        by_cam[(fr["camera_id"], round(f / 0.25) * 0.25)].append((name, fr))
-    for (cam, fbucket), items in by_cam.items():
-        lst = work / f"list_{cam}_f{fbucket:.2f}.txt"
+        # También por tamaño: las imágenes superresueltas son otra "cámara" (2× la focal en px).
+        by_cam[(fr["camera_id"], round(f / 0.25) * 0.25, fr["width"])].append((name, fr))
+    for (cam, fbucket, _w), items in by_cam.items():
+        lst = work / f"list_{cam}_f{fbucket:.2f}_{_w}.txt"
         lst.write_text("\n".join(n for n, _ in items) + "\n")
         w, h = int(items[0][1]["width"]), int(items[0][1]["height"])
         params = camera_params(session, cam, w, h)
@@ -634,6 +701,7 @@ def main(argv=None):
     ap.add_argument("--no-clahe", action="store_true", help="(compatibilidad) equivale a --filter none")
     ap.add_argument("--denoise", type=float, default=-1, help="quitar ruido antes de realzar: -1 automático (según el ruido medido), 0 no, >0 fuerza fija")
     ap.add_argument("--no-color-norm", action="store_true", help="no igualar exposición/color entre fotos")
+    ap.add_argument("--superres", type=int, default=2, help="superresolución de las ráfagas (2 = doble; 1 = sólo promediar)")
     ap.add_argument("--matcher", choices=["exhaustive", "sequential"], default="exhaustive")
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
@@ -652,7 +720,7 @@ def main(argv=None):
             print(f"[quality]   aviso: {h}")
     print(f"[load] {scan.name}: {len(frames)} fotos, {session['device']['manufacturer']} {session['device']['model']}")
     records = prepare_images(scan, a.work, frames, meta, "none" if a.no_clahe else a.filter,
-                             a.denoise, not a.no_color_norm)
+                             a.denoise, not a.no_color_norm, a.superres)
     if a.prepare_only:
         return
     if not (shutil.which(COLMAP_EXE) or Path(COLMAP_EXE).exists()):
