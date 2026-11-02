@@ -224,6 +224,8 @@ private fun Viewport(s: UiState, vm: ScanActions, onShare: (File) -> Unit, previ
         // Deja sitio a la cúpula (arriba a la derecha): los datos ópticos van en chips de 2 valores.
         Column(Modifier.align(Alignment.TopStart).padding(start = 8.dp, top = 8.dp, end = 140.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Qué objetivo se ve y cuál dispara a la vez en esta pasada.
+            if (s.rigText.isNotEmpty()) Chip(s.rigText.substringBefore(" — "), Tisma.PurpleText)
             s.opticsText.split(" · ").filter { it.isNotBlank() }.chunked(2).forEach { Chip(it.joinToString(" · ")) }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Chip(if (s.stationary) "● quieto" else "○ en movimiento", if (s.stationary) Tisma.Ok else Tisma.Text)
@@ -329,11 +331,15 @@ private fun QualityTab(s: UiState) {
 private fun CamerasTab(s: UiState, vm: ScanActions) {
     Section("Modo multicámara")
     SettingSwitch(
-        if (s.concurrentSupported) "Cámaras concurrentes" else "Concurrentes (no soportado)",
+        if (s.concurrentSupported) "Permitir cámaras concurrentes" else "Concurrentes (no soportado)",
         s.useConcurrent, enabled = s.concurrentSupported && !s.scanning, onChange = vm::setUseConcurrent,
     )
-    SettingSwitch("Rotar cámaras (${s.rotationIds.joinToString(", ")})", s.rotateCameras,
+    SettingSwitch("Si no se abren a la vez, por turnos", s.rotateCameras,
         enabled = !s.scanning, onChange = vm::setRotateCameras)
+    Section("Objetivos detectados")
+    Hint(s.rolesText.ifEmpty { "—" })
+    Section("Pasada actual")
+    Hint(s.rigText.ifEmpty { "—" })
     Section("Flujos abiertos")
     if (s.openedStreams.isEmpty()) Hint("Ninguno todavía")
     s.openedStreams.forEach { Mono(it) }

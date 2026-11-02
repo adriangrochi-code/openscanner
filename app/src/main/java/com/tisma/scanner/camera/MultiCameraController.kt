@@ -320,7 +320,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             add(emptyList<String>() to concurrentCap)
         }
         for ((physical, maxPixels) in attempts) {
+            // El objetivo de la vista previa va primero: es el "principal" de esta pasada.
             val ids = physical.ifEmpty { listOf(g.deviceId) }
+                .sortedBy { if (it == g.previewPhysicalId) 0 else 1 }
             val readers = LinkedHashMap<String, ImageReader>()
             for (id in ids) {
                 val size = pickJpegSize(id, maxPixels) ?: continue
@@ -336,7 +338,15 @@ class MultiCameraController(context: Context, private val listener: Listener) {
                 it.setOnImageAvailableListener({ rd -> rd.acquireLatestImage()?.close() }, ioHandler)
             }.surface
 
-            val outputs = mutableListOf(OutputConfiguration(streamSurface))
+            // La vista previa puede mostrar un objetivo físico concreto (la macro) en vez del
+            // que elija la cámara lógica. Sólo si en este intento se piden flujos físicos.
+            val previewPhys = g.previewPhysicalId?.takeIf { preview != null && physical.isNotEmpty() && it != g.deviceId }
+            val outputs = mutableListOf(OutputConfiguration(streamSurface).apply {
+                if (previewPhys != null) setPhysicalCameraId(previewPhys)
+            })
+            if (preview != null && g.previewPhysicalId != null && previewPhys == null && physical.isEmpty()) {
+                listener.onLog("La vista previa no puede mostrar #${g.previewPhysicalId}: se ve la cámara #${g.deviceId}")
+            }
             for ((id, r) in readers) {
                 outputs += OutputConfiguration(r.surface).apply {
                     if (physical.isNotEmpty()) setPhysicalCameraId(id)

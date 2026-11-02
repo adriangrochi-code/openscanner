@@ -72,6 +72,8 @@ class ScanScreenshotTest {
         hints = listOf("A 30–50° de altura: falta el sector 255°–360°"),
         readinessText = "Falta (pasada lejos): cobertura 46 % (mín. 75 %)",
         opticsText = "a 24 cm · 0.079 mm/px · nítido 33 mm",
+        rigText = "Vista: principal #2 + ultra gran angular #3 — simultáneas (misma cámara lógica, sincronizadas por hardware)",
+        rolesText = "principal #2 · ultra gran angular #3 · macro #4",
         openedStreams = listOf("#0 back 80° → 4000x3000"),
         cameras = listOf("#0 back 80°", "#1 front 78°", "#2 back 110°", "#3 back 70°"),
     )
@@ -79,10 +81,12 @@ class ScanScreenshotTest {
     @Test fun scanning() = shot("scan_tab", scanning, 0)
 
     @Test fun closePassQualityTab() = shot("quality_tab", scanning.copy(
-        pass = ScanPass.CLOSE, opticsText = "a 12 cm · 0.040 mm/px · nítido 6 mm · apilado 6 planos",
+        pass = ScanPass.CLOSE, rigText = "Vista: macro #4 + principal #2 — por turnos (el móvil no las abre a la vez)", opticsText = "a 12 cm · 0.040 mm/px · nítido 6 mm · apilado 6 planos",
         passCoverage = mapOf(ScanPass.FAR to 0.81, ScanPass.CLOSE to 0.34), ready = true,
         readinessText = "✓ Listo para enviar · detalle cerca 34 %", textureRecent = 0.6,
     ), 1)
+
+    @Test fun camerasTab() = shot("cameras_tab", scanning.copy(scanning = false), 2)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 

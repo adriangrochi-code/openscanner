@@ -13,9 +13,13 @@ import androidx.lifecycle.viewModelScope
 import com.tisma.scanner.camera.CameraInfo
 import com.tisma.scanner.camera.CameraInventory
 import com.tisma.scanner.camera.MultiCameraController
+import com.tisma.scanner.camera.CameraGroup
+import com.tisma.scanner.camera.CameraRoles
+import com.tisma.scanner.camera.Lens
 import com.tisma.scanner.camera.Optics
+import com.tisma.scanner.camera.PassRigPlanner
+import com.tisma.scanner.camera.RigPlan
 import com.tisma.scanner.camera.ScanPass
-import com.tisma.scanner.camera.RigPlanner
 import com.tisma.scanner.ins.InsState
 import com.tisma.scanner.ins.KeyframeSelector
 import com.tisma.scanner.ins.StrapdownIns
@@ -48,9 +52,11 @@ data class UiState(
     val hdr: Boolean = true,
     val torch: Boolean = false,
     val lock3A: Boolean = true,
-    /** Modo "todas las cámaras por turnos": para móviles que no abren varias a la vez. */
-    val rotateCameras: Boolean = false,
-    val rotationIds: List<String> = emptyList(),
+    /** Si la cámara compañera no se puede abrir a la vez, dispararla por turnos. */
+    val rotateCameras: Boolean = true,
+    /** Papel detectado de cada objetivo y cómo se combinan en la pasada actual. */
+    val rolesText: String = "",
+    val rigText: String = "",
     val gpsText: String = "GPS: sin fix",
     val posStdM: Double = 0.0,
     val scanning: Boolean = false,
@@ -130,6 +136,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     @Volatile private var sequenceRunning = false
     private val cameras = MultiCameraController(app, this)
     private var inventory: Map<String, CameraInfo> = emptyMap()
+    private var lenses: List<Lens> = emptyList()
+    private var roles = CameraRoles(null, null, null, null)
+    private var concurrentSets: List<Set<String>> = emptyList()
+    @Volatile private var rigPlan = RigPlan(emptyList(), emptyList(), null, null, RigPlan.Mode.SINGLE)
 
     @Volatile private var session: ScanSession? = null
     /** Escaneo que se está cerrando: sigue aceptando las fotos y metadatos aún en vuelo. */
@@ -151,15 +161,26 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     init {
         imu.start()
         inventory = runCatching { CameraInventory.enumerate(cameraManager) }.getOrDefault(emptyMap())
-        val concurrentSets = CameraInventory.concurrentSets(cameraManager)
+        concurrentSets = CameraInventory.concurrentSets(cameraManager)
+        val public = runCatching { cameraManager.cameraIdList.toSet() }.getOrDefault(emptySet())
+        lenses = inventory.values.map { c ->
+            Lens(
+                id = c.id, back = c.facing == CameraMetadata.LENS_FACING_BACK,
+                logical = c.isLogicalMultiCamera, physicalIds = c.physicalIds, isPublic = c.id in public,
+                pixels = c.jpegSizes.firstOrNull()?.let { it.width.toLong() * it.height } ?: 0L,
+                hfovDeg = c.hfovDeg,
+            )
+        }
+        roles = CameraRoles.detect(lenses)
         updateClockOffsets()
         _state.update {
             it.copy(
                 cameras = inventory.values.map { c -> c.label },
                 concurrentSupported = concurrentSets.any { s -> s.size > 1 },
-                rotationIds = rotationFor(ScanPass.FAR),
+                rolesText = roles.describe(),
             )
         }
+        log("Objetivos: ${roles.describe()}")
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
@@ -194,25 +215,31 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     private fun reopenCameras() {
-        viewModelScope.launch { openRig(null) }
+        viewModelScope.launch { openRig(planCurrentPass().groups) }
     }
 
-    /** Abre el rig completo (single == null) o una única cámara (modo rotativo). */
-    private suspend fun openRig(single: String?) = rigMutex.withLock {
+    /** Recalcula qué cámaras abre la pasada actual (vista previa + compañera). */
+    private fun planCurrentPass(): RigPlan {
+        val plan = PassRigPlanner.plan(activePass, roles, lenses, concurrentSets, _state.value.useConcurrent)
+        rigPlan = plan
+        val name = { id: String? -> when (id) {
+            null -> "—"; roles.main -> "principal #$id"; roles.macro -> "macro #$id"
+            roles.ultrawide -> "ultra gran angular #$id"; roles.tele -> "tele #$id"; else -> "#$id"
+        } }
+        val text = "Vista: ${name(plan.previewId)}" +
+            (plan.companionId?.let { " + ${name(it)}" } ?: "") + " — ${plan.mode.label}"
+        _state.update { it.copy(rigText = text) }
+        return plan
+    }
+
+    /** Abre un conjunto de cámaras; el primer grupo lleva la vista previa. */
+    private suspend fun openRig(groups: List<CameraGroup>) = rigMutex.withLock {
         val tex = previewTexture ?: return@withLock
         run {
             _state.update { it.copy(busy = true) }
-            val groups = if (single != null) {
-                val info = inventory[single]
-                listOf(com.tisma.scanner.camera.CameraGroup(
-                    single, if (info?.isLogicalMultiCamera == true) info.physicalIds.take(3) else emptyList(),
-                    primary = true, concurrent = false,
-                ))
-            } else RigPlanner.plan(
-                inventory, CameraInventory.concurrentSets(cameraManager), _state.value.useConcurrent,
-            )
             if (groups.isEmpty()) { log("No hay cámaras disponibles"); _state.update { it.copy(busy = false) }; return@withLock }
-            val previewSize: Size = cameras.previewSizeFor(groups.first().deviceId)
+            val first = groups.first()
+            val previewSize: Size = cameras.previewSizeFor(first.previewPhysicalId ?: first.deviceId)
             tex.setDefaultBufferSize(previewSize.width, previewSize.height)
             // Una sola Surface por textura: crear una nueva en cada apertura las filtraba.
             val surface = previewSurface ?: Surface(tex).also { previewSurface = it }
@@ -250,15 +277,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
     override fun setPartDepth(cm: Int) = _state.update { it.copy(partDepthCm = cm.coerceIn(1, 30)) }
 
-    /** Cámaras públicas (abribles) adecuadas para una pasada en el modo rotativo. */
-    private fun rotationFor(p: ScanPass): List<String> {
-        val public = cameraManager.cameraIdList.toSet()
-        return p.pickCameras(inventory.values.filter { it.id in public })
-    }
-
     /**
-     * Cambia de pasada (lejos ↔ cerca). Durante el escaneo, re-enfoca a la nueva distancia y
-     * vuelve a bloquear: cada pasada tiene su propio enfoque fijo (y sus propios intrínsecos).
+     * Cambia de pasada (lejos ↔ cerca): reabre las cámaras de esa pasada, así la vista previa
+     * pasa a la principal (lejos) o a la macro (cerca). Al reabrir, AE/AF convergen de nuevo y
+     * sólo después se bloquean (ver MultiCameraController.settled): cada pasada queda con su
+     * propio enfoque fijo y, por tanto, sus propios intrínsecos.
      */
     override fun setPass(p: ScanPass) {
         if (p == activePass || sequenceRunning) return
@@ -266,18 +289,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         selector.minAngleDeg = p.minAngleDeg
         selector.reset()
         _state.update {
-            it.copy(pass = p, rotationIds = rotationFor(p), coverage = coverage.snapshot(),
+            it.copy(pass = p, coverage = coverage.snapshot(),
                 coveragePct = coverage.coverage(), hints = coverage.hints().take(3))
         }
-        if (session == null) return
+        val plan = planCurrentPass()
         sequenceRunning = true
         viewModelScope.launch {
             try {
-                log("Pasada: ${p.label}. Re-enfocando…")
-                cameras.lock3A = false; cameras.refreshRepeating()
-                delay(1500)
-                cameras.lock3A = _state.value.lock3A; cameras.refreshRepeating()
-                Optics.distanceM(cameras.primaryFocusDiopters())?.let { log("Enfocado a %.0f cm".format(it * 100)) }
+                log("Pasada: ${p.label}. ${_state.value.rigText}")
+                openRig(plan.groups)
+                if (session != null) {
+                    delay(1200) // convergencia antes de permitir disparos
+                    Optics.distanceM(cameras.primaryFocusDiopters())?.let { log("Enfocado a %.0f cm".format(it * 100)) }
+                }
             } finally { sequenceRunning = false }
         }
     }
@@ -425,16 +449,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         sequenceRunning = true
         viewModelScope.launch {
             try {
-                if (ui.rotateCameras && ui.rotationIds.size > 1) {
-                    // Pasada por todas las cámaras en la misma pose y vuelta a la principal.
-                    for (id in ui.rotationIds) {
-                        openRig(id)
+                val rig = rigPlan
+                shoot(bracket, plan)
+                if (ui.rotateCameras && rig.separate.isNotEmpty()) {
+                    // La compañera no se puede abrir a la vez: se dispara justo después, desde
+                    // la misma pose (quieto), y se vuelve a la vista de la pasada.
+                    for (g in rig.separate) {
+                        openRig(listOf(g))
                         delay(700) // convergencia de AE/AF
                         shoot(bracket, plan)
                     }
-                    openRig(null)
-                } else {
-                    shoot(bracket, plan)
+                    openRig(rig.groups)
                 }
             } finally {
                 sequenceRunning = false
