@@ -86,24 +86,32 @@ class ScanScreenshotTest {
 
     @Test fun scanning() = shot("scan_tab", scanning, 0)
 
+    @Test fun captureSettings() = shot("settings_capture", scanning, 0, settings = true)
+
     @Test fun closePassQualityTab() = shot("quality_tab", scanning.copy(
         pass = ScanPass.CLOSE, rigText = "Vista: macro #4 + principal #2 — por turnos (el móvil no las abre a la vez)", opticsText = "a 12 cm · 0.040 mm/px · nítido 6 mm · apilado 6 planos",
         passCoverage = mapOf(ScanPass.FAR to 0.81, ScanPass.CLOSE to 0.34), ready = true,
         readinessText = "✓ Listo para enviar · detalle cerca 34 %", textureRecent = 0.6,
-    ), 1)
+    ), 1, settings = true)
 
     @Test fun camerasTab() = shot("cameras_tab", scanning.copy(
         scanning = false,
         cameraChoices = listOf("0" to "principal #0 · 108 MP · 72°", "2" to "ultra gran angular #2 · 5 MP · 108°", "3" to "macro #3 · 2 MP · 80°"),
         previewChoice = mapOf(ScanPass.CLOSE to "3"),
         rigWarning = "Lejos y Cerca usan la misma cámara (principal #0): no se detectó la macro. Elige una en la pestaña Cámaras o comparte el diagnóstico.",
-    ), 2)
+    ), 2, settings = true)
+
+    @Test fun closePassCamera() = shot("close_camera", scanning.copy(
+        pass = ScanPass.CLOSE, rigText = "Vista: macro #3 + principal #0 — por turnos (el móvil no las abre a la vez)",
+        opticsText = "macro foco fijo · a ~4 cm · ≈0.041 mm/px · acércate hasta verla nítida",
+        passCoverage = mapOf(ScanPass.FAR to 0.81, ScanPass.CLOSE to 0.34), textureRecent = 0.6,
+    ), 0)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 
-    private fun shot(name: String, state: UiState, tab: Int) {
+    private fun shot(name: String, state: UiState, tab: Int, settings: Boolean = false) {
         captureRoboImage("build/screenshots/$name.png") {
-            TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, preview = fakeCamera) }
+            TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, openSettings = settings, preview = fakeCamera) }
         }
     }
 }
