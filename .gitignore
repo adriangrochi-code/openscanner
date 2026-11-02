@@ -8,3 +8,4 @@ captures/
 .cxx/
 __pycache__/
 *.apk
+dist_server/
