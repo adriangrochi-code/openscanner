@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installCrashLog()
         // Barras del sistema oscuras, como la barra superior de TISMA.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(0xFF1E1E22.toInt()),
@@ -106,5 +107,28 @@ class MainActivity : ComponentActivity() {
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }, "Exportar escaneo"))
+    }
+
+    /**
+     * Si la app se cierra por un error, el error completo queda en el registro de diagnóstico y en
+     * scans/diagnostico/ultimo_cierre.txt (para poder compartirlo y saber qué pasó).
+     */
+    private fun installCrashLog() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        if (prev is CrashLogger) return
+        Thread.setDefaultUncaughtExceptionHandler(CrashLogger(java.io.File(getExternalFilesDir(null), "scans/diagnostico"), prev))
+    }
+
+    private class CrashLogger(val dir: java.io.File, val prev: Thread.UncaughtExceptionHandler?) : Thread.UncaughtExceptionHandler {
+        override fun uncaughtException(t: Thread, e: Throwable) {
+            runCatching {
+                val text = "Hilo ${t.name}\n" + android.util.Log.getStackTraceString(e)
+                com.tisma.scanner.diag.DiagLog.event("cierre", text)
+                com.tisma.scanner.diag.DiagLog.flush()
+                dir.mkdirs()
+                java.io.File(dir, "ultimo_cierre.txt").writeText(java.util.Date().toString() + "\n" + text)
+            }
+            prev?.uncaughtException(t, e)
+        }
     }
 }

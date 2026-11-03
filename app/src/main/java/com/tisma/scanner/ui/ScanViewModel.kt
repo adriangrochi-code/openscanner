@@ -310,6 +310,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     init {
         runCatching { com.tisma.scanner.diag.DiagLog.start(File(app.getExternalFilesDir(null), "scans/diagnostico")) }
+        // ¿La app se cerró por un error la última vez? Se avisa en el registro (y el detalle queda en el diagnóstico).
+        runCatching {
+            val crash = File(app.getExternalFilesDir(null), "scans/diagnostico/ultimo_cierre.txt")
+            if (crash.exists()) {
+                com.tisma.scanner.diag.DiagLog.event("app", "la vez anterior la app se cerró por un error:\n" + crash.readText().take(4000))
+                crash.renameTo(File(crash.parentFile, "cierre_" + crash.lastModified() + ".txt"))
+                _state.update { it.copy(log = (it.log + "⚠ La app se cerró por un error la última vez (detalle en el registro de diagnóstico)").takeLast(8)) }
+            }
+        }
         imu.start()
         inventory = runCatching { CameraInventory.enumerate(cameraManager) }.getOrDefault(emptyMap())
         concurrentSets = CameraInventory.concurrentSets(cameraManager)
@@ -351,18 +360,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
         _state.update { it.copy(depthModelUrl = prefs.getString("depth_model_url", "") ?: "") }
         refreshDepthModelState()
-        viewModelScope.launch(Dispatchers.IO) {
-            installBundledDepthModel(); refreshDepthModelState()
-            // Con el modelo de IA ya listo, terminar lo que quedó a medias si la app se cerró.
-            resumeUnfinishedScans()
-        }
         cameras.videoMode = _state.value.videoMode
         com.tisma.scanner.diag.DiagLog.extra = {
             "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
                 "escrituras=${pendingWrites.get()} · análisis=${pendingAnalysis.get()} · giro %.2f rad/s".format(imu.gyroRate)
         }
         com.tisma.scanner.diag.DiagLog.event("app", "foco fijo en escaneo: ${cameras.lockFocus} · vista previa estabilizada: ${_state.value.stabilizePreview}")
-        loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
 
     // ------------------------------------------------------------------ segundo plano
@@ -1916,7 +1919,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * los núcleos). Cada foto hecha se anota al momento en deblurred.csv: si la app se cierra,
      * al retomar se sigue por la siguiente.
      */
-    private suspend fun deblurAll(dir: File, jobs: List<Triple<File, Double, Double>>) {
+    private suspend fun deblurAll(dir: File, jobs: List<Triple<File, Double, Double>>,
+                                  threads: Int = Runtime.getRuntime().availableProcessors()) {
         val logFile = File(dir, "deblurred.csv")
         val done = runCatching { logFile.readLines().drop(1).map { it.substringBefore(',') }.toHashSet() }.getOrDefault(HashSet())
         val todo = jobs.filter { it.first.exists() && it.first.relativeTo(dir).invariantSeparatorsPath !in done }
@@ -1928,7 +1932,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         for ((n, job) in todo.withIndex()) {
             val (f, dx, dy) = job
             val r = kotlinx.coroutines.withContext(Dispatchers.Default) {
-                runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy) }.getOrDefault(false)
+                runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy, threads = threads) }.getOrDefault(false)
             }
             if (r) ok++
             logFile.appendText("${f.relativeTo(dir).invariantSeparatorsPath},%.2f,%.2f,%d\n".format(java.util.Locale.US, dx, dy, if (r) 1 else 0))
@@ -1949,7 +1953,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private fun savePending(dir: File, steps: List<String>) {
         val f = File(dir, "pendiente.json")
         if (steps.isEmpty()) { f.delete(); return }
-        runCatching { f.writeText(JSONObject().put("pasos", org.json.JSONArray(steps)).toString()) }
+        val tries = if (f.exists()) resumeAttempts(dir) else 0
+        runCatching { f.writeText(JSONObject().put("pasos", org.json.JSONArray(steps)).put("intentos", tries).toString()) }
     }
 
     /**
@@ -1984,7 +1989,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             if ("nitidez" in steps) {
                 val jobs = runCatching { File(dir, "deblur_pendiente.csv").readLines().mapNotNull { l ->
                     val p = l.split(','); if (p.size < 3) null else Triple(File(dir, p[0]), p[1].toDouble(), p[2].toDouble()) } }.getOrDefault(emptyList())
-                deblurAll(dir, jobs)
+                // Al retomar, la app acaba de abrir (cámara, interfaz): se dejan núcleos libres.
+                deblurAll(dir, jobs, if (resumed) maxOf(1, Runtime.getRuntime().availableProcessors() - 3)
+                    else Runtime.getRuntime().availableProcessors())
                 done("nitidez")
             }
             if ("zip" in steps) {
@@ -2010,11 +2017,30 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val pending = base.listFiles { f -> f.isDirectory && File(f, "pendiente.json").exists() }?.sortedBy { it.name }.orEmpty()
         if (pending.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+            // Sin prisa: primero que la app y la cámara terminen de arrancar.
+            delay(RESUME_DELAY_MS)
             for (dir in pending) {
-                log("Retomando ${dir.name}: ${pendingSteps(dir).joinToString()}")
+                // Antibucle: si retomar este escaneo ya cerró la app dos veces, se deja lo pesado
+                // (malla con IA, nitidez) y sólo se termina lo seguro (el .zip).
+                val tries = resumeAttempts(dir) + 1
+                setResumeAttempts(dir, tries)
+                if (tries > MAX_RESUME_ATTEMPTS) {
+                    val skipped = pendingSteps(dir).filter { it != "zip" }
+                    if (skipped.isNotEmpty()) {
+                        log("Retomar ${dir.name} cerró la app $MAX_RESUME_ATTEMPTS veces: se omite ${skipped.joinToString()}")
+                        savePending(dir, pendingSteps(dir).filter { it == "zip" })
+                    }
+                }
+                log("Retomando ${dir.name} (intento $tries): ${pendingSteps(dir).joinToString()}")
                 processScan(dir, resumed = true)
             }
         }
+    }
+
+    private fun resumeAttempts(dir: File) = runCatching { JSONObject(File(dir, "pendiente.json").readText()).optInt("intentos", 0) }.getOrDefault(0)
+    private fun setResumeAttempts(dir: File, n: Int) {
+        val f = File(dir, "pendiente.json")
+        runCatching { f.writeText(JSONObject(f.readText()).put("intentos", n).toString()) }
     }
 
     /** Criterios mínimos antes de gastar cómputo en la nube. */
@@ -2091,6 +2117,25 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         writer.shutdown()
     }
 
+    // Al FINAL de la construcción: los hilos de fondo arrancan cuando ya existen todas las piezas
+    // (antes arrancaban en medio y, si llegaban primero a una que aún no existía, la app se cerraba
+    // al abrirla: una carrera que pasaba más con la app "caliente", al volver a abrirla).
+    init {
+        // En el registro de diagnóstico, cada segundo: cómo va la reconstrucción en vivo (si la vista
+        // previa sale vacía, aquí se ve si faltaron puntos, trozos o poses).
+        val baseExtra = com.tisma.scanner.diag.DiagLog.extra
+        com.tisma.scanner.diag.DiagLog.extra = {
+            baseExtra() + if (session != null) " · en vivo: ${live.pointCount()} puntos, ${live.fragments().size} trozos, " +
+                "${live.keyframeCount} vistas, ${depthShots.size} vistas IA, distancia %.2f m".format(orbitDist) else ""
+        }
+        loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
+        viewModelScope.launch(Dispatchers.IO) {
+            installBundledDepthModel(); refreshDepthModelState()
+            // Con el modelo de IA ya listo, terminar lo que quedó a medias si la app se cerró.
+            resumeUnfinishedScans()
+        }
+    }
+
     companion object {
         val HDR_EV = listOf(-2, 0, 2)
         const val MIN_COVERAGE = 0.75
@@ -2109,6 +2154,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
         const val STEADY_GYRO = 0.25
         const val STEADY_WAIT_MS = 600L
+        /** Retomar un escaneo a medias: espera tras abrir la app y máximo de intentos (antibucle). */
+        const val RESUME_DELAY_MS = 6000L
+        const val MAX_RESUME_ATTEMPTS = 2
         /** Vídeo 360: un fotograma clave cada ~3° de giro o 1,5 cm, como mucho 4 por segundo. */
         const val VIDEO_MIN_ANGLE_DEG = 3.0
         const val VIDEO_MIN_TRANSLATION_M = 0.015
