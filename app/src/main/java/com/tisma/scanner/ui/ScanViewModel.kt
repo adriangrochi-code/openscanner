@@ -138,6 +138,8 @@ data class UiState(
     val localModel: com.tisma.scanner.recon.LivePointCloud.Fragment? = null,
     val localStl: File? = null,
     val localBusy: Boolean = false,
+    /** El modelo del móvil ya incluye la IA de profundidad (si no, es la malla rápida). */
+    val localAi: Boolean = false,
     /** IA de profundidad (Depth Anything 3 Small) para el modelo del móvil. */
     val useDepthAi: Boolean = true,
     val depthModelReady: Boolean = false,
@@ -977,7 +979,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val gw = MultiCameraController.KF_W; val gh = MultiCameraController.KF_H
         model.use { m ->
             for ((i, s) in shots.withIndex()) {
-                _state.update { it.copy(progressText = "Profundidad con IA ${i + 1}/${shots.size}") }
+                progress("Profundidad con IA ${i + 1}/${shots.size}", (i + 1) * 100 / shots.size)
                 val bmp = android.graphics.BitmapFactory.decodeByteArray(s.jpeg, 0, s.jpeg.size) ?: continue
                 val pred = runCatching { m.predict(bmp) }.getOrNull(); bmp.recycle()
                 if (pred == null) continue
@@ -994,33 +996,47 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         return out
     }
 
+    /** Progreso de un trabajo largo: en la app y en la notificación del procesado en segundo plano. */
+    private fun progress(text: String, percent: Int = -1) {
+        _state.update { it.copy(progressText = text) }
+        if (text.isNotEmpty()) com.tisma.scanner.ProcessingService.update(getApplication(), text, percent)
+    }
+
+    /**
+     * Construye el modelo del móvil con lo reconstruido en vivo (y la IA de profundidad si se
+     * pide) y lo deja en la revisión. Corre en el hilo de la reconstrucción.
+     */
+    private fun buildModel(withAi: Boolean, resolution: Int, label: String): Boolean {
+        val t0 = SystemClock.uptimeMillis()
+        val dense = if (withAi) aiDepthViews() else emptyList()
+        if (withAi && dense.isEmpty()) return false
+        val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = resolution, dense = dense) { p ->
+            progress("$label %d %%".format((p * 100).toInt()), (p * 100).toInt())
+        } ?: return false
+        val dir = lastScanDir ?: getApplication<Application>().getExternalFilesDir(null)!!
+        val stl = File(dir, "pieza_movil.stl")
+        runCatching { model.writeStl(stl); model.writePly(File(dir, "pieza_movil.ply")) }
+        log("$label: ${model.triangleCount} triángulos en %.1f s".format((SystemClock.uptimeMillis() - t0) / 1000.0) +
+            if (dense.isNotEmpty()) " · ${dense.size} vistas con IA" else "")
+        _state.update { it.copy(localModel = model.asFragment(), localStl = stl, localAi = dense.isNotEmpty()) }
+        return true
+    }
+
     /** Carpeta del último escaneo (para guardar el modelo local junto a él). */
     @Volatile private var lastScanDir: File? = null
 
     override fun buildLocalModel() {
         if (_state.value.localBusy || _state.value.scanning) return
-        _state.update { it.copy(localBusy = true, progressText = "Creando modelo en el móvil…") }
+        _state.update { it.copy(localBusy = true) }
         reconExec.execute {
             try {
-                val t0 = SystemClock.uptimeMillis()
-                val dense = if (_state.value.useDepthAi) aiDepthViews() else emptyList()
-                val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = 128, dense = dense) { p ->
-                    _state.update { it.copy(progressText = "Creando modelo en el móvil %d %%".format((p * 100).toInt())) }
-                }
-                if (model == null) {
-                    _state.update { it.copy(localBusy = false, progressText = "",
-                        cloudStatus = "✗ No hay suficiente superficie: rodea la pieza a dos alturas") }
-                    return@execute
-                }
-                val dir = lastScanDir ?: getApplication<Application>().getExternalFilesDir(null)!!
-                val stl = File(dir, "pieza_movil.stl")
-                model.writeStl(stl); model.writePly(File(dir, "pieza_movil.ply"))
-                log("Modelo en el móvil: ${model.triangleCount} triángulos en ${(SystemClock.uptimeMillis() - t0) / 1000} s")
-                _state.update { it.copy(localModel = model.asFragment(), localStl = stl, localBusy = false, progressText = "",
-                    cloudStatus = "✓ Modelo creado en el móvil · ${model.triangleCount / 1000}k triángulos") }
+                val ai = _state.value.useDepthAi && _state.value.depthModelReady
+                val ok = (ai && buildModel(true, 128, "Malla con IA")) || buildModel(false, 128, "Malla en el móvil")
+                _state.update { it.copy(cloudStatus = if (ok) "✓ Modelo creado en el móvil" else "✗ No hay suficiente superficie: rodea la pieza a dos alturas") }
             } catch (e: Throwable) {
                 log("Modelo en el móvil: error $e")
-                _state.update { it.copy(localBusy = false, progressText = "") }
+            } finally {
+                _state.update { it.copy(localBusy = false) }; progress("")
             }
         }
     }
@@ -1419,7 +1435,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cards.clear(); lastCardDir = null
         depthShots.clear(); lastDepthDir = null
         reconExec.execute { live.reset(); publishCloud() }
-        _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null, localModel = null, localStl = null) }
+        _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null, localModel = null, localStl = null, localAi = false) }
         lastScanDir = s.dir
         lastInstruction = null
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
@@ -1442,17 +1458,28 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun stopScan() {
         val s = session ?: return
         com.tisma.scanner.diag.DiagLog.event("app", "detener escaneo")
-        // Última etapa de color con todo y vista previa guardada junto al escaneo.
+        // Lo que tarda va en segundo plano, protegido por un servicio en primer plano con notificación.
+        com.tisma.scanner.ProcessingService.start(getApplication(), "Guardando el escaneo…")
+        val reconDone = kotlinx.coroutines.CompletableDeferred<Unit>()
         reconExec.execute {
-            live.colorize(all = true); publishCloud()
-            if (live.pointCount() > 0) {
-                val f = File(s.dir, "preview_cloud.ply")
-                val o = File(s.dir, "preview_surface.obj")
-                runCatching { live.writePly(f); live.writeObj(o) }.onSuccess {
-                    _state.update { st -> st.copy(cloudPly = f, surfaceObj = o) }
-                    log("Vista previa 3D: ${live.pointCount()} puntos, ${live.fragments().size} trozos de superficie")
+            try {
+                live.colorize(all = true); publishCloud()
+                if (live.pointCount() > 0) {
+                    val f = File(s.dir, "preview_cloud.ply")
+                    val o = File(s.dir, "preview_surface.obj")
+                    runCatching { live.writePly(f); live.writeObj(o) }.onSuccess {
+                        _state.update { st -> st.copy(cloudPly = f, surfaceObj = o) }
+                        log("Vista previa 3D: ${live.pointCount()} puntos, ${live.fragments().size} trozos de superficie")
+                    }
                 }
-            }
+                // 1) Malla rápida (segundos): lo primero que se ve en la revisión.
+                if (live.fragments().size >= 2) buildModel(false, 96, "Malla rápida")
+                // 2) Malla con IA de profundidad (minutos): reemplaza a la rápida cuando termina.
+                if (_state.value.useDepthAi && _state.value.depthModelReady && depthShots.isNotEmpty())
+                    buildModel(true, 128, "Malla con IA")
+            } catch (e: Throwable) {
+                log("Modelo en el móvil: error $e")
+            } finally { reconDone.complete(Unit) }
         }
         // La sesión pasa a "cerrándose": las fotos de la última ráfaga aún llegan y se guardan.
         stopping = s
@@ -1462,14 +1489,16 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.lock3A = false; cameras.refreshRepeating()
         pendingCal?.let { applyAutoCalibration(it); pendingCal = null }
         _state.update { it.copy(scanning = false, busy = true) }
-        viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { finish(s) }
+        viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { finish(s, reconDone) }
     }
 
     /** Espera a lo que queda en vuelo y cierra. NonCancellable: salir de la app no corta el cierre. */
-    private suspend fun finish(s: ScanSession) {
+    private suspend fun finish(s: ScanSession, reconDone: kotlinx.coroutines.Deferred<Unit>) {
         delay(800) // últimos JPEG del HAL
         val deadline = SystemClock.uptimeMillis() + 8000
         while ((pendingWrites.get() > 0 || pendingAnalysis.get() > 0) && SystemClock.uptimeMillis() < deadline) delay(50)
+        // Primero las mallas (lo que se mira); luego la nitidez, que se lleva toda la CPU.
+        reconDone.await()
         if (_state.value.deblurMotion) deblurAll(s) else deblurJobs.clear()
         deblurTimes.clear()
         runCatching { s.writeQualitySummary(qualitySummary()) }
@@ -1477,7 +1506,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         stopping = null
         val zip = runCatching { s.zip() }.getOrNull()
         log("Escaneo guardado: ${s.imageCount.get()} imágenes en ${s.dir.absolutePath}")
-        _state.update { it.copy(busy = false, lastZip = zip) }
+        _state.update { it.copy(busy = false, lastZip = zip, progressText = "") }
+        com.tisma.scanner.ProcessingService.stop(getApplication())
     }
 
     /** Barrido de foco: mantener el móvil quieto (mejor apoyado) ~1-2 s. */
@@ -1675,7 +1705,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     .onFailure { log("Error guardando imagen: ${it.message}") }
                 val vec = motionBlurVec(cameraId, t, width)
                 val blurPx = vec?.let { kotlin.math.hypot(it.first, it.second) } ?: 0.0
-                if (vec != null && _state.value.deblurMotion && blurPx >= com.tisma.scanner.quality.MotionDeblur.MIN_PX &&
+                if (vec != null && _state.value.deblurMotion && blurPx >= com.tisma.scanner.quality.MotionDeblur.minPx(width) &&
                     blurPx <= com.tisma.scanner.quality.MotionDeblur.MAX_PX) {
                     deblurJobs += Triple(File(s.dir, "images/$cameraId/$t.jpg"), vec.first, vec.second)
                     deblurTimes += t
@@ -1790,10 +1820,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val done = java.util.concurrent.atomic.AtomicInteger()
         val ok = java.util.concurrent.atomic.AtomicInteger()
         val log = java.util.Collections.synchronizedList(ArrayList<String>())
-        _state.update { it.copy(progressText = "Mejorando nitidez 0/${jobs.size}") }
+        progress("Mejorando nitidez 0/${jobs.size}", 0)
         val t0 = SystemClock.uptimeMillis()
         kotlinx.coroutines.coroutineScope {
-            val gate = kotlinx.coroutines.sync.Semaphore(2)
+            // De a una: cada foto ya usa todos los núcleos (franjas en paralelo) y así la memoria es la de una.
+            val gate = kotlinx.coroutines.sync.Semaphore(1)
             for ((f, dx, dy) in jobs) launch(Dispatchers.Default) {
                 gate.acquire()
                 try {
@@ -1802,7 +1833,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     log += "${f.relativeTo(s.dir).invariantSeparatorsPath},%.2f,%.2f,%d".format(java.util.Locale.US, dx, dy, if (r) 1 else 0)
                 } finally { gate.release() }
                 val n = done.incrementAndGet()
-                _state.update { it.copy(progressText = "Mejorando nitidez $n/${jobs.size}") }
+                progress("Mejorando nitidez $n/${jobs.size}", n * 100 / jobs.size)
             }
         }
         runCatching { File(s.dir, "deblurred.csv").writeText("file,blur_dx_px,blur_dy_px,applied\n" + log.joinToString("\n") + "\n") }

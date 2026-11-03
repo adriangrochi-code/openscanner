@@ -16,8 +16,14 @@ import kotlin.math.sqrt
  * [JpegDeblur].
  */
 object MotionDeblur {
-    /** Por debajo no hay nada que arreglar; por encima la foto no se recupera bien. */
-    const val MIN_PX = 1.5
+    /**
+     * Por debajo no hace falta (px a la resolución de la reconstrucción, 3200): el detalle ya
+     * llega a los puntos; por encima de MAX la foto no se recupera bien.
+     */
+    const val MIN_REF_PX = 2.5
+    const val REF_WIDTH = 3200.0
+    /** El mínimo para una foto de este ancho. */
+    fun minPx(width: Int) = MIN_REF_PX * maxOf(1.0, width / REF_WIDTH)
     const val MAX_PX = 15.0
 
     /**
@@ -72,6 +78,99 @@ object MotionDeblur {
         }
         return est
     }
+
+    /**
+     * Igual que [deconvolve] pero rápido: la imagen se rodea de un margen (copia del borde) del
+     * tamaño del núcleo, así el bucle interno no comprueba límites, y cada desplazamiento del
+     * núcleo es un salto fijo en el array. Mismo resultado.
+     */
+    fun deconvolveFast(obs: FloatArray, w: Int, h: Int, kernel: List<IntArray>, iterations: Int = ITERATIONS): FloatArray {
+        val m = maxOf(1, kernel.maxOf { maxOf(kotlin.math.abs(it[0]), kotlin.math.abs(it[1])) })
+        val W = w + 2 * m; val H = h + 2 * m
+        val n = kernel.size; val inv = 1f / n
+        val offs = IntArray(n) { kernel[it][1] * W + kernel[it][0] }
+        val est = FloatArray(W * H); val ratio = FloatArray(W * H)
+        val ob = FloatArray(w * h) { obs[it] }
+        for (y in 0 until h) for (x in 0 until w) est[(y + m) * W + x + m] = maxOf(obs[y * w + x], 1f)
+        fun pad(a: FloatArray) {
+            for (y in m until m + h) {
+                val row = y * W
+                val l = a[row + m]; val r = a[row + m + w - 1]
+                for (x in 0 until m) { a[row + x] = l; a[row + m + w + x] = r }
+            }
+            for (y in 0 until m) {
+                System.arraycopy(a, m * W, a, y * W, W)
+                System.arraycopy(a, (m + h - 1) * W, a, (m + h + y) * W, W)
+            }
+        }
+        repeat(iterations) {
+            pad(est)
+            for (y in 0 until h) {
+                var i = (y + m) * W + m; var o = y * w
+                for (x in 0 until w) {
+                    var sum = 0f
+                    for (k in 0 until n) sum += est[i - offs[k]]
+                    ratio[i] = ob[o] / maxOf(sum * inv, 1e-3f)
+                    i++; o++
+                }
+            }
+            pad(ratio)
+            for (y in 0 until h) {
+                var i = (y + m) * W + m
+                for (x in 0 until w) {
+                    var sum = 0f
+                    for (k in 0 until n) sum += ratio[i + offs[k]]
+                    val c = sum * inv
+                    val e = est[i] * (if (c < 0.5f) 0.5f else if (c > 2f) 2f else c)
+                    est[i] = if (e < 0f) 0f else if (e > 255f) 255f else e
+                    i++
+                }
+            }
+        }
+        val out = FloatArray(w * h)
+        for (y in 0 until h) System.arraycopy(est, (y + m) * W + m, out, y * w, w)
+        return out
+    }
+
+    /**
+     * Imagen ARGB completa: corrige la LUMINANCIA por franjas EN PARALELO (todos los núcleos) y
+     * suma la misma corrección a R, G y B (el color no cambia). Devuelve los píxeles nuevos.
+     */
+    fun deblurArgb(px: IntArray, w: Int, h: Int, kernel: List<IntArray>, iterations: Int = ITERATIONS,
+                   threads: Int = Runtime.getRuntime().availableProcessors(), bandRows: Int = 192): IntArray {
+        val out = IntArray(px.size)
+        // Margen: lo que "ve" el núcleo en las iteraciones (con margen extra, el resultado es igual al de toda la imagen).
+        val reach = kernel.maxOf { kotlin.math.abs(it[1]) }
+        val margin = reach * iterations * 2 + 4
+        val bands = (0 until h step bandRows).toList()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(maxOf(1, threads))
+        try {
+            val futures = bands.map { y0 ->
+                pool.submit {
+                    val rows = minOf(bandRows, h - y0)
+                    val a = maxOf(0, y0 - margin); val b = minOf(h, y0 + rows + margin)
+                    val lum = FloatArray(w * (b - a))
+                    for (y in a until b) for (x in 0 until w) {
+                        val c = px[y * w + x]
+                        lum[(y - a) * w + x] = 0.299f * ((c shr 16) and 0xFF) + 0.587f * ((c shr 8) and 0xFF) + 0.114f * (c and 0xFF)
+                    }
+                    val fixed = deconvolveFast(lum, w, b - a, kernel, iterations)
+                    for (y in y0 until y0 + rows) for (x in 0 until w) {
+                        val i = y * w + x; val c = px[i]
+                        val R = (c shr 16) and 0xFF; val G = (c shr 8) and 0xFF; val B = c and 0xFF
+                        val d = fixed[(y - a) * w + x] - lum[(y - a) * w + x]
+                        out[i] = (c and (0xFF shl 24)) or ((R + d).toInt().coerceIn(0, 255) shl 16) or
+                            ((G + d).toInt().coerceIn(0, 255) shl 8) or (B + d).toInt().coerceIn(0, 255)
+                    }
+                }
+            }
+            futures.forEach { it.get() }
+        } finally { pool.shutdown() }
+        return out
+    }
+
+    /** Iteraciones de Richardson-Lucy (medido: 6 da casi toda la mejora de 10 en la mitad de tiempo). */
+    const val ITERATIONS = 6
 
     /** Aplica [deconvolve] a una imagen completa por bandas (memoria acotada). */
     fun deconvolveBands(lum: (y0: Int, rows: Int) -> FloatArray, w: Int, h: Int, kernel: List<IntArray>,

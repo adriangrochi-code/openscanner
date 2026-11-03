@@ -961,8 +961,14 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Tu pieza", color = Tisma.Text, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                    Text(if (s.localModel != null) "Modelo hecho en el móvil · arrastra para girarlo" else "Vista previa · arrastra para girarla",
-                        color = Tisma.TextDim, fontSize = 13.sp)
+                    Text(when {
+                        s.localModel != null && s.localAi -> "Malla con IA · arrastra para girarla"
+                        s.localModel != null -> "Malla rápida · arrastra para girarla"
+                        else -> "Vista previa · arrastra para girarla"
+                    }, color = Tisma.TextDim, fontSize = 13.sp)
+                    // Lo que sigue en segundo plano (puedes salir de la app: hay una notificación).
+                    if (s.progressText.isNotEmpty()) Text(s.progressText + " · sigue aunque salgas de la app",
+                        color = Tisma.Warn, fontSize = 12.sp)
                 }
                 RoundIcon("✕", "Cerrar", onClose)
             }

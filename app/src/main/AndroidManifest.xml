@@ -4,6 +4,11 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Enviar escaneos a Tisma Server (sólo HTTPS: el tráfico en claro está bloqueado). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Procesar el escaneo en segundo plano (malla con IA, nitidez, .zip) sin que Android cierre la app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Necesario en Android 12+ para leer IMU por encima de 200 Hz. -->
@@ -15,6 +20,7 @@
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
     <application
+        android:largeHeap="true"
         android:label="@string/app_name"
         android:icon="@android:drawable/ic_menu_camera"
         android:theme="@android:style/Theme.Material.NoActionBar">
@@ -38,5 +44,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <service
+            android:name=".ProcessingService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

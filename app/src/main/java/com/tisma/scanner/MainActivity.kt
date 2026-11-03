@@ -34,7 +34,7 @@ class MainActivity : ComponentActivity() {
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         cameraGranted.value = res[Manifest.permission.CAMERA] == true || hasCamera()
-        val loc = res[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val loc = res[Manifest.permission.ACCESS_FINE_LOCATION] == true || hasLocation()
         if (cameraGranted.value) vm.onLocationPermission(loc)
     }
 
@@ -61,13 +61,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         cameraGranted.value = hasCamera()
-        if (!cameraGranted.value || !hasLocation()) {
-            permissions.launch(arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ))
-        }
+        // Se piden juntos los que falten (la notificación es para ver el progreso del procesado
+        // en segundo plano, Android 13+).
+        val wanted = listOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION) +
+            (if (android.os.Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList())
+        val missing = wanted.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
         if (cameraGranted.value) vm.onLocationPermission(hasLocation())
         setContent {
             TismaTheme {
