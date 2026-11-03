@@ -124,12 +124,14 @@ data class UiState(
     val videoFrames: Int = 0,
     /** En el último segundo se saltaron fotogramas por ir demasiado rápido. */
     val videoTooFast: Boolean = false,
-    /** Nube en vivo (vista previa): xyz intercalados y colores (0 = aún sin color). */
-    val cloudXyz: FloatArray = FloatArray(0),
-    val cloudColors: IntArray = IntArray(0),
-    val cloudColored: Int = 0,
-    /** PLY de la vista previa del último escaneo. */
+    /** La pieza en vivo como superficie (trozos con textura) y nº de puntos triangulados. */
+    val surface: List<com.tisma.scanner.recon.LivePointCloud.Fragment> = emptyList(),
+    val cloudPoints: Int = 0,
+    /** Vista previa del último escaneo: superficie (.obj) y nube (.ply). */
     val cloudPly: File? = null,
+    val surfaceObj: File? = null,
+    /** Indicación grande de la grabación (estable ~1 s para que no parpadee). */
+    val instruction: Instruction? = null,
     /** Guía en vivo de la cobertura (anillo actual, hueco y sentido de giro). */
     val guide: CoverageMap.Guidance? = null,
     /** Aviso de la última foto a mano (p.ej. salió movida). */
@@ -881,7 +883,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
                     MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
                 // Etapa 2 (color) cada pocos fotogramas, para los puntos que ya no se ven.
-                if (live.keyframeCount % 4 == 0) live.colorize()
                 com.tisma.scanner.diag.DiagLog.max("recon_ms", (System.nanoTime() - t0) / 1_000_000)
                 publishCloud()
             } catch (e: Exception) {
@@ -891,8 +892,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     private fun publishCloud() {
-        val (xyz, col) = live.snapshot()
-        _state.update { it.copy(cloudXyz = xyz, cloudColors = col, cloudColored = col.count { c -> c != 0 }) }
+        val frs = live.fragments(); val n = live.pointCount()
+        _state.update { it.copy(surface = frs, cloudPoints = n) }
     }
 
     @Volatile private var lastVideoState: InsState? = null
@@ -1154,7 +1155,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         lastVideoState = null; lastVideoSaveMs = 0; videoKept.set(0); videoFast.set(0)
         orbitDist = 0.0
         reconExec.execute { live.reset(); publishCloud() }
-        _state.update { it.copy(cloudPly = null) }
+        _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null) }
+        lastInstruction = null
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
         stackTriggers.clear(); coveredShots.clear(); exposures.clear()
         synchronized(recentTexture) { recentTexture.clear() }
@@ -1180,9 +1182,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             live.colorize(all = true); publishCloud()
             if (live.pointCount() > 0) {
                 val f = File(s.dir, "preview_cloud.ply")
-                runCatching { live.writePly(f) }.onSuccess {
-                    _state.update { st -> st.copy(cloudPly = f) }
-                    log("Vista previa 3D: ${live.pointCount()} puntos (preview_cloud.ply)")
+                val o = File(s.dir, "preview_surface.obj")
+                runCatching { live.writePly(f); live.writeObj(o) }.onSuccess {
+                    _state.update { st -> st.copy(cloudPly = f, surfaceObj = o) }
+                    log("Vista previa 3D: ${live.pointCount()} puntos, ${live.fragments().size} trozos de superficie")
                 }
             }
         }
@@ -1318,6 +1321,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     /** Bucle a ~100 Hz: refresca la UI, guarda trayectoria y decide disparos automáticos. */
     private var lastFastCheck = 0L
+    @Volatile private var lastInstruction: Instruction? = null
+    private var lastInstructionMs = 0L
 
     private suspend fun insLoop() {
         var lastUi = 0L
@@ -1351,9 +1356,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 val relAz = coverage.relativeAz(liveAz)
                 val guide = if (s != null) coverage.guidance(relAz, liveEl) else null
                 val fast = if (now - lastFastCheck >= 1000) { lastFastCheck = now; videoFast.getAndSet(0) > 2 } else null
+                val cand = if (s != null && _state.value.videoMode)
+                    captureInstruction(coverage.rings, guide, videoKept.get(), fast ?: _state.value.videoTooFast) else null
+                val prevIns = lastInstruction
+                // Cambia como mucho cada 1,2 s, salvo avisos y "listo" (inmediatos).
+                val instruction = if (cand == null || prevIns == null || cand == prevIns ||
+                    cand.tone == Instruction.Tone.WARN || cand.tone == Instruction.Tone.DONE || now - lastInstructionMs > 1200) {
+                    if (cand != prevIns) lastInstructionMs = now
+                    lastInstruction = cand; cand
+                } else prevIns
                 _state.update {
                     it.copy(
                         guide = guide,
+                        instruction = instruction,
                         videoFrames = videoKept.get(),
                         videoTooFast = fast ?: it.videoTooFast,
                         liveAzDeg = relAz,

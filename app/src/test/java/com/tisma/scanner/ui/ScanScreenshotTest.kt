@@ -101,35 +101,55 @@ class ScanScreenshotTest {
     @Test fun capturing() = shot("capturing", scanning.copy(capturing = true, videoMode = false), 0)
 
     @Test fun video360() = shot("video360", scanning.copy(
-        videoMode = true, videoFrames = 87, liveAzDeg = 150.0, liveElDeg = 38.0,
+        videoMode = true, videoFrames = 87, liveAzDeg = 150.0, liveElDeg = 38.0, coveragePct = 0.31, storedMb = 96.0,
         guide = com.tisma.scanner.quality.CoverageMap.Guidance(1, 0.46, 1, 165.0, 255.0, null),
-        cloudXyz = demoCloud().first, cloudColors = demoCloud().second, cloudColored = 900,
+        instruction = Instruction("→", "Sigue hacia la derecha", Instruction.Tone.OK),
+        surface = demoSurface(),
     ), 0)
-
-    /** Nube de prueba: caja de 6 cm, mitad pintada (como a mitad de la etapa de color). */
-    private fun demoCloud(): Pair<FloatArray, IntArray> {
-        val r = java.util.Random(1); val n = 1800
-        val xyz = FloatArray(n * 3); val col = IntArray(n)
-        for (i in 0 until n) {
-            val a = r.nextFloat() * 0.06f - 0.03f; val b = r.nextFloat() * 0.04f
-            when (i % 5) {
-                0 -> { xyz[3 * i] = 0.03f; xyz[3 * i + 1] = a; xyz[3 * i + 2] = b }
-                1 -> { xyz[3 * i] = -0.03f; xyz[3 * i + 1] = a; xyz[3 * i + 2] = b }
-                2 -> { xyz[3 * i] = a; xyz[3 * i + 1] = 0.03f; xyz[3 * i + 2] = b }
-                3 -> { xyz[3 * i] = a; xyz[3 * i + 1] = -0.03f; xyz[3 * i + 2] = b }
-                else -> { xyz[3 * i] = a; xyz[3 * i + 1] = r.nextFloat() * 0.06f - 0.03f; xyz[3 * i + 2] = 0.04f }
-            }
-            col[i] = if (i < n / 2) (0xFF000000.toInt() or ((120 + i % 90) shl 16) or (80 shl 8) or 60) else 0
-        }
-        return xyz to col
-    }
 
     @Test fun video360TooFast() = shot("video360_fast", scanning.copy(
-        videoMode = true, videoFrames = 12, videoTooFast = true, liveAzDeg = 40.0, liveElDeg = 38.0,
+        videoMode = true, videoFrames = 12, videoTooFast = true, liveAzDeg = 40.0, liveElDeg = 38.0, coveragePct = 0.08,
         guide = com.tisma.scanner.quality.CoverageMap.Guidance(1, 0.2, 1, 60.0, 360.0, null),
+        instruction = Instruction("‖", "Más despacio", Instruction.Tone.WARN),
     ), 0)
 
-    @Test fun video360Idle() = shot("video360_idle", scanning.copy(scanning = false, videoMode = true), 0)
+    @Test fun video360Idle() = shot("video360_idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams, videoMode = true), 0)
+
+    @Test fun video360Review() = shot("video360_review", scanning.copy(
+        scanning = false, videoMode = true, surface = demoSurface(), lastZip = File("scan.zip"),
+    ), 0, review = true)
+
+    /** Pieza de prueba: caja de 6×6×4 cm en trozos con una textura de cuadros (como el tapete). */
+    private fun demoSurface(): List<com.tisma.scanner.recon.LivePointCloud.Fragment> {
+        val tw = 32; val th = 32
+        val faces = listOf(
+            Triple(com.tisma.scanner.ins.Vec3(0.03, 0.0, 0.02), com.tisma.scanner.ins.Vec3(0.0, 1.0, 0.0), com.tisma.scanner.ins.Vec3(0.0, 0.0, 1.0)),
+            Triple(com.tisma.scanner.ins.Vec3(-0.03, 0.0, 0.02), com.tisma.scanner.ins.Vec3(0.0, 1.0, 0.0), com.tisma.scanner.ins.Vec3(0.0, 0.0, 1.0)),
+            Triple(com.tisma.scanner.ins.Vec3(0.0, 0.03, 0.02), com.tisma.scanner.ins.Vec3(1.0, 0.0, 0.0), com.tisma.scanner.ins.Vec3(0.0, 0.0, 1.0)),
+            Triple(com.tisma.scanner.ins.Vec3(0.0, -0.03, 0.02), com.tisma.scanner.ins.Vec3(1.0, 0.0, 0.0), com.tisma.scanner.ins.Vec3(0.0, 0.0, 1.0)),
+            Triple(com.tisma.scanner.ins.Vec3(0.0, 0.0, 0.04), com.tisma.scanner.ins.Vec3(1.0, 0.0, 0.0), com.tisma.scanner.ins.Vec3(0.0, 1.0, 0.0)),
+        )
+        return faces.mapIndexed { fi, (c, u, v) ->
+            val g = 6
+            val xyz = FloatArray((g + 1) * (g + 1) * 3); val uv = FloatArray((g + 1) * (g + 1) * 2)
+            val half = if (fi == 4) 0.03 else 0.03; val halfV = if (fi == 4) 0.03 else 0.02
+            for (j in 0..g) for (i in 0..g) {
+                val k = j * (g + 1) + i
+                val p = c + u * (half * (2.0 * i / g - 1)) + v * (halfV * (2.0 * j / g - 1))
+                xyz[3 * k] = p.x.toFloat(); xyz[3 * k + 1] = p.y.toFloat(); xyz[3 * k + 2] = p.z.toFloat()
+                uv[2 * k] = (i.toFloat() / g) * (tw - 1); uv[2 * k + 1] = (1 - j.toFloat() / g) * (th - 1)
+            }
+            val tris = ArrayList<Int>()
+            for (j in 0 until g) for (i in 0 until g) {
+                val a = j * (g + 1) + i; val b = a + 1; val d = a + g + 1; val e = d + 1
+                tris += listOf(a, b, e, a, e, d)
+            }
+            val thumb = IntArray(tw * th) { k -> if (((k % tw) / 8 + (k / tw) / 8) % 2 == 0) 0xFFB0703C.toInt() else 0xFF3C3C46.toInt() }
+            val n = c.normalized()
+            com.tisma.scanner.recon.LivePointCloud.Fragment(fi, xyz, uv, tris.toIntArray(), thumb, tw, th,
+                com.tisma.scanner.ins.Vec3(-n.x, -n.y, -n.z))
+        }
+    }
 
     @Test fun captureSettings() = shot("settings_capture", scanning, 0, settings = true)
 
@@ -177,10 +197,10 @@ class ScanScreenshotTest {
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 
-    private fun shot(name: String, state: UiState, tab: Int, settings: Boolean = false) {
+    private fun shot(name: String, state: UiState, tab: Int, settings: Boolean = false, review: Boolean = false) {
         captureRoboImage("build/screenshots/$name.png") {
             androidx.compose.runtime.CompositionLocalProvider(LocalAnimate provides false) {
-                TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, openSettings = settings, preview = fakeCamera) }
+                TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, openSettings = settings, preview = fakeCamera, openReview = review) }
             }
         }
     }

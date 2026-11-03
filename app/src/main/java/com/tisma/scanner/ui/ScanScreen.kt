@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -78,12 +79,14 @@ fun ScanContent(
     onShareText: (String) -> Unit = {},
     openSettings: Boolean = false,
     preview: @Composable () -> Unit = { CameraPreview(vm) },
+    openReview: Boolean = false,
 ) {
     var settings by remember { mutableStateOf(openSettings) }
     var tab by remember { mutableStateOf(Tab.entries[initialTab]) }
     BackHandler(enabled = settings) { settings = false }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        CameraScreen(s, vm, onShare, preview, onOpenSettings = { settings = true })
+        if (s.videoMode) VideoCaptureScreen(s, vm, onShare, preview, onOpenSettings = { settings = true }, openReview = openReview)
+        else CameraScreen(s, vm, onShare, preview, onOpenSettings = { settings = true })
         if (settings) SettingsScreen(s, vm, onShare, onShareText, tab, { tab = it }, onClose = { settings = false })
     }
 }
@@ -98,24 +101,9 @@ private fun CameraScreen(
     s: UiState, vm: ScanActions, onShare: (File) -> Unit,
     preview: @Composable () -> Unit, onOpenSettings: () -> Unit,
 ) {
-    var viewer by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         // Vista previa a todo el ancho (3:4, el formato del sensor), sin recortar lo que se fotografía.
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).align(Alignment.Center)) { preview() }
-        // Vídeo 360: anillo de captura alrededor de la pieza + vibración suave por sector nuevo.
-        if (s.videoMode && s.scanning) {
-            val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-            val covered = s.coverage.sumOf { r -> r.count { it > 0 } }
-            var lastCovered by remember { mutableStateOf(covered) }
-            LaunchedEffect(covered) {
-                if (covered > lastCovered) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                lastCovered = covered
-            }
-            Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).align(Alignment.Center)) {
-                OrbitRing(s.coverageRings, s.coverage, s.guide, s.liveAzDeg, s.videoFrames, Modifier.fillMaxSize())
-            }
-        }
-
         // ---- arriba: marca, pasada, ajustes; debajo, telemetría y cúpula
         Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).background(topShade).statusBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -132,8 +120,7 @@ private fun CameraScreen(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     // Zona de mejora de precisión: sólo aparece de tanto en tanto, unos segundos.
                     if (s.precisionBadge.isNotEmpty()) Chip(s.precisionBadge, if (s.precisionBadge.startsWith("✓")) Tisma.Ok else Tisma.PurpleText)
-                    if (s.videoMode) Chip("Vídeo 360 · una cámara (principal)", Tisma.PurpleText)
-                    else if (s.rigText.isNotEmpty()) Chip(s.rigText.substringBefore(" — "), Tisma.PurpleText)
+                    if (s.rigText.isNotEmpty()) Chip(s.rigText.substringBefore(" — "), Tisma.PurpleText)
                     s.opticsText.split(" · ").filter { it.isNotBlank() }.chunked(2).forEach { Chip(it.joinToString(" · ")) }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         if (s.sensorStatus.isNotEmpty() && s.imuSamples == 0L) Chip("⚠ IMU sin datos", Tisma.Warn)
@@ -141,20 +128,9 @@ private fun CameraScreen(
                         if (s.gyroRate > 0.6) Chip("ω %.2f".format(s.gyroRate), Tisma.Warn)
                     }
                 }
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (s.scanning || s.analyzed > 0) {
-                        Box(Modifier.padding(start = 8.dp).clip(RoundedCornerShape(10.dp)).background(Color(0x991E1E22)).padding(5.dp)) {
-                            CoverageDome(s.coverageRings, s.coverage, s.liveAzDeg, s.liveElDeg, size = 104.dp)
-                        }
-                    }
-                    // Modelo en vivo: forma primero, color después. Tocar = visor 3D a pantalla completa.
-                    if (s.cloudXyz.isNotEmpty()) {
-                        Column(Modifier.padding(start = 8.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xCC1E1E22))
-                            .clickable { viewer = true }.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            PointCloudView(s.cloudXyz, s.cloudColors, showColor = true, modifier = Modifier.size(104.dp), maxDrawn = 4000)
-                            Text("${s.cloudXyz.size / 3} pts · ${if (s.cloudColored == 0) "forma" else "${s.cloudColored * 300 / maxOf(1, s.cloudXyz.size)} % color"}",
-                                color = Tisma.TextDim, fontSize = 10.sp)
-                        }
+                if (s.scanning || s.analyzed > 0) {
+                    Box(Modifier.padding(start = 8.dp).clip(RoundedCornerShape(10.dp)).background(Color(0x991E1E22)).padding(5.dp)) {
+                        CoverageDome(s.coverageRings, s.coverage, s.liveAzDeg, s.liveElDeg, size = 104.dp)
                     }
                 }
             }
@@ -169,10 +145,6 @@ private fun CameraScreen(
             val toasts = buildList {
                 if (s.rigWarning.isNotEmpty()) add(Triple("Esta pasada no puede usar su cámara · ver ⚙ Cámaras", true, false))
                 if (s.shotWarning.isNotEmpty()) add(Triple(s.shotWarning, true, false))
-                if (s.videoMode && s.scanning) {
-                    if (s.videoTooFast) add(Triple("Más despacio: los fotogramas salen movidos", true, false))
-                    add(Triple(orbitHint(s.coverageRings, s.guide, s.videoFrames), false, s.guide?.let { g -> g.gapStartDeg == null && g.nextRing == null } == true))
-                }
                 if (s.scanning && s.capturing) add(Triple("Capturando… mantené el móvil quieto", false, false))
                 else if (s.scanning && s.waitingSteady) add(Triple("Quieto un momento…", false, false))
                 if (s.gyroRate > 0.6 && s.scanning) add(Triple("Demasiado rápido: las fotos saldrán movidas", true, false))
@@ -181,7 +153,7 @@ private fun CameraScreen(
                 }
                 if (s.cloudStatus.isNotEmpty()) add(Triple(s.cloudStatus, s.cloudStatus.startsWith("✗"), s.cloudStatus.startsWith("✓")))
                 if (s.readinessText.isNotEmpty() && (s.scanning || s.analyzed > 0)) add(Triple(s.readinessText, false, s.ready))
-                if (s.scanning && !s.videoMode) s.hints.firstOrNull()?.let { add(Triple(it, false, false)) }
+                if (s.scanning) s.hints.firstOrNull()?.let { add(Triple(it, false, false)) }
             }.take(2)
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 toasts.forEach { (text, error, ok) -> Toast(text, error = error, ok = ok) }
@@ -197,14 +169,12 @@ private fun CameraScreen(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 when {
-                    s.scanning && s.videoMode -> Spacer(Modifier.size(52.dp))
                     s.scanning -> RoundIcon("■", "Terminar") { vm.stopScan() }
                     s.lastZip != null && !s.busy -> RoundIcon("⇪", "Compartir") { onShare(s.lastZip) }
                     else -> Spacer(Modifier.size(52.dp))
                 }
                 Shutter(s, vm)
                 when {
-                    s.scanning && s.videoMode -> Spacer(Modifier.size(52.dp))
                     s.scanning -> RoundIcon("◎", "Barrido foco") { vm.focusSweep() }
                     s.cloudStl != null && !s.cloudBusy -> RoundIcon("⬢", "Pieza STL") { onShare(s.cloudStl) }
                     s.lastZip != null && !s.busy && !s.cloudBusy -> RoundIcon("☁", "Enviar") { vm.sendToCloud() }
@@ -213,33 +183,6 @@ private fun CameraScreen(
             }
             Spacer(Modifier.height(8.dp))
             StatusLine(s)
-        }
-        if (viewer && s.cloudXyz.isNotEmpty()) CloudViewer(s, onShare, onClose = { viewer = false })
-    }
-}
-
-/** Visor 3D a pantalla completa de la nube en vivo: girar 360° arrastrando, forma o color. */
-@Composable
-private fun CloudViewer(s: UiState, onShare: (File) -> Unit, onClose: () -> Unit) {
-    var color by remember { mutableStateOf(true) }
-    Box(Modifier.fillMaxSize().background(Color(0xF2141416)).clickable(enabled = false) {}) {
-        PointCloudView(s.cloudXyz, s.cloudColors, showColor = color, modifier = Modifier.fillMaxSize(), interactive = true)
-        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding().padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Modelo en vivo", color = Tisma.Text, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Spacer(Modifier.weight(1f))
-                RoundIcon("✕", "Cerrar", onClose)
-            }
-            val n = s.cloudXyz.size / 3
-            Text("$n puntos · ${s.cloudColored} con color" + if (s.scanning) " · se sigue construyendo" else "",
-                color = Tisma.TextDim, fontSize = 12.sp)
-        }
-        Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            ModeChips(color) { color = it }
-            Hint("Arrastra para girar 360°. Es una vista previa con pocos puntos: el modelo final, " +
-                "con todas las fotos a resolución completa, lo calcula Tisma Server.")
-            s.cloudPly?.let { f -> SecondaryButton("Compartir nube (.ply)", Modifier.fillMaxWidth()) { onShare(f) } }
         }
     }
 }
@@ -299,25 +242,6 @@ private fun PassSwitch(s: UiState, vm: ScanActions) {
 private fun Shutter(s: UiState, vm: ScanActions) {
     // Escaneando, el botón grande saca la foto (Terminar va a la izquierda).
     val scanning = s.scanning
-    // Vídeo 360: el botón graba y detiene (los fotogramas salen solos).
-    if (s.videoMode) {
-        val enabled = scanning || !s.busy
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Box(
-                Modifier.size(78.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.9f)).padding(4.dp)
-                    .clip(CircleShape).background(Tisma.Bar).padding(4.dp).clip(CircleShape)
-                    .background(if (!enabled) Tisma.Field else if (scanning) Tisma.ErrorToast else Tisma.Purple)
-                    .clickable(enabled = enabled) { if (scanning) vm.stopScan() else vm.startScan() },
-                contentAlignment = Alignment.Center,
-            ) {
-                if (scanning) Box(Modifier.size(24.dp).clip(RoundedCornerShape(4.dp)).background(Color.White))
-                else Box(Modifier.size(26.dp).clip(CircleShape).background(Color(0xFFE53935)))
-            }
-            Text(if (scanning) "Detener · ${s.videoFrames} fotogramas" else "Grabar 360", color = Tisma.Text, fontSize = 12.sp,
-                modifier = Modifier.padding(top = 4.dp))
-        }
-        return
-    }
     val enabled = if (scanning) !s.capturing && !s.waitingSteady else !s.busy
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -756,4 +680,251 @@ private fun SecondaryButton(label: String, modifier: Modifier = Modifier, enable
             .clickable(enabled = enabled) { onClick() }.padding(vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(label, color = if (enabled) Tisma.Text else Tisma.TextOff, fontSize = 13.sp) }
+}
+
+// ------------------------------------------------------------------ vídeo 360 (pantalla de captura)
+
+/**
+ * Captura por vídeo pensada para que se entienda sin leer nada técnico:
+ *  - recuadro para encuadrar la pieza; borde verde mientras graba bien, ámbar si va rápido;
+ *  - UNA indicación grande arriba ("Sigue hacia la derecha →");
+ *  - el progreso alrededor del botón de grabar (la altura actual) y por alturas debajo;
+ *  - la pieza en vivo en una tarjeta pequeña; al detener se abre la revisión en grande.
+ */
+@Composable
+private fun VideoCaptureScreen(
+    s: UiState, vm: ScanActions, onShare: (File) -> Unit,
+    preview: @Composable () -> Unit, onOpenSettings: () -> Unit, openReview: Boolean = false,
+) {
+    var review by remember { mutableStateOf(openReview) }
+    var wasScanning by remember { mutableStateOf(s.scanning) }
+    LaunchedEffect(s.scanning) {
+        if (wasScanning && !s.scanning) review = true
+        wasScanning = s.scanning
+    }
+    // Vibración suave por cada tramo nuevo cubierto.
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val covered = s.coverage.sumOf { r -> r.count { it > 0 } }
+    var lastCovered by remember { mutableStateOf(covered) }
+    LaunchedEffect(covered) {
+        if (s.scanning && covered > lastCovered) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+        lastCovered = covered
+    }
+    val toneColor = when {
+        !s.scanning -> Color.White.copy(alpha = 0.75f)
+        s.videoTooFast -> Tisma.Warn
+        else -> Tisma.Ok
+    }
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).align(Alignment.Center)) {
+            preview()
+            FramingGuide(toneColor, Modifier.fillMaxSize())
+            if (s.scanning) Box(Modifier.fillMaxSize().border(3.dp, toneColor.copy(alpha = 0.85f)))
+        }
+
+        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).background(topShade).statusBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                HexLogo(Modifier.size(26.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("TISMA", color = Tisma.Text, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                Spacer(Modifier.weight(1f))
+                if (!s.scanning) RoundIcon("⚙", "Ajustes", onOpenSettings)
+            }
+            if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Tisma.Purple)
+            when {
+                s.scanning -> InstructionPill(s.instruction ?: Instruction("↻", "Rodea la pieza despacio", Instruction.Tone.INFO))
+                !s.busy -> InstructionPill(Instruction("▢", "Pon la pieza en el recuadro y toca Grabar", Instruction.Tone.INFO))
+            }
+            if (s.precisionBadge.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Chip(s.precisionBadge, if (s.precisionBadge.startsWith("✓")) Tisma.Ok else Tisma.PurpleText)
+            }
+        }
+
+        Column(
+            Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(bottomShade).navigationBarsPadding()
+                .padding(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            val toasts = buildList {
+                if (s.rigWarning.isNotEmpty()) add(Triple("La cámara principal no está disponible · ver ⚙ Cámaras", true, false))
+                if (s.scanning && s.analyzed > 3 && s.textureRecent < ScanViewModel.LOW_TEXTURE)
+                    add(Triple("La pieza tiene poco dibujo: ponla sobre el tapete o usa spray mate", true, false))
+                if (s.cloudStatus.isNotEmpty() && !s.scanning) add(Triple(s.cloudStatus, s.cloudStatus.startsWith("✗"), s.cloudStatus.startsWith("✓")))
+            }.take(2)
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                toasts.forEach { (text, error, ok) -> Toast(text, error = error, ok = ok) }
+            }
+            if (toasts.isNotEmpty()) Spacer(Modifier.height(10.dp))
+            if (!s.scanning && !s.busy) {
+                ModeSwitch(true, vm::setVideoMode)
+                Spacer(Modifier.height(12.dp))
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                LiveCard(s) { review = true }
+                RecordButton(s, vm)
+                Column(Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (s.scanning) {
+                        Text("${(s.coveragePct * 100).toInt()} %", color = Tisma.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        Text("cubierto", color = Tisma.TextDim, fontSize = 11.sp)
+                    }
+                }
+            }
+            if (s.scanning) {
+                Spacer(Modifier.height(10.dp))
+                BandBar(s)
+            }
+            Spacer(Modifier.height(8.dp))
+            if (s.scanning) Text("${s.videoFrames} fotogramas · %.0f MB".format(s.storedMb), color = Tisma.TextDim, fontSize = 12.sp)
+            else StatusLine(s)
+        }
+        if (review && !s.scanning && (s.surface.isNotEmpty() || s.busy || s.lastZip != null)) ReviewScreen(s, vm, onShare) { review = false }
+    }
+}
+
+/** Esquinas de encuadre: la pieza debe quedar dentro (la reconstrucción en vivo lo supone). */
+@Composable
+private fun FramingGuide(color: Color, modifier: Modifier) {
+    androidx.compose.foundation.Canvas(modifier) {
+        val side = size.minDimension * 0.62f
+        val l = (size.width - side) / 2; val t = (size.height - side) / 2
+        val len = side * 0.16f; val w = 3.dp.toPx()
+        val corners = listOf(Offset(l, t) to Offset(1f, 1f), Offset(l + side, t) to Offset(-1f, 1f),
+            Offset(l, t + side) to Offset(1f, -1f), Offset(l + side, t + side) to Offset(-1f, -1f))
+        for ((p, d) in corners) {
+            drawLine(color, p, Offset(p.x + d.x * len, p.y), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+            drawLine(color, p, Offset(p.x, p.y + d.y * len), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
+        }
+    }
+}
+
+@Composable
+private fun InstructionPill(ins: Instruction) {
+    val bg = when (ins.tone) {
+        Instruction.Tone.WARN -> Color(0xE6A86A12)
+        Instruction.Tone.DONE -> Color(0xE62E7D45)
+        Instruction.Tone.OK -> Color(0xD92C2C31)
+        Instruction.Tone.INFO -> Color(0xD92C2C31)
+    }
+    Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp).clip(RoundedCornerShape(28.dp)).background(bg)
+        .padding(start = 8.dp, end = 18.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(38.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
+            Text(ins.icon, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(ins.text, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+/** Botón de grabar con el progreso de la altura actual alrededor (tramos como un reloj). */
+@Composable
+private fun RecordButton(s: UiState, vm: ScanActions) {
+    val enabled = s.scanning || !s.busy
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+            if (s.scanning) {
+                val ringIdx = s.guide?.ring ?: 1
+                val counts = s.coverage.getOrNull(ringIdx)
+                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                    val n = counts?.size ?: 24
+                    val step = 360f / n
+                    val stroke = 6.dp.toPx(); val r = size.minDimension / 2 - stroke
+                    for (b in 0 until n) {
+                        val c = counts?.getOrNull(b) ?: 0
+                        val col = if (c >= 2) Tisma.Ok else if (c == 1) Tisma.Warn else Color(0x40FFFFFF)
+                        drawArc(col, -90f + b * step + 1.5f, step - 3f, false,
+                            Offset(size.width / 2 - r, size.height / 2 - r), androidx.compose.ui.geometry.Size(r * 2, r * 2),
+                            style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+                    }
+                }
+            } else Box(Modifier.size(88.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.9f)))
+            Box(
+                Modifier.size(72.dp).clip(CircleShape).background(Tisma.Bar).padding(4.dp).clip(CircleShape)
+                    .background(if (!enabled) Tisma.Field else if (s.scanning) Tisma.ErrorToast else Tisma.Purple)
+                    .clickable(enabled = enabled) { if (s.scanning) vm.stopScan() else vm.startScan() },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (s.scanning) Box(Modifier.size(22.dp).clip(RoundedCornerShape(4.dp)).background(Color.White))
+                else Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFFE53935)))
+            }
+        }
+        Text(if (s.scanning) "Detener" else "Grabar", color = Tisma.Text, fontSize = 13.sp)
+    }
+}
+
+/** Progreso por altura (baja, media, alta, arriba): la actual resaltada. */
+@Composable
+private fun BandBar(s: UiState) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        for ((i, counts) in s.coverage.withIndex()) {
+            val pct = if (counts.isEmpty()) 0f else counts.count { it > 0 }.toFloat() / counts.size
+            val current = i == s.guide?.ring
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(ringName(i, s.coverageRings), color = if (current) Color.White else Tisma.TextDim, fontSize = 11.sp,
+                    fontWeight = if (current) FontWeight.Bold else FontWeight.Normal)
+                Box(Modifier.padding(top = 3.dp).width(56.dp).height(5.dp).clip(RoundedCornerShape(3.dp)).background(Color(0x40FFFFFF))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(pct).clip(RoundedCornerShape(3.dp))
+                        .background(if (pct >= 0.9f) Tisma.Ok else if (current) Tisma.PurpleText else Tisma.Warn))
+                }
+            }
+        }
+    }
+}
+
+/** Tarjeta con la pieza en vivo (gris mientras graba; con color al terminar). */
+@Composable
+private fun LiveCard(s: UiState, onOpen: () -> Unit) {
+    Column(Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        val has = s.surface.isNotEmpty()
+        if (has || s.scanning) {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(Tisma.Bg).clickable(enabled = has) { onOpen() },
+                contentAlignment = Alignment.Center) {
+                if (has) PieceView(s.surface, textured = !s.scanning, modifier = Modifier.fillMaxSize())
+                else Text("…", color = Tisma.TextDim, fontSize = 20.sp)
+            }
+            Text(if (has) "Tu pieza" else "Construyendo", color = Tisma.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
+        }
+    }
+}
+
+/** Revisión al terminar: la pieza en grande para girarla, y qué hacer con el escaneo. */
+@Composable
+private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, onClose: () -> Unit) {
+    BackHandler { onClose() }
+    var textured by remember { mutableStateOf(true) }
+    Box(Modifier.fillMaxSize().background(Tisma.Bg)) {
+        if (s.surface.isNotEmpty()) {
+            PieceView(s.surface, textured = textured, modifier = Modifier.fillMaxSize().padding(top = 90.dp, bottom = 230.dp), interactive = true)
+        } else Text(if (s.busy) "Guardando…" else "No se pudo armar la vista previa (poca textura o sin girar alrededor).",
+            color = Tisma.TextDim, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding().padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Tu pieza", color = Tisma.Text, fontWeight = FontWeight.Bold, fontSize = 22.sp)
+                    Text("Vista previa · arrastra para girarla", color = Tisma.TextDim, fontSize = 13.sp)
+                }
+                RoundIcon("✕", "Cerrar", onClose)
+            }
+        }
+        Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(Tisma.Bar).navigationBarsPadding().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (s.surface.isNotEmpty()) ModeChips(textured) { textured = it }
+            if (s.cloudStatus.isNotEmpty()) Toast(s.cloudStatus, error = s.cloudStatus.startsWith("✗"), ok = s.cloudStatus.startsWith("✓"))
+            if (s.cloudProgress >= 0f) LinearProgressIndicator(progress = { s.cloudProgress }, modifier = Modifier.fillMaxWidth().height(4.dp),
+                color = Tisma.Purple, trackColor = Tisma.Field)
+            val zip = s.lastZip
+            Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp))
+                .background(if (zip != null && !s.cloudBusy && !s.busy) Tisma.Purple else Tisma.Field)
+                .clickable(enabled = zip != null && !s.cloudBusy && !s.busy) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
+                Text(when { s.busy -> "Guardando…"; s.cloudBusy -> "Procesando en Tisma Server…"; else -> "Crear modelo final en Tisma Server" },
+                    color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton("Compartir", Modifier.weight(1f), enabled = zip != null) { zip?.let(onShare) }
+                s.cloudStl?.let { stl -> SecondaryButton("Pieza STL", Modifier.weight(1f)) { onShare(stl) } }
+                SecondaryButton("Nuevo escaneo", Modifier.weight(1f)) { onClose() }
+            }
+        }
+    }
 }

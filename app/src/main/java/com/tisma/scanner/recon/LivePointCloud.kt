@@ -41,6 +41,18 @@ class LivePointCloud(
         fun depth(p: Vec3) = (p - center) dot zAxis
     }
 
+    /**
+     * Trozo de superficie visto desde una vista: triángulos entre los puntos triangulados que se
+     * ven en ella (Delaunay en la imagen), con la miniatura de esa vista como textura.
+     * `xyz` en metros (mundo), `uv` en píxeles de la miniatura, `tris` índices de 3 en 3.
+     */
+    class Fragment(val id: Int, val xyz: FloatArray, val uv: FloatArray, val tris: IntArray,
+                   val thumb: IntArray?, val tw: Int, val th: Int, val viewDir: Vec3)
+
+    private val fragments = ArrayList<Fragment>()
+    /** Nueva superficie sólo si la vista difiere al menos esto de las que ya hay (grados). */
+    var fragmentEveryDeg = 12.0
+
     private class Keyframe(val view: View, val thumb: IntArray?, val tw: Int, val th: Int, val gw: Int, val gh: Int)
     private class Obs(val kf: Int, val u: Double, val v: Double)
     private class Track(val obs: ArrayList<Obs> = ArrayList(), var point: Int = -1)
@@ -86,7 +98,50 @@ class LivePointCloud(
             }
         }
         prevImage = gray
+        buildFragment(k)
     }
+
+    /** Superficie desde la vista k, si mira desde una dirección nueva. */
+    private fun buildFragment(k: Int) {
+        val kf = keyframes[k] ?: return
+        val dir = kf.view.zAxis
+        if (fragments.any { Math.toDegrees(acos((it.viewDir dot dir).coerceIn(-1.0, 1.0))) < fragmentEveryDeg }) return
+        val vis = tracks.filter { it.point >= 0 && it.obs.last().kf == k }
+        if (vis.size < 12) return
+        val us = DoubleArray(vis.size) { vis[it].obs.last().u }
+        val vs = DoubleArray(vis.size) { vis[it].obs.last().v }
+        val pts = vis.map { px[it.point] }
+        val depth = pts.map { kf.view.depth(it) }
+        val maxEdgePx = kf.gw * 0.12
+        val tris = ArrayList<Int>()
+        for (t in Delaunay.triangulate(us, vs)) {
+            // Fuera: triángulos enormes (unen zonas separadas) o que saltan de profundidad (borde
+            // de la pieza contra el fondo) o casi de canto respecto a la cámara.
+            var ok = true
+            for (e in 0..2) {
+                val a = t[e]; val b = t[(e + 1) % 3]
+                if (kotlin.math.hypot(us[a] - us[b], vs[a] - vs[b]) > maxEdgePx) ok = false
+                if (kotlin.math.abs(depth[a] - depth[b]) > 0.12 * minOf(depth[a], depth[b])) ok = false
+            }
+            if (!ok) continue
+            val n = (pts[t[1]] - pts[t[0]]) cross (pts[t[2]] - pts[t[0]])
+            if (n.norm() < 1e-12) continue
+            if (kotlin.math.abs(n.normalized() dot dir) < 0.15) continue
+            tris += t[0]; tris += t[1]; tris += t[2]
+        }
+        if (tris.size < 3 * 6) return
+        val xyz = FloatArray(pts.size * 3)
+        val uv = FloatArray(pts.size * 2)
+        for ((i, p) in pts.withIndex()) {
+            xyz[3 * i] = p.x.toFloat(); xyz[3 * i + 1] = p.y.toFloat(); xyz[3 * i + 2] = p.z.toFloat()
+            uv[2 * i] = (us[i] * kf.tw / kf.gw).toFloat(); uv[2 * i + 1] = (vs[i] * kf.th / kf.gh).toFloat()
+        }
+        fragments += Fragment(fragments.size, xyz, uv, tris.toIntArray(), kf.thumb, kf.tw, kf.th, dir)
+        if (fragments.size > MAX_FRAGMENTS) fragments.removeAt(0)
+    }
+
+    /** Copia de los trozos de superficie para dibujar. */
+    @Synchronized fun fragments(): List<Fragment> = fragments.toList()
 
     /** Triangula (o refina) un punto seguido con todas sus vistas. */
     private fun triangulate(t: Track) {
@@ -174,6 +229,7 @@ class LivePointCloud(
 
     @Synchronized fun reset() {
         keyframes.clear(); tracks.clear(); px.clear(); colors.clear(); pointObs.clear(); prevImage = null
+        fragments.clear()
     }
 
     private fun solve3(a: DoubleArray, b: DoubleArray): DoubleArray? {
@@ -186,7 +242,22 @@ class LivePointCloud(
         return doubleArrayOf(d(0) / det, d(1) / det, d(2) / det)
     }
 
+    /** Superficie en OBJ (sin textura) para abrirla en cualquier visor. */
+    @Synchronized fun writeObj(f: File) {
+        f.bufferedWriter().use { w ->
+            w.write("# Tisma Scanner: superficie de vista previa (no es el modelo final)\n")
+            var base = 1
+            for (fr in fragments) {
+                for (i in 0 until fr.xyz.size / 3) w.write("v %.5f %.5f %.5f\n".format(java.util.Locale.US, fr.xyz[3 * i], fr.xyz[3 * i + 1], fr.xyz[3 * i + 2]))
+                for (t in 0 until fr.tris.size / 3) w.write("f ${fr.tris[3 * t] + base} ${fr.tris[3 * t + 1] + base} ${fr.tris[3 * t + 2] + base}\n")
+                base += fr.xyz.size / 3
+            }
+        }
+    }
+
     companion object {
+        const val MAX_FRAGMENTS = 60
+
         /**
          * Pose de la cámara en una ÓRBITA alrededor de la pieza: la orientación sale de la INS
          * (giróscopo, muy precisa) y el centro se pone a `distM` (enfoque) detrás de la pieza, que

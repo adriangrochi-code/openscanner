@@ -91,6 +91,17 @@ class LivePointCloudTest {
         assertTrue("puntos: ${pts.size}", pts.size > 150)
         assertTrue("error mediano %.4f".format(median), median < 0.002)
 
+        // Superficie: trozos desde varias direcciones, con los vértices sobre la pieza.
+        val frs = cloud.fragments()
+        val triCount = frs.sumOf { it.tris.size / 3 }
+        val vErr = frs.flatMap { f -> (0 until f.xyz.size / 3).map { i -> boxDistance(Vec3(f.xyz[3 * i].toDouble(), f.xyz[3 * i + 1].toDouble(), f.xyz[3 * i + 2].toDouble())) } }.sorted()
+        // Centro de cada triángulo: no debe "cortar" por dentro de la pieza (unir caras distintas).
+        println("superficie: ${frs.size} trozos · $triCount triángulos · vértices a %.2f mm (mediana)".format(vErr[vErr.size / 2] * 1000))
+        assertTrue("trozos ${frs.size}", frs.size >= 3)
+        assertTrue("triángulos $triCount", triCount >= 60)
+        assertTrue(vErr[vErr.size / 2] < 0.002)
+        assertTrue("con textura", frs.all { it.thumb != null })
+
         // Etapa 2: color (los que siguen activos se pintan al final).
         assertEquals(0, cloud.snapshot().second.count { it != 0 }.coerceAtMost(0))
         cloud.colorize(all = true)
