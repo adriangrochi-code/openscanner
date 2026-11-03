@@ -175,6 +175,13 @@ class LivePointCloudTest {
         assertTrue("error mediano", err[err.size / 2] < 0.002)
         assertTrue("orientación", out > 0.85 * model.triangleCount)
         assertTrue(model.colors.count { it == 0xFFAA3322.toInt() } > 0.8 * model.vertexCount)
+        // Versión para el visor: ≤ 20k triángulos y sigue pegada a la pieza.
+        val small = model.decimate(20_000)
+        val sErr = (0 until small.vertexCount).map { i ->
+            boxDistance(Vec3(small.xyz[3 * i].toDouble(), small.xyz[3 * i + 1].toDouble(), small.xyz[3 * i + 2].toDouble())) }.sorted()
+        println("visor: ${model.triangleCount} -> ${small.triangleCount} triángulos · error mediano %.2f mm".format(sErr[sErr.size / 2] * 1000))
+        assertTrue(small.triangleCount <= 20_000 && small.triangleCount > 2_000)
+        assertTrue(sErr[sErr.size / 2] < 0.0015)
         val stl = java.io.File.createTempFile("pieza", ".stl")
         model.writeStl(stl)
         assertEquals(84L + 50L * model.triangleCount, stl.length())

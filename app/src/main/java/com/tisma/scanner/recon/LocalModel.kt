@@ -26,9 +26,65 @@ class LocalModel(val xyz: FloatArray, val tris: IntArray, val colors: IntArray) 
     val vertexCount get() = xyz.size / 3
     val triangleCount get() = tris.size / 3
 
-    /** Como trozo dibujable por el visor de la pieza. */
-    fun asFragment(id: Int = -1) = LivePointCloud.Fragment(id, xyz, FloatArray(xyz.size / 3 * 2), tris, null, 0, 0,
-        Vec3(0.0, 0.0, -1.0), outward = true, vertexColors = colors)
+    /**
+     * Como trozo dibujable por el visor de la pieza, simplificado a ≤ `maxTris` triángulos para
+     * que girarlo sea fluido (el STL exportado conserva toda la resolución).
+     */
+    fun asFragment(id: Int = -1, maxTris: Int = 30_000): LivePointCloud.Fragment {
+        val m = if (triangleCount > maxTris) decimate(maxTris) else this
+        return LivePointCloud.Fragment(id, m.xyz, FloatArray(m.xyz.size / 3 * 2), m.tris, null, 0, 0,
+            Vec3(0.0, 0.0, -1.0), outward = true, vertexColors = m.colors)
+    }
+
+    /**
+     * Simplificación por agrupación de vértices: los que caen en la misma celda de una rejilla se
+     * funden (posición y color medios) y los triángulos que quedan degenerados se quitan. Se
+     * agranda la celda hasta bajar de `target` triángulos. Rápida y mantiene la orientación.
+     */
+    fun decimate(target: Int): LocalModel {
+        var lo0 = Float.MAX_VALUE; var lo1 = Float.MAX_VALUE; var lo2 = Float.MAX_VALUE; var hiMax = -Float.MAX_VALUE
+        for (i in 0 until vertexCount) {
+            lo0 = minOf(lo0, xyz[3 * i]); lo1 = minOf(lo1, xyz[3 * i + 1]); lo2 = minOf(lo2, xyz[3 * i + 2])
+            hiMax = maxOf(hiMax, xyz[3 * i], xyz[3 * i + 1], xyz[3 * i + 2])
+        }
+        val extent = maxOf(1e-6f, hiMax - minOf(lo0, lo1, lo2))
+        var cell = extent / 256f
+        var result = this
+        repeat(8) {
+            val map = HashMap<Long, Int>()
+            val remap = IntArray(vertexCount)
+            val acc = ArrayList<DoubleArray>()        // x, y, z, r, g, b, n
+            for (i in 0 until vertexCount) {
+                val kx = ((xyz[3 * i] - lo0) / cell).toLong(); val ky = ((xyz[3 * i + 1] - lo1) / cell).toLong()
+                val kz = ((xyz[3 * i + 2] - lo2) / cell).toLong()
+                val key = (kx shl 42) or (ky shl 21) or kz
+                val id = map.getOrPut(key) { acc += DoubleArray(7); acc.size - 1 }
+                remap[i] = id
+                val a = acc[id]; val c = colors[i]
+                a[0] += xyz[3 * i].toDouble(); a[1] += xyz[3 * i + 1].toDouble(); a[2] += xyz[3 * i + 2].toDouble()
+                a[3] += ((c shr 16) and 0xFF).toDouble(); a[4] += ((c shr 8) and 0xFF).toDouble(); a[5] += (c and 0xFF).toDouble(); a[6] += 1.0
+            }
+            val nt = ArrayList<Int>()
+            val seen = HashSet<Long>()
+            for (t in 0 until triangleCount) {
+                val a = remap[tris[3 * t]]; val b = remap[tris[3 * t + 1]]; val c = remap[tris[3 * t + 2]]
+                if (a == b || b == c || a == c) continue
+                val lo = minOf(a, b, c).toLong(); val hi = maxOf(a, b, c).toLong(); val mid = (a + b + c - lo - hi)
+                if (!seen.add((lo shl 42) or (mid shl 21) or hi)) continue        // triángulo repetido
+                nt += a; nt += b; nt += c
+            }
+            val nx = FloatArray(acc.size * 3); val nc = IntArray(acc.size)
+            for ((i, a) in acc.withIndex()) {
+                val n = a[6]
+                nx[3 * i] = (a[0] / n).toFloat(); nx[3 * i + 1] = (a[1] / n).toFloat(); nx[3 * i + 2] = (a[2] / n).toFloat()
+                nc[i] = (0xFF shl 24) or ((a[3] / n).toInt() shl 16) or ((a[4] / n).toInt() shl 8) or (a[5] / n).toInt()
+            }
+            result = LocalModel(nx, nt.toIntArray(), nc)
+            if (result.triangleCount <= target) return result
+            cell *= 1.4f
+        }
+        return result
+    }
 
     /** STL binario en milímetros (para imprimir o CAD). */
     fun writeStl(f: File) {
@@ -92,20 +148,40 @@ class LocalModel(val xyz: FloatArray, val tris: IntArray, val colors: IntArray) 
             val wsum = FloatArray(nx * ny * nz)
 
             // 1+2: mapa de profundidad de cada trozo (y los densos de la IA) y fusión.
+            // Cada vista se funde en paralelo por capas Z (cada vóxel lo toca un solo hilo) y sin crear
+            // objetos: las coordenadas de cámara de un vóxel son lineales en i, así que se avanzan
+            // sumando un incremento fijo (en el móvil esto eran ~50 millones de Vec3 por modelo).
             fun integrate(v: LivePointCloud.View, depth: DoubleArray, dw: Int, dh: Int, sx: Double, sy: Double, weight: Float) {
-                for (k in 0 until nz) for (j in 0 until ny) for (i in 0 until nx) {
-                    val x = Vec3((lo[0] + (i + 0.5f) * vox).toDouble(), (lo[1] + (j + 0.5f) * vox).toDouble(), (lo[2] + (k + 0.5f) * vox).toDouble())
-                    val q = v.project(x) ?: continue
-                    val u = (q[0] * sx).toInt(); val w = (q[1] * sy).toInt()
-                    if (u !in 0 until dw || w !in 0 until dh) continue
-                    val d = depth[w * dw + u]
-                    if (d.isNaN()) continue
-                    val sdf = (d - v.depth(x)).toFloat()
-                    if (sdf < -trunc) continue                 // detrás de la superficie: no se sabe
-                    val t = min(1f, sdf / trunc)
-                    val idx = (k * ny + j) * nx + i
-                    val wo = wsum[idx]
-                    tsdf[idx] = (tsdf[idx] * wo + t * weight) / (wo + weight); wsum[idx] = wo + weight
+                val xa = v.xAxis; val ya = v.yAxis; val za = v.zAxis; val c = v.center
+                val fsx = v.f * sx; val fsy = v.f * sy; val cxs = v.cx * sx; val cys = v.cy * sy
+                val ix = xa.x * vox; val iy = ya.x * vox; val iz = za.x * vox
+                java.util.stream.IntStream.range(0, nz).parallel().forEach { k ->
+                    val pz = lo[2] + (k + 0.5) * vox - c.z
+                    for (j in 0 until ny) {
+                        val py = lo[1] + (j + 0.5) * vox - c.y
+                        val px0 = lo[0] + 0.5 * vox - c.x
+                        var X = xa.x * px0 + xa.y * py + xa.z * pz
+                        var Y = ya.x * px0 + ya.y * py + ya.z * pz
+                        var Z = za.x * px0 + za.y * py + za.z * pz
+                        var idx = (k * ny + j) * nx
+                        for (i in 0 until nx) {
+                            if (Z > 1e-4) {
+                                val u = (cxs + fsx * X / Z).toInt(); val w = (cys + fsy * Y / Z).toInt()
+                                if (u in 0 until dw && w in 0 until dh) {
+                                    val d = depth[w * dw + u]
+                                    if (!d.isNaN()) {
+                                        val sdf = (d - Z).toFloat()
+                                        if (sdf >= -trunc) {               // detrás de la superficie: no se sabe
+                                            val t = min(1f, sdf / trunc)
+                                            val wo = wsum[idx]
+                                            tsdf[idx] = (tsdf[idx] * wo + t * weight) / (wo + weight); wsum[idx] = wo + weight
+                                        }
+                                    }
+                                }
+                            }
+                            X += ix; Y += iy; Z += iz; idx++
+                        }
+                    }
                 }
             }
             val total = frs.size + dense.size

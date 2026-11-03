@@ -67,6 +67,10 @@ fun PieceView(
         }
     }
     val paint = remember { Paint(Paint.ANTI_ALIAS_FLAG) }
+    // Lo que no cambia al girar se calcula UNA vez por malla: normal hacia fuera y centro de cada
+    // triángulo. En cada fotograma sólo se proyecta, se descartan las caras de atrás y se ordena
+    // (con arrays primitivos: nada de objetos por triángulo, que en el móvil frenaba el giro).
+    val geo = remember(fragments) { TriGeometry.of(fragments) }
     val mod = if (interactive) modifier.pointerInput(Unit) {
         detectDragGestures { _, d ->
             touched = true
@@ -81,84 +85,108 @@ fun PieceView(
         val cy = cos(yaw).toFloat(); val sy = sin(yaw).toFloat(); val cp = cos(pt).toFloat(); val sp = sin(pt).toFloat()
         val scale = size.minDimension * 0.42f / radius
         val ox = size.width / 2; val oy = size.height / 2
-        // Triángulos visibles: (profundidad, trozo, índice).
-        class T(val depth: Float, val f: Int, val t: Int, val shade: Float)
+        // Proyección de los vértices de cada trozo.
         val proj = fragments.map { f ->
             val n = f.xyz.size / 3
-            val out = FloatArray(n * 3)
+            val out = FloatArray(n * 2)
             for (i in 0 until n) {
                 val x = f.xyz[3 * i] - c[0]; val y = f.xyz[3 * i + 1] - c[1]; val z = f.xyz[3 * i + 2] - c[2]
                 val xr = x * cy - y * sy; val yr = x * sy + y * cy
-                out[3 * i] = ox + xr * scale
-                // Inclinación positiva = mirar desde arriba.
-                out[3 * i + 1] = oy - (z * cp + yr * sp) * scale
-                out[3 * i + 2] = yr * cp - z * sp          // hacia el fondo
+                out[2 * i] = ox + xr * scale
+                out[2 * i + 1] = oy - (z * cp + yr * sp) * scale     // inclinación positiva = desde arriba
             }
             out
         }
-        val list = ArrayList<T>()
-        for ((fi, f) in fragments.withIndex()) {
-            val p = proj[fi]
-            // Normal hacia la cámara que hizo el trozo (−viewDir) para saber qué cara es la de fuera.
-            val vd = f.viewDir
-            for (t in 0 until f.tris.size / 3) {
-                val a = f.tris[3 * t]; val b = f.tris[3 * t + 1]; val d = f.tris[3 * t + 2]
-                val ax = f.xyz[3 * a]; val ay = f.xyz[3 * a + 1]; val az = f.xyz[3 * a + 2]
-                val ux = f.xyz[3 * b] - ax; val uy = f.xyz[3 * b + 1] - ay; val uz = f.xyz[3 * b + 2] - az
-                val wx = f.xyz[3 * d] - ax; val wy = f.xyz[3 * d + 1] - ay; val wz = f.xyz[3 * d + 2] - az
-                var nx = uy * wz - uz * wy; var ny = uz * wx - ux * wz; var nz = ux * wy - uy * wx
-                val nl = sqrt(nx * nx + ny * ny + nz * nz); if (nl < 1e-12f) continue
-                nx /= nl; ny /= nl; nz /= nl
-                // Trozos de la vista en vivo: la cara de fuera es la que miraba la cámara.
-                // Malla cerrada (modelo local): ya viene orientada hacia fuera.
-                if (!f.outward && nx * vd.x + ny * vd.y + nz * vd.z > 0) { nx = -nx; ny = -ny; nz = -nz }
-                // Dirección hacia el observador en el mundo: contraria al gradiente de la profundidad
-                // (depth = (x·sy + y·cy)·cp − z·sp).
-                val tx = -sy * cp; val ty = -cy * cp; val tz = sp
-                val facing = nx * tx + ny * ty + nz * tz
-                if (facing <= 0.05f) continue          // cara de atrás
-                val depth = (p[3 * a + 2] + p[3 * b + 2] + p[3 * d + 2]) / 3
-                list += T(depth, fi, t, 0.30f + 0.70f * facing)
-            }
+        // Hacia el observador (contrario al gradiente de la profundidad = (x·sy + y·cy)·cp − z·sp).
+        val tx = -sy * cp; val ty = -cy * cp; val tz = sp
+        val g = geo
+        var nVis = 0
+        for (t in 0 until g.count) {
+            val facing = g.nx[t] * tx + g.ny[t] * ty + g.nz[t] * tz
+            if (facing <= 0.05f) { g.shade[t] = -1f; continue }       // cara de atrás
+            g.shade[t] = 0.30f + 0.70f * facing
+            val x = g.cx[t] - c[0]; val y = g.cy[t] - c[1]; val z = g.cz[t] - c[2]
+            val depth = (x * sy + y * cy) * cp - z * sp
+            // Clave ordenable: profundidad (de lejos a cerca) en los 32 bits altos, triángulo en los bajos.
+            g.keys[nVis++] = (sortable(-depth).toLong() shl 32) or t.toLong()
         }
-        list.sortByDescending { it.depth }
+        java.util.Arrays.sort(g.keys, 0, nVis)
         drawIntoCanvas { canvas ->
             val nc: ACanvas = canvas.nativeCanvas
-            // Se agrupan triángulos seguidos del mismo trozo en una sola llamada.
             var i = 0
-            while (i < list.size) {
-                val fi = list[i].f
+            while (i < nVis) {
+                val fi = g.frag[(g.keys[i] and 0xFFFFFFFFL).toInt()]
                 var j = i
-                while (j < list.size && list[j].f == fi && j - i < 200) j++
+                while (j < nVis && g.frag[(g.keys[j] and 0xFFFFFFFFL).toInt()] == fi && j - i < BATCH) j++
                 val f = fragments[fi]; val p = proj[fi]
                 val cnt = j - i
-                val verts = FloatArray(cnt * 6)
-                val texs = if (textured && f.vertexColors == null && shaders[f.id] != null) FloatArray(cnt * 6) else null
+                val textured0 = textured && f.vertexColors == null && shaders[f.id] != null
                 val vcol = if (textured) f.vertexColors else null
-                val cols = if (texs == null) IntArray(cnt * 3) else null
                 for (k in 0 until cnt) {
-                    val tr = list[i + k]
+                    val t = (g.keys[i + k] and 0xFFFFFFFFL).toInt()
+                    val base = 3 * g.tri[t]; val shade = g.shade[t]
                     for (e in 0..2) {
-                        val v = f.tris[3 * tr.t + e]
-                        verts[6 * k + 2 * e] = p[3 * v]; verts[6 * k + 2 * e + 1] = p[3 * v + 1]
-                        if (texs != null) { texs[6 * k + 2 * e] = f.uv[2 * v]; texs[6 * k + 2 * e + 1] = f.uv[2 * v + 1] }
-                        if (cols != null) {
-                            if (vcol != null) {
-                                // Color de la foto con un poco de sombreado (se aprecia el relieve).
-                                val c = vcol[v]; val sh = 0.55f + 0.45f * tr.shade
-                                cols[3 * k + e] = (0xFF shl 24) or (((c shr 16) and 0xFF) * sh).toInt().coerceIn(0, 255).shl(16) or
-                                    ((((c shr 8) and 0xFF) * sh).toInt().coerceIn(0, 255) shl 8) or ((c and 0xFF) * sh).toInt().coerceIn(0, 255)
-                            } else {
-                                val g = (tr.shade * 225).toInt().coerceIn(0, 255)
-                                cols[3 * k + e] = (0xFF shl 24) or (g shl 16) or ((g * 0.97f).toInt() shl 8) or (g * 0.92f).toInt()
-                            }
+                        val v = f.tris[base + e]
+                        g.verts[6 * k + 2 * e] = p[2 * v]; g.verts[6 * k + 2 * e + 1] = p[2 * v + 1]
+                        if (textured0) { g.texs[6 * k + 2 * e] = f.uv[2 * v]; g.texs[6 * k + 2 * e + 1] = f.uv[2 * v + 1] }
+                        else if (vcol != null) {
+                            // Color de la foto con un poco de sombreado (se aprecia el relieve).
+                            val col = vcol[v]; val sh = 0.55f + 0.45f * shade
+                            g.cols[3 * k + e] = (0xFF shl 24) or ((((col shr 16) and 0xFF) * sh).toInt().coerceIn(0, 255) shl 16) or
+                                ((((col shr 8) and 0xFF) * sh).toInt().coerceIn(0, 255) shl 8) or ((col and 0xFF) * sh).toInt().coerceIn(0, 255)
+                        } else {
+                            val gr = (shade * 225).toInt().coerceIn(0, 255)
+                            g.cols[3 * k + e] = (0xFF shl 24) or (gr shl 16) or ((gr * 0.97f).toInt() shl 8) or (gr * 0.92f).toInt()
                         }
                     }
                 }
-                paint.shader = if (texs != null) shaders[f.id] else null
-                nc.drawVertices(ACanvas.VertexMode.TRIANGLES, verts.size, verts, 0, texs, 0, cols, 0, null, 0, 0, paint)
+                paint.shader = if (textured0) shaders[f.id] else null
+                nc.drawVertices(ACanvas.VertexMode.TRIANGLES, cnt * 6, g.verts, 0, if (textured0) g.texs else null, 0,
+                    if (textured0) null else g.cols, 0, null, 0, 0, paint)
                 i = j
             }
+        }
+    }
+}
+
+private const val BATCH = 4000
+
+/** Float -> int que conserva el orden (para ordenar por profundidad con un array de long). */
+private fun sortable(f: Float): Int { val b = java.lang.Float.floatToRawIntBits(f); return if (b >= 0) b xor Int.MIN_VALUE else b.inv() }
+
+/** Triángulos de todos los trozos con su normal hacia fuera y su centro (fijos al girar) y búferes reutilizables. */
+private class TriGeometry(val count: Int) {
+    val frag = IntArray(count); val tri = IntArray(count)
+    val nx = FloatArray(count); val ny = FloatArray(count); val nz = FloatArray(count)
+    val cx = FloatArray(count); val cy = FloatArray(count); val cz = FloatArray(count)
+    val shade = FloatArray(count); val keys = LongArray(count)
+    val verts = FloatArray(BATCH * 6); val texs = FloatArray(BATCH * 6); val cols = IntArray(BATCH * 3)
+
+    companion object {
+        fun of(fragments: List<LivePointCloud.Fragment>): TriGeometry {
+            val g = TriGeometry(fragments.sumOf { it.tris.size / 3 })
+            var t = 0
+            for ((fi, f) in fragments.withIndex()) {
+                val vd = f.viewDir
+                for (k in 0 until f.tris.size / 3) {
+                    val a = f.tris[3 * k]; val b = f.tris[3 * k + 1]; val d = f.tris[3 * k + 2]
+                    val ax = f.xyz[3 * a]; val ay = f.xyz[3 * a + 1]; val az = f.xyz[3 * a + 2]
+                    val ux = f.xyz[3 * b] - ax; val uy = f.xyz[3 * b + 1] - ay; val uz = f.xyz[3 * b + 2] - az
+                    val wx = f.xyz[3 * d] - ax; val wy = f.xyz[3 * d + 1] - ay; val wz = f.xyz[3 * d + 2] - az
+                    var nx = uy * wz - uz * wy; var ny = uz * wx - ux * wz; var nz = ux * wy - uy * wx
+                    val nl = sqrt(nx * nx + ny * ny + nz * nz)
+                    if (nl > 1e-12f) { nx /= nl; ny /= nl; nz /= nl }
+                    // Trozos de la vista en vivo: la cara de fuera es la que miraba la cámara.
+                    // Malla cerrada (modelo local): ya viene orientada hacia fuera.
+                    if (!f.outward && nx * vd.x + ny * vd.y + nz * vd.z > 0) { nx = -nx; ny = -ny; nz = -nz }
+                    g.frag[t] = fi; g.tri[t] = k
+                    g.nx[t] = nx; g.ny[t] = ny; g.nz[t] = nz
+                    g.cx[t] = (ax + f.xyz[3 * b] + f.xyz[3 * d]) / 3; g.cy[t] = (ay + f.xyz[3 * b + 1] + f.xyz[3 * d + 1]) / 3
+                    g.cz[t] = (az + f.xyz[3 * b + 2] + f.xyz[3 * d + 2]) / 3
+                    t++
+                }
+            }
+            return g
         }
     }
 }

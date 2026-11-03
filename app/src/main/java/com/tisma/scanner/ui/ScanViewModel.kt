@@ -347,7 +347,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
         _state.update { it.copy(depthModelUrl = prefs.getString("depth_model_url", "") ?: "") }
         refreshDepthModelState()
-        viewModelScope.launch(Dispatchers.IO) { installBundledDepthModel(); refreshDepthModelState() }
+        viewModelScope.launch(Dispatchers.IO) {
+            installBundledDepthModel(); refreshDepthModelState()
+            // Con el modelo de IA ya listo, terminar lo que quedó a medias si la app se cerró.
+            resumeUnfinishedScans()
+        }
         cameras.videoMode = _state.value.videoMode
         com.tisma.scanner.diag.DiagLog.extra = {
             "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
@@ -970,12 +974,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * Profundidad densa con IA para cada vista guardada, ya en metros (alineada con los puntos
      * medidos). Si no hay modelo o una vista no se puede alinear, se salta.
      */
-    private fun aiDepthViews(): List<com.tisma.scanner.recon.DepthPrior.DepthView> {
+    private fun aiDepthViews(shots: List<com.tisma.scanner.recon.DepthShot>): List<com.tisma.scanner.recon.DepthPrior.DepthView> {
         val f = depthModelFile
-        if (!f.exists() || depthShots.isEmpty()) return emptyList()
+        if (!f.exists() || shots.isEmpty()) return emptyList()
         val model = com.tisma.scanner.recon.DepthModel.load(f) ?: run { log("IA de profundidad: no se pudo cargar el modelo"); return emptyList() }
         val out = ArrayList<com.tisma.scanner.recon.DepthPrior.DepthView>()
-        val shots = depthShots.toList()
         val gw = MultiCameraController.KF_W; val gh = MultiCameraController.KF_H
         model.use { m ->
             for ((i, s) in shots.withIndex()) {
@@ -1006,11 +1009,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * Construye el modelo del móvil con lo reconstruido en vivo (y la IA de profundidad si se
      * pide) y lo deja en la revisión. Corre en el hilo de la reconstrucción.
      */
-    private fun buildModel(withAi: Boolean, resolution: Int, label: String): Boolean {
+    private fun buildModel(frags: List<com.tisma.scanner.recon.LivePointCloud.Fragment>, shots: List<com.tisma.scanner.recon.DepthShot>,
+                           withAi: Boolean, resolution: Int, label: String): Boolean {
         val t0 = SystemClock.uptimeMillis()
-        val dense = if (withAi) aiDepthViews() else emptyList()
+        val dense = if (withAi) aiDepthViews(shots) else emptyList()
         if (withAi && dense.isEmpty()) return false
-        val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = resolution, dense = dense) { p ->
+        val model = com.tisma.scanner.recon.LocalModel.build(frags, resolution = resolution, dense = dense) { p ->
             progress("$label %d %%".format((p * 100).toInt()), (p * 100).toInt())
         } ?: return false
         val dir = lastScanDir ?: getApplication<Application>().getExternalFilesDir(null)!!
@@ -1031,7 +1035,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         reconExec.execute {
             try {
                 val ai = _state.value.useDepthAi && _state.value.depthModelReady
-                val ok = (ai && buildModel(true, 128, "Malla con IA")) || buildModel(false, 128, "Malla en el móvil")
+                val frs = live.fragments(); val shots = depthShots.toList()
+                val ok = (ai && buildModel(frs, shots, true, 128, "Malla con IA")) || buildModel(frs, shots, false, 128, "Malla en el móvil")
                 _state.update { it.copy(cloudStatus = if (ok) "✓ Modelo creado en el móvil" else "✗ No hay suficiente superficie: rodea la pieza a dos alturas") }
             } catch (e: Throwable) {
                 log("Modelo en el móvil: error $e")
@@ -1093,9 +1098,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     /** Vista guardada para la IA de profundidad: pose corregida, foto pequeña (JPEG) y puntos medidos. */
-    private class DepthShot(val view: com.tisma.scanner.recon.LivePointCloud.View, val jpeg: ByteArray,
-                            val samples: List<Triple<Double, Double, Double>>)
-    private val depthShots = java.util.concurrent.CopyOnWriteArrayList<DepthShot>()
+    private val depthShots = java.util.concurrent.CopyOnWriteArrayList<com.tisma.scanner.recon.DepthShot>()
     @Volatile private var lastDepthDir: com.tisma.scanner.ins.Vec3? = null
 
     override fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray, color: IntArray) {
@@ -1138,7 +1141,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                         android.graphics.Bitmap.Config.ARGB_8888)
                     val bos = java.io.ByteArrayOutputStream()
                     bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, bos); bmp.recycle()
-                    depthShots += DepthShot(view, bos.toByteArray(), samples)
+                    depthShots += com.tisma.scanner.recon.DepthShot(view, bos.toByteArray(), samples)
                 }
                 // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
                 session?.addRefinedPose(t, c, q)
@@ -1392,7 +1395,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     // ------------------------------------------------------------------ escaneo
 
     override fun startScan() {
-        if (session != null || stopping != null) return
+        // Mientras se procesa el anterior (mallas, nitidez, .zip) no se empieza otro: competirían por la CPU.
+        if (session != null || stopping != null || _state.value.busy) return
         updateClockOffsets()
         val base = File(getApplication<Application>().getExternalFilesDir(null), "scans").apply { mkdirs() }
         val s = ScanSession(base)
@@ -1458,9 +1462,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun stopScan() {
         val s = session ?: return
         com.tisma.scanner.diag.DiagLog.event("app", "detener escaneo")
-        // Lo que tarda va en segundo plano, protegido por un servicio en primer plano con notificación.
+        // Lo que tarda va en segundo plano (processScan), protegido por un servicio con notificación.
         com.tisma.scanner.ProcessingService.start(getApplication(), "Guardando el escaneo…")
-        val reconDone = kotlinx.coroutines.CompletableDeferred<Unit>()
+        // Lo reconstruido en vivo, a disco: si la app se cierra, las mallas se rehacen desde ahí.
+        val reconSaved = kotlinx.coroutines.CompletableDeferred<Unit>()
         reconExec.execute {
             try {
                 live.colorize(all = true); publishCloud()
@@ -1472,14 +1477,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                         log("Vista previa 3D: ${live.pointCount()} puntos, ${live.fragments().size} trozos de superficie")
                     }
                 }
-                // 1) Malla rápida (segundos): lo primero que se ve en la revisión.
-                if (live.fragments().size >= 2) buildModel(false, 96, "Malla rápida")
-                // 2) Malla con IA de profundidad (minutos): reemplaza a la rápida cuando termina.
-                if (_state.value.useDepthAi && _state.value.depthModelReady && depthShots.isNotEmpty())
-                    buildModel(true, 128, "Malla con IA")
-            } catch (e: Throwable) {
-                log("Modelo en el móvil: error $e")
-            } finally { reconDone.complete(Unit) }
+                runCatching { com.tisma.scanner.recon.ReconState.save(File(s.dir, "recon_state.bin"), live.fragments(), depthShots.toList()) }
+                    .onFailure { log("No se pudo guardar el estado de la reconstrucción: ${it.message}") }
+            } finally { reconSaved.complete(Unit) }
         }
         // La sesión pasa a "cerrándose": las fotos de la última ráfaga aún llegan y se guardan.
         stopping = s
@@ -1489,25 +1489,29 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.lock3A = false; cameras.refreshRepeating()
         pendingCal?.let { applyAutoCalibration(it); pendingCal = null }
         _state.update { it.copy(scanning = false, busy = true) }
-        viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { finish(s, reconDone) }
+        viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { finish(s, reconSaved) }
     }
 
     /** Espera a lo que queda en vuelo y cierra. NonCancellable: salir de la app no corta el cierre. */
-    private suspend fun finish(s: ScanSession, reconDone: kotlinx.coroutines.Deferred<Unit>) {
+    private suspend fun finish(s: ScanSession, reconSaved: kotlinx.coroutines.Deferred<Unit>) {
         delay(800) // últimos JPEG del HAL
         val deadline = SystemClock.uptimeMillis() + 8000
         while ((pendingWrites.get() > 0 || pendingAnalysis.get() > 0) && SystemClock.uptimeMillis() < deadline) delay(50)
-        // Primero las mallas (lo que se mira); luego la nitidez, que se lleva toda la CPU.
-        reconDone.await()
-        if (_state.value.deblurMotion) deblurAll(s) else deblurJobs.clear()
-        deblurTimes.clear()
+        // Los archivos del escaneo se cierran YA (fotos, poses, calidad): nada queda a medias en memoria.
         runCatching { s.writeQualitySummary(qualitySummary()) }
         s.close()
         stopping = null
-        val zip = runCatching { s.zip() }.getOrNull()
         log("Escaneo guardado: ${s.imageCount.get()} imágenes en ${s.dir.absolutePath}")
-        _state.update { it.copy(busy = false, lastZip = zip, progressText = "") }
-        com.tisma.scanner.ProcessingService.stop(getApplication())
+        reconSaved.await()
+        // Lo que falta, en disco: así se puede retomar si la app se cierra.
+        val jobs = if (_state.value.deblurMotion) generateSequence { deblurJobs.poll() }.toList() else { deblurJobs.clear(); emptyList() }
+        deblurTimes.clear()
+        if (jobs.isNotEmpty()) runCatching {
+            File(s.dir, "deblur_pendiente.csv").writeText(jobs.joinToString("") { (f, dx, dy) ->
+                "${f.relativeTo(s.dir).invariantSeparatorsPath},$dx,$dy\n" })
+        }
+        savePending(s.dir, listOf("malla_rapida", "malla_ia") + (if (jobs.isNotEmpty()) listOf("nitidez") else emptyList()) + "zip")
+        processScan(s.dir, resumed = false)
     }
 
     /** Barrido de foco: mantener el móvil quieto (mejor apoyado) ~1-2 s. */
@@ -1814,31 +1818,108 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val deblurTimes = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
 
     /** Quita el desenfoque de movimiento de las fotos marcadas (en el móvil, 2 a la vez). */
-    private suspend fun deblurAll(s: ScanSession) {
-        val jobs = generateSequence { deblurJobs.poll() }.filter { it.first.exists() }.toList()
-        if (jobs.isEmpty()) return
-        val done = java.util.concurrent.atomic.AtomicInteger()
-        val ok = java.util.concurrent.atomic.AtomicInteger()
-        val log = java.util.Collections.synchronizedList(ArrayList<String>())
-        progress("Mejorando nitidez 0/${jobs.size}", 0)
+    /**
+     * Quita el desenfoque de movimiento de las fotos pendientes (en el móvil, de a una con todos
+     * los núcleos). Cada foto hecha se anota al momento en deblurred.csv: si la app se cierra,
+     * al retomar se sigue por la siguiente.
+     */
+    private suspend fun deblurAll(dir: File, jobs: List<Triple<File, Double, Double>>) {
+        val logFile = File(dir, "deblurred.csv")
+        val done = runCatching { logFile.readLines().drop(1).map { it.substringBefore(',') }.toHashSet() }.getOrDefault(HashSet())
+        val todo = jobs.filter { it.first.exists() && it.first.relativeTo(dir).invariantSeparatorsPath !in done }
+        if (todo.isEmpty()) return
+        if (!logFile.exists()) logFile.writeText("file,blur_dx_px,blur_dy_px,applied\n")
+        var ok = 0
         val t0 = SystemClock.uptimeMillis()
-        kotlinx.coroutines.coroutineScope {
-            // De a una: cada foto ya usa todos los núcleos (franjas en paralelo) y así la memoria es la de una.
-            val gate = kotlinx.coroutines.sync.Semaphore(1)
-            for ((f, dx, dy) in jobs) launch(Dispatchers.Default) {
-                gate.acquire()
-                try {
-                    val r = runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy) }.getOrDefault(false)
-                    if (r) ok.incrementAndGet()
-                    log += "${f.relativeTo(s.dir).invariantSeparatorsPath},%.2f,%.2f,%d".format(java.util.Locale.US, dx, dy, if (r) 1 else 0)
-                } finally { gate.release() }
-                val n = done.incrementAndGet()
-                progress("Mejorando nitidez $n/${jobs.size}", n * 100 / jobs.size)
+        progress("Mejorando nitidez 0/${todo.size}", 0)
+        for ((n, job) in todo.withIndex()) {
+            val (f, dx, dy) = job
+            val r = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy) }.getOrDefault(false)
+            }
+            if (r) ok++
+            logFile.appendText("${f.relativeTo(dir).invariantSeparatorsPath},%.2f,%.2f,%d\n".format(java.util.Locale.US, dx, dy, if (r) 1 else 0))
+            progress("Mejorando nitidez ${n + 1}/${todo.size}", (n + 1) * 100 / todo.size)
+        }
+        log("Nitidez: $ok/${todo.size} fotos corregidas en ${(SystemClock.uptimeMillis() - t0) / 1000} s " +
+            "(%.1f s por foto)".format((SystemClock.uptimeMillis() - t0) / 1000.0 / todo.size))
+    }
+
+    // ------------------------------------------------------------------ procesado del escaneo (retomable)
+
+    /** Pasos pendientes de un escaneo, en disco (pendiente.json): lo que queda si la app se cierra. */
+    private fun pendingSteps(dir: File): MutableList<String> = runCatching {
+        val a = JSONObject(File(dir, "pendiente.json").readText()).getJSONArray("pasos")
+        MutableList(a.length()) { a.getString(it) }
+    }.getOrDefault(mutableListOf())
+
+    private fun savePending(dir: File, steps: List<String>) {
+        val f = File(dir, "pendiente.json")
+        if (steps.isEmpty()) { f.delete(); return }
+        runCatching { f.writeText(JSONObject().put("pasos", org.json.JSONArray(steps)).toString()) }
+    }
+
+    /**
+     * Procesa (o retoma) un escaneo ya cerrado: malla rápida → malla con IA → nitidez → .zip.
+     * Cada paso hecho se quita de pendiente.json. Protegido por el servicio en primer plano.
+     */
+    private suspend fun processScan(dir: File, resumed: Boolean) {
+        com.tisma.scanner.ProcessingService.start(getApplication(), if (resumed) "Retomando el escaneo…" else "Procesando el escaneo…")
+        _state.update { it.copy(busy = true) }
+        lastScanDir = dir
+        try {
+            var steps = pendingSteps(dir)
+            val needMeshes = steps.any { it.startsWith("malla") }
+            val (frs, shots) = if (needMeshes)
+                (com.tisma.scanner.recon.ReconState.load(File(dir, "recon_state.bin")) ?: (emptyList<com.tisma.scanner.recon.LivePointCloud.Fragment>() to emptyList()))
+                else (emptyList<com.tisma.scanner.recon.LivePointCloud.Fragment>() to emptyList())
+            if (resumed && frs.isNotEmpty()) _state.update { it.copy(surface = frs) }
+            fun done(step: String) { steps.remove(step); savePending(dir, steps) }
+            if ("malla_rapida" in steps) {
+                kotlinx.coroutines.withContext(Dispatchers.Default) { if (frs.size >= 2) buildModel(frs, shots, false, 80, "Malla rápida") }
+                done("malla_rapida")
+            }
+            if ("malla_ia" in steps) {
+                kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    if (_state.value.useDepthAi && _state.value.depthModelReady && shots.isNotEmpty() && frs.size >= 2)
+                        buildModel(frs, shots, true, 128, "Malla con IA")
+                }
+                done("malla_ia")
+            }
+            if ("nitidez" in steps) {
+                val jobs = runCatching { File(dir, "deblur_pendiente.csv").readLines().mapNotNull { l ->
+                    val p = l.split(','); if (p.size < 3) null else Triple(File(dir, p[0]), p[1].toDouble(), p[2].toDouble()) } }.getOrDefault(emptyList())
+                deblurAll(dir, jobs)
+                done("nitidez")
+            }
+            if ("zip" in steps) {
+                progress("Comprimiendo el escaneo…")
+                val zip = runCatching { com.tisma.scanner.session.ScanSession.zipDir(dir) }.getOrNull()
+                if (zip != null) { _state.update { it.copy(lastZip = zip) }; done("zip") }
+            }
+            if (steps.isEmpty()) {
+                File(dir, "recon_state.bin").delete(); File(dir, "deblur_pendiente.csv").delete()
+                log("Escaneo listo: ${dir.name}" + if (resumed) " (retomado tras cerrarse la app)" else "")
+            }
+        } catch (e: Throwable) {
+            log("Procesado de ${dir.name}: error $e")
+        } finally {
+            _state.update { it.copy(busy = false, progressText = "") }
+            com.tisma.scanner.ProcessingService.stop(getApplication())
+        }
+    }
+
+    /** Al abrir la app: escaneos que quedaron a medias (la app se cerró) se terminan solos. */
+    private fun resumeUnfinishedScans() {
+        val base = File(getApplication<Application>().getExternalFilesDir(null), "scans")
+        val pending = base.listFiles { f -> f.isDirectory && File(f, "pendiente.json").exists() }?.sortedBy { it.name }.orEmpty()
+        if (pending.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+            for (dir in pending) {
+                log("Retomando ${dir.name}: ${pendingSteps(dir).joinToString()}")
+                processScan(dir, resumed = true)
             }
         }
-        runCatching { File(s.dir, "deblurred.csv").writeText("file,blur_dx_px,blur_dy_px,applied\n" + log.joinToString("\n") + "\n") }
-        log("Nitidez: ${ok.get()}/${jobs.size} fotos corregidas en ${(SystemClock.uptimeMillis() - t0) / 1000} s")
-        _state.update { it.copy(progressText = "") }
     }
 
     /** Criterios mínimos antes de gastar cómputo en la nube. */

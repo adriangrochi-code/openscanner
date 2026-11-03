@@ -142,12 +142,18 @@ class ScanSession(baseDir: File) {
     }
 
     /** Comprime el escaneo en un .zip junto a la carpeta para compartirlo. */
-    fun zip(): File {
+    fun zip(): File = zipDir(dir)
+
+    companion object {
+        /** Comprime una carpeta de escaneo en un .zip a su lado (también para retomar un escaneo). */
+        fun zipDir(dir: File): File {
         val out = File(dir.parentFile, dir.name + ".zip")
         ZipOutputStream(FileOutputStream(out).buffered()).use { zos ->
             // Los JPEG ya están comprimidos: compresión mínima = zip mucho más rápido.
             zos.setLevel(java.util.zip.Deflater.BEST_SPEED)
-            dir.walkTopDown().filter { it.isFile }.forEach { f ->
+            // Fuera lo interno del procesado en el móvil (estado para retomar, temporales).
+            val internal = setOf("recon_state.bin", "pendiente.json", "deblur_pendiente.csv")
+            dir.walkTopDown().filter { it.isFile && it.name !in internal && !it.name.endsWith(".tmp") }.forEach { f ->
                 val entry = ZipEntry(dir.name + "/" + f.relativeTo(dir).invariantSeparatorsPath)
                 zos.putNextEntry(entry)
                 f.inputStream().use { it.copyTo(zos) }
@@ -155,5 +161,6 @@ class ScanSession(baseDir: File) {
             }
         }
         return out
+    }
     }
 }
