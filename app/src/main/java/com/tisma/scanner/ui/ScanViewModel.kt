@@ -130,6 +130,10 @@ data class UiState(
     /** Vista previa del último escaneo: superficie (.obj) y nube (.ply). */
     val cloudPly: File? = null,
     val surfaceObj: File? = null,
+    /** Guía AR: puntos con su calidad (0 rojo .. 1 verde) y fotos flotando donde se tomaron. */
+    val arXyz: FloatArray = FloatArray(0),
+    val arQuality: FloatArray = FloatArray(0),
+    val arCards: List<ArCard> = emptyList(),
     /** Indicación grande de la grabación (estable ~1 s para que no parpadee). */
     val instruction: Instruction? = null,
     /** Guía en vivo de la cobertura (anillo actual, hueco y sentido de giro). */
@@ -855,6 +859,40 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val reconExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "recon").apply { priority = Thread.NORM_PRIORITY - 1 } }
     private val reconPending = java.util.concurrent.atomic.AtomicInteger()
     @Volatile private var orbitDist = 0.0
+    private val _arPose = kotlinx.coroutines.flow.MutableStateFlow<ArPose?>(null)
+    override val arPose: kotlinx.coroutines.flow.StateFlow<ArPose?> = _arPose
+    private var lastArMs = 0L
+    private var lastCardDir: com.tisma.scanner.ins.Vec3? = null
+    private val cards = java.util.concurrent.CopyOnWriteArrayList<ArCard>()
+
+    /** Pose actual para la AR: orientación de la INS (giróscopo) en la órbita a la distancia del enfoque. */
+    private fun updateArPose(now: Long) {
+        if (session == null || !_state.value.videoMode || orbitDist <= 0.0) { if (_arPose.value != null) _arPose.value = null; return }
+        if (now - lastArMs < 33) return
+        lastArMs = now
+        val cam = cameras.previewCameraId ?: return
+        val st = ins.latest() ?: return
+        val info = inventory[cam] ?: return
+        val focal = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return
+        val sw = info.sensorSizeMm?.first?.toDouble() ?: return
+        val orient = sensorOrientationCache.getOrPut(cam) { cameras.sensorOrientation(cam) }
+        val (ax, ay, az) = com.tisma.scanner.ins.OpticalVelocity.cameraAxesInDevice(orient)
+        val q = st.orientation
+        val z = q.rotate(az)
+        val w = MultiCameraController.KF_W
+        _arPose.value = ArPose(q.rotate(ax), q.rotate(ay), z, z * -orbitDist, Optics.fxPixels(focal, sw, w), w, MultiCameraController.KF_H, orient)
+    }
+
+    /** Miniatura vertical pequeña (para las fotos flotantes) desde la miniatura del sensor. */
+    private fun portraitCard(thumb: IntArray, tw: Int, th: Int, orient: Int, step: Int = 4): Triple<IntArray, Int, Int> {
+        val w = th / step; val h = tw / step
+        val out = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val (u, v) = if (((orient % 360) + 360) % 360 == 270) (tw - 1 - y * step) to (x * step) else (y * step) to (th - 1 - x * step)
+            out[y * w + x] = thumb[v.coerceIn(0, th - 1) * tw + u.coerceIn(0, tw - 1)]
+        }
+        return Triple(out, w, h)
+    }
 
     override fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray) {
         if (session == null) return
@@ -882,6 +920,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 live.depthRange = dist * 0.4..dist * 2.0
                 live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
                     MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                // Foto flotante cada ~7° de cambio de dirección (como mucho 60).
+                val prevDir = lastCardDir
+                if (prevDir == null || Math.toDegrees(kotlin.math.acos((prevDir dot view.zAxis).coerceIn(-1.0, 1.0))) >= 7.0) {
+                    lastCardDir = view.zAxis
+                    val (ct, cw, ch) = portraitCard(thumb, MultiCameraController.THUMB_W, MultiCameraController.THUMB_H, orient)
+                    cards += ArCard(cards.size + 1, view.center, ct, cw, ch)
+                    while (cards.size > 60) cards.removeAt(0)
+                }
                 // Etapa 2 (color) cada pocos fotogramas, para los puntos que ya no se ven.
                 com.tisma.scanner.diag.DiagLog.max("recon_ms", (System.nanoTime() - t0) / 1_000_000)
                 publishCloud()
@@ -893,7 +939,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     private fun publishCloud() {
         val frs = live.fragments(); val n = live.pointCount()
-        _state.update { it.copy(surface = frs, cloudPoints = n) }
+        val (xyz, q) = live.quality()
+        val cs = cards.toList()
+        _state.update { it.copy(surface = frs, cloudPoints = n, arXyz = xyz, arQuality = q, arCards = cs) }
     }
 
     @Volatile private var lastVideoState: InsState? = null
@@ -941,6 +989,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     private fun stabilizeInner(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform? {
+        // En vídeo 360 la imagen no se mueve ni se amplía: la guía AR se dibuja encima y debe coincidir.
+        if (_state.value.videoMode) return null
         if (!_state.value.stabilizePreview || viewW <= 0 || viewH <= 0) return null
         val cam = cameras.previewCameraId ?: return null
         val info = inventory[cam] ?: return null
@@ -1154,6 +1204,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         manualTriggers.clear(); multiTriggers.clear()
         lastVideoState = null; lastVideoSaveMs = 0; videoKept.set(0); videoFast.set(0)
         orbitDist = 0.0
+        cards.clear(); lastCardDir = null
         reconExec.execute { live.reset(); publishCloud() }
         _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null) }
         lastInstruction = null
@@ -1338,6 +1389,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             }
             val now = SystemClock.uptimeMillis()
             previewWatchdog(now)
+            updateArPose(now)
             if (now - lastSensorUi > 1000) {
                 lastSensorUi = now
                 val status = imu.status()

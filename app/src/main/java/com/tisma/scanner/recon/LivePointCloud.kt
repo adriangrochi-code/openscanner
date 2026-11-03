@@ -209,6 +209,24 @@ class LivePointCloud(
         return xyz to colors.toIntArray()
     }
 
+    /**
+     * Para la guía en realidad aumentada: xyz y calidad 0..1 de cada punto (cuántas vistas lo
+     * ven y desde qué ángulo): 0 = visto apenas (rojo), 1 = bien cubierto (verde).
+     */
+    @Synchronized fun quality(): Pair<FloatArray, FloatArray> {
+        val xyz = FloatArray(px.size * 3); val q = FloatArray(px.size)
+        for ((i, p) in px.withIndex()) {
+            xyz[3 * i] = p.x.toFloat(); xyz[3 * i + 1] = p.y.toFloat(); xyz[3 * i + 2] = p.z.toFloat()
+            val obs = pointObs[i]
+            val first = keyframes[obs.first().kf]?.view; val last = keyframes[obs.last().kf]?.view
+            val spread = if (first != null && last != null)
+                Math.toDegrees(acos((first.ray(obs.first().u, obs.first().v) dot last.ray(obs.last().u, obs.last().v)).coerceIn(-1.0, 1.0))) else 0.0
+            // ≥ 8 vistas y ≥ 20° entre la primera y la última = bien cubierto.
+            q[i] = (0.5 * ((obs.size - 2) / 6.0).coerceIn(0.0, 1.0) + 0.5 * (spread / 20.0).coerceIn(0.0, 1.0)).toFloat()
+        }
+        return xyz to q
+    }
+
     @Synchronized fun pointCount() = px.size
     @Synchronized fun coloredCount() = colors.count { it != 0 }
 

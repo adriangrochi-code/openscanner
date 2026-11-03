@@ -32,6 +32,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -697,6 +700,9 @@ private fun VideoCaptureScreen(
     preview: @Composable () -> Unit, onOpenSettings: () -> Unit, openReview: Boolean = false,
 ) {
     var review by remember { mutableStateOf(openReview) }
+    var showCards by remember { mutableStateOf(true) }
+    var showPoints by remember { mutableStateOf(true) }
+    var showPiece by remember { mutableStateOf(false) }
     var wasScanning by remember { mutableStateOf(s.scanning) }
     LaunchedEffect(s.scanning) {
         if (wasScanning && !s.scanning) review = true
@@ -710,6 +716,7 @@ private fun VideoCaptureScreen(
         if (s.scanning && covered > lastCovered) haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
         lastCovered = covered
     }
+    val pose by vm.arPose.collectAsState()
     val toneColor = when {
         !s.scanning -> Color.White.copy(alpha = 0.75f)
         s.videoTooFast -> Tisma.Warn
@@ -718,8 +725,17 @@ private fun VideoCaptureScreen(
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).align(Alignment.Center)) {
             preview()
-            FramingGuide(toneColor, Modifier.fillMaxSize())
+            if (s.scanning || s.arCards.isNotEmpty()) {
+                ArOverlay(pose, s.arXyz, s.arQuality, s.arCards, showPoints, showCards, Modifier.fillMaxSize().clipToBounds())
+            }
+            if (!s.scanning) FramingGuide(toneColor, Modifier.fillMaxSize())
             if (s.scanning) Box(Modifier.fillMaxSize().border(3.dp, toneColor.copy(alpha = 0.85f)))
+            // La pieza en vivo, en pequeño, si se pide.
+            if (showPiece && s.surface.isNotEmpty()) {
+                Box(Modifier.align(Alignment.TopEnd).padding(10.dp).size(110.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xCC1E1E22))) {
+                    PieceView(s.surface, textured = !s.scanning, modifier = Modifier.fillMaxSize())
+                }
+            }
         }
 
         Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).background(topShade).statusBarsPadding(),
@@ -734,7 +750,7 @@ private fun VideoCaptureScreen(
             if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Tisma.Purple)
             when {
                 s.scanning -> InstructionPill(s.instruction ?: Instruction("↻", "Rodea la pieza despacio", Instruction.Tone.INFO))
-                !s.busy -> InstructionPill(Instruction("▢", "Pon la pieza en el recuadro y toca Grabar", Instruction.Tone.INFO))
+                !s.busy && s.arCards.isEmpty() -> InstructionPill(Instruction("▢", "Pon la pieza en el recuadro y toca grabar", Instruction.Tone.INFO))
             }
             if (s.precisionBadge.isNotEmpty()) {
                 Spacer(Modifier.height(6.dp))
@@ -742,44 +758,91 @@ private fun VideoCaptureScreen(
             }
         }
 
-        Column(
-            Modifier.fillMaxWidth().align(Alignment.BottomCenter).background(bottomShade).navigationBarsPadding()
-                .padding(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        Column(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally) {
             val toasts = buildList {
                 if (s.rigWarning.isNotEmpty()) add(Triple("La cámara principal no está disponible · ver ⚙ Cámaras", true, false))
                 if (s.scanning && s.analyzed > 3 && s.textureRecent < ScanViewModel.LOW_TEXTURE)
                     add(Triple("La pieza tiene poco dibujo: ponla sobre el tapete o usa spray mate", true, false))
                 if (s.cloudStatus.isNotEmpty() && !s.scanning) add(Triple(s.cloudStatus, s.cloudStatus.startsWith("✗"), s.cloudStatus.startsWith("✓")))
             }.take(2)
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 toasts.forEach { (text, error, ok) -> Toast(text, error = error, ok = ok) }
             }
-            if (toasts.isNotEmpty()) Spacer(Modifier.height(10.dp))
-            if (!s.scanning && !s.busy) {
-                ModeSwitch(true, vm::setVideoMode)
-                Spacer(Modifier.height(12.dp))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                LiveCard(s) { review = true }
-                RecordButton(s, vm)
-                Column(Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (s.scanning) {
-                        Text("${(s.coveragePct * 100).toInt()} %", color = Tisma.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                        Text("cubierto", color = Tisma.TextDim, fontSize = 11.sp)
-                    }
+            if (toasts.isNotEmpty()) Spacer(Modifier.height(8.dp))
+            // Barra de capas: fotos, puntos y pieza.
+            if (s.scanning || s.arCards.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth().background(Color(0xE62C2C31)).padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly) {
+                    LayerToggle("▣", "Fotos", showCards) { showCards = !showCards }
+                    LayerToggle("⁘", "Puntos", showPoints) { showPoints = !showPoints }
+                    LayerToggle("◆", "Pieza", showPiece) { showPiece = !showPiece }
                 }
             }
-            if (s.scanning) {
-                Spacer(Modifier.height(10.dp))
-                BandBar(s)
+            Column(Modifier.fillMaxWidth().background(Tisma.Bar).padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    GalleryThumb(s)
+                    Spacer(Modifier.width(12.dp))
+                    VideoPhotoToggle(video = true, enabled = !s.scanning && !s.busy) { vm.setVideoMode(it) }
+                    Spacer(Modifier.weight(1f))
+                    RecordButton(s, vm)
+                    Spacer(Modifier.weight(1f))
+                    NextButton(enabled = !s.scanning && (s.lastZip != null || s.surface.isNotEmpty() || s.busy)) { review = true }
+                }
+                if (s.scanning) {
+                    Spacer(Modifier.height(10.dp))
+                    BandBar(s)
+                }
+                Spacer(Modifier.height(6.dp))
+                if (s.scanning) Text("${s.videoFrames} fotogramas · ${(s.coveragePct * 100).toInt()} % cubierto", color = Tisma.TextDim, fontSize = 12.sp)
+                else StatusLine(s)
             }
-            Spacer(Modifier.height(8.dp))
-            if (s.scanning) Text("${s.videoFrames} fotogramas · %.0f MB".format(s.storedMb), color = Tisma.TextDim, fontSize = 12.sp)
-            else StatusLine(s)
         }
         if (review && !s.scanning && (s.surface.isNotEmpty() || s.busy || s.lastZip != null)) ReviewScreen(s, vm, onShare) { review = false }
+    }
+}
+
+@Composable
+private fun LayerToggle(icon: String, label: String, on: Boolean, onClick: () -> Unit) {
+    Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable { onClick() }.padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(icon, color = if (on) Tisma.Warn else Tisma.TextOff, fontSize = 18.sp)
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = if (on) Tisma.Text else Tisma.TextOff, fontSize = 12.sp)
+    }
+}
+
+/** Última foto con el número de fotogramas guardados. */
+@Composable
+private fun GalleryThumb(s: UiState) {
+    val last = s.arCards.lastOrNull()
+    val bmp = remember(last?.id) { last?.let { android.graphics.Bitmap.createBitmap(it.thumb, it.w, it.h, android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap() } }
+    Box(Modifier.size(48.dp).clip(RoundedCornerShape(8.dp)).background(Tisma.Field), contentAlignment = Alignment.Center) {
+        if (bmp != null) androidx.compose.foundation.Image(bmp, null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+        Box(Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xCC000000)).padding(horizontal = 6.dp, vertical = 1.dp)) {
+            Text("${s.videoFrames}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** Interruptor vídeo (encendido) / fotos (apagado). */
+@Composable
+private fun VideoPhotoToggle(video: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Box(Modifier.width(58.dp).height(30.dp).clip(RoundedCornerShape(15.dp))
+        .background(if (video) Tisma.Purple else Tisma.Field).clickable(enabled = enabled) { onChange(!video) }.padding(3.dp)) {
+        Box(Modifier.size(24.dp).align(if (video) Alignment.CenterEnd else Alignment.CenterStart).clip(CircleShape).background(Color.White),
+            contentAlignment = Alignment.Center) {
+            Text(if (video) "▶" else "◉", color = Tisma.Bar, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun NextButton(enabled: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(52.dp).clip(CircleShape).background(if (enabled) Tisma.Purple else Tisma.Field).clickable(enabled = enabled) { onClick() },
+        contentAlignment = Alignment.Center) {
+        Text("→", color = if (enabled) Color.White else Tisma.TextOff, fontSize = 24.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -849,7 +912,6 @@ private fun RecordButton(s: UiState, vm: ScanActions) {
                 else Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFFE53935)))
             }
         }
-        Text(if (s.scanning) "Detener" else "Grabar", color = Tisma.Text, fontSize = 13.sp)
     }
 }
 
@@ -868,22 +930,6 @@ private fun BandBar(s: UiState) {
                         .background(if (pct >= 0.9f) Tisma.Ok else if (current) Tisma.PurpleText else Tisma.Warn))
                 }
             }
-        }
-    }
-}
-
-/** Tarjeta con la pieza en vivo (gris mientras graba; con color al terminar). */
-@Composable
-private fun LiveCard(s: UiState, onOpen: () -> Unit) {
-    Column(Modifier.width(76.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        val has = s.surface.isNotEmpty()
-        if (has || s.scanning) {
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(Tisma.Bg).clickable(enabled = has) { onOpen() },
-                contentAlignment = Alignment.Center) {
-                if (has) PieceView(s.surface, textured = !s.scanning, modifier = Modifier.fillMaxSize())
-                else Text("…", color = Tisma.TextDim, fontSize = 20.sp)
-            }
-            Text(if (has) "Tu pieza" else "Construyendo", color = Tisma.TextDim, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
         }
     }
 }

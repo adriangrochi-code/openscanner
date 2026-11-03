@@ -26,6 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 class ScanScreenshotTest {
 
     private object NoActions : ScanActions {
+        override val arPose = kotlinx.coroutines.flow.MutableStateFlow<ArPose?>(demoPose())
         override fun setVideoMode(v: Boolean) {}
         override fun onPreviewAvailable(texture: SurfaceTexture) {}
         override fun onPreviewDestroyed() {}
@@ -102,6 +103,7 @@ class ScanScreenshotTest {
 
     @Test fun video360() = shot("video360", scanning.copy(
         videoMode = true, videoFrames = 87, liveAzDeg = 150.0, liveElDeg = 38.0, coveragePct = 0.31, storedMb = 96.0,
+        arXyz = demoAr().first, arQuality = demoAr().second, arCards = demoCards(), textureRecent = 0.6,
         guide = com.tisma.scanner.quality.CoverageMap.Guidance(1, 0.46, 1, 165.0, 255.0, null),
         instruction = Instruction("→", "Sigue hacia la derecha", Instruction.Tone.OK),
         surface = demoSurface(),
@@ -118,6 +120,46 @@ class ScanScreenshotTest {
     @Test fun video360Review() = shot("video360_review", scanning.copy(
         scanning = false, videoMode = true, surface = demoSurface(), lastZip = File("scan.zip"),
     ), 0, review = true)
+
+    /** Puntos de la caja de prueba vistos por la cámara de [demoPose], con calidad según la cara. */
+    private fun demoAr(): Pair<FloatArray, FloatArray> {
+        val r = java.util.Random(2); val n = 1500
+        val xyz = FloatArray(n * 3); val q = FloatArray(n)
+        for (i in 0 until n) {
+            val a = r.nextFloat() * 0.06f - 0.03f; val b = r.nextFloat() * 0.04f
+            val face = i % 4
+            when (face) {
+                0 -> { xyz[3 * i] = 0.03f; xyz[3 * i + 1] = a; xyz[3 * i + 2] = b; q[i] = 0.9f }
+                1 -> { xyz[3 * i] = a; xyz[3 * i + 1] = 0.03f; xyz[3 * i + 2] = b; q[i] = 0.45f }
+                2 -> { xyz[3 * i] = a; xyz[3 * i + 1] = r.nextFloat() * 0.06f - 0.03f; xyz[3 * i + 2] = 0.04f; q[i] = 0.7f }
+                else -> { xyz[3 * i] = r.nextFloat() * 0.16f - 0.08f; xyz[3 * i + 1] = r.nextFloat() * 0.16f - 0.08f; xyz[3 * i + 2] = 0f; q[i] = 0.15f }
+            }
+            q[i] = (q[i] + (r.nextFloat() - 0.5f) * 0.3f).coerceIn(0f, 1f)
+        }
+        return xyz to q
+    }
+
+    /** Anillo de fotos tomadas a 30° de altura y 25 cm, como al rodear la pieza. */
+    private fun demoCards(): List<ArCard> = (0 until 360 step 15).mapIndexed { k, az ->
+        val a = Math.toRadians(az.toDouble()); val e = Math.toRadians(30.0)
+        val c = com.tisma.scanner.ins.Vec3(kotlin.math.cos(e) * kotlin.math.cos(a), kotlin.math.cos(e) * kotlin.math.sin(a), kotlin.math.sin(e)) * 0.25
+        val w = 30; val h = 40
+        ArCard(k, c, IntArray(w * h) { i -> if ((i % w) in 8..22 && (i / w) in 12..30) 0xFFB0703C.toInt() else 0xFFD8D4CC.toInt() }, w, h)
+    }
+
+    companion object {
+        /** Cámara a 25 cm, 35° de altura y 50° de azimut mirando al centro de la caja. */
+        fun demoPose(): ArPose {
+            val a = Math.toRadians(50.0); val e = Math.toRadians(35.0)
+            val pos = com.tisma.scanner.ins.Vec3(kotlin.math.cos(e) * kotlin.math.cos(a), kotlin.math.cos(e) * kotlin.math.sin(a), kotlin.math.sin(e)) * 0.25
+            val target = com.tisma.scanner.ins.Vec3(0.0, 0.0, 0.02)
+            val z = (target - pos).normalized()
+            val right = (z cross com.tisma.scanner.ins.Vec3(0.0, 0.0, 1.0)).normalized()
+            val up = right cross z
+            // Sensor a 90°: el eje u del sensor va hacia abajo en pantalla y el v hacia la izquierda.
+            return ArPose(-up, -right, z, pos, 280.0, 320, 240, 90)
+        }
+    }
 
     /** Pieza de prueba: caja de 6×6×4 cm en trozos con una textura de cuadros (como el tapete). */
     private fun demoSurface(): List<com.tisma.scanner.recon.LivePointCloud.Fragment> {
