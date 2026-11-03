@@ -141,6 +141,7 @@ private fun CameraScreen(
         ) {
             val toasts = buildList {
                 if (s.rigWarning.isNotEmpty()) add(Triple("Esta pasada no puede usar su cámara · ver ⚙ Cámaras", true, false))
+                if (s.shotWarning.isNotEmpty()) add(Triple(s.shotWarning, true, false))
                 if (s.scanning && s.capturing) add(Triple("Capturando… mantené el móvil quieto", false, false))
                 else if (s.scanning && s.waitingSteady) add(Triple("Quieto un momento…", false, false))
                 if (s.gyroRate > 0.6 && s.scanning) add(Triple("Demasiado rápido: las fotos saldrán movidas", true, false))

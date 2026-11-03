@@ -27,6 +27,8 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
     @Volatile private var writer: BufferedWriter? = null
 
     @Volatile var gyroRate: Double = 0.0; private set
+    /** Giro suavizado (τ ≈ 50 ms a 400 Hz): el temblor instantáneo de la mano no cuenta como movimiento. */
+    @Volatile var gyroRateSmooth: Double = 0.0; private set
     @Volatile var sampleCount: Long = 0; private set
 
     /** Escucha extra del acelerómetro (la ventana de calibración de 6 caras). */
@@ -143,6 +145,7 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
             Sensor.TYPE_GYROSCOPE -> {
                 val v = e.values
                 gyroRate = sqrt((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).toDouble())
+                gyroRateSmooth += (gyroRate - gyroRateSmooth) * 0.05
                 ins.onGyro(t, Vec3.of(v))
             }
         }

@@ -56,15 +56,29 @@ def read_frames(scan: Path):
         return list(csv.DictReader(f))
 
 
-def drop_blurry(scan: Path, frames):
-    """Descarta las fotos que la app marcó como movidas (quality.csv), salvo ráfagas HDR."""
+def drop_blurry(scan: Path, frames, max_drop: float = 0.3):
+    """Descarta las fotos que la app marcó como movidas (quality.csv), con dos salvaguardas:
+    - no toca los disparos de varias fotos por cámara (HDR, apilado de foco, ráfaga): se
+      fusionan después y quitar una rompe el grupo;
+    - nunca quita más de `max_drop` de las fotos: si casi todo sale "movido" (interior, a mano),
+      se quitan sólo las peores; borrar todo dejaría sin cobertura.
+    """
     p = scan / "quality.csv"
     if not p.exists():
         return frames
     with open(p) as f:
-        bad = {(r["camera_id"], r["t_ns"]) for r in csv.DictReader(f) if r["blurry"] == "1"}
-    kept = [fr for fr in frames if (fr["camera_id"], fr["t_ns"]) not in bad]
-    print(f"[quality] {len(frames) - len(kept)} fotos movidas descartadas")
+        blur = {(r["camera_id"], r["t_ns"]): float(r.get("motion_blur_px") or 0)
+                for r in csv.DictReader(f) if r["blurry"] == "1"}
+    per_shot = {}
+    for fr in frames:
+        key = (fr.get("trigger", ""), fr["camera_id"])
+        per_shot[key] = per_shot.get(key, 0) + 1
+    candidates = [fr for fr in frames if (fr["camera_id"], fr["t_ns"]) in blur
+                  and per_shot[(fr.get("trigger", ""), fr["camera_id"])] == 1]
+    candidates.sort(key=lambda fr: -blur[(fr["camera_id"], fr["t_ns"])])
+    drop = {id(fr) for fr in candidates[:int(len(frames) * max_drop)]}
+    kept = [fr for fr in frames if id(fr) not in drop]
+    print(f"[quality] {len(drop)} fotos movidas descartadas (marcadas {len(blur)}, máx. {int(max_drop * 100)} %)")
     return kept
 
 

@@ -118,6 +118,8 @@ data class UiState(
     val capturing: Boolean = false,
     /** Esperando a que el móvil se quede quieto para disparar. */
     val waitingSteady: Boolean = false,
+    /** Aviso de la última foto a mano (p.ej. salió movida). */
+    val shotWarning: String = "",
     val images: Int = 0,
     val triggers: Int = 0,
     val position: Triple<Double, Double, Double> = Triple(0.0, 0.0, 0.0),
@@ -200,6 +202,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val coverage get() = coverageMaps.getValue(activePass)
     /** Disparos que son apilados de enfoque: sus planos desenfocados no son "fotos movidas". */
     private val stackTriggers = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    /** Disparos hechos a mano: si salen movidas se avisa, pero no se borran. */
+    private val manualTriggers = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    /** Disparos de varias fotos (HDR, ráfaga, barrido): se fusionan en el servidor, no se borran sueltas. */
+    private val multiTriggers = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private var warnJob: kotlinx.coroutines.Job? = null
     /** (disparo, cámara) ya contados en la cobertura: una ráfaga HDR/apilado cuenta una vez. */
     private val coveredShots = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val blurJudge = BlurJudge()
@@ -1025,6 +1032,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("focus_depth_every", if (_state.value.focusDepth) AUTO_SWEEP_EVERY else 0)
                 put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
+                put("motion_blur_ref_width_px", REF_WIDTH_PX)
                 put("min_angle_deg", selector.minAngleDeg)
                 put("min_translation_m", selector.minTranslationM)
                 put("max_gyro_rad_s", selector.maxGyroRadS)
@@ -1032,7 +1040,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             },
         )
         ins.reset(); selector.reset(); trigger = 0
-        shotsSinceSweep = AUTO_SWEEP_EVERY - 1; focusSweepCount = 0   // el primer disparo quieto ya mide
+        // El primer disparo es una foto normal (rápida); el barrido de enfoque va cada AUTO_SWEEP_EVERY.
+        shotsSinceSweep = 0; focusSweepCount = 0
+        manualTriggers.clear(); multiTriggers.clear()
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
         stackTriggers.clear(); coveredShots.clear(); exposures.clear()
         synchronized(recentTexture) { recentTexture.clear() }
@@ -1108,9 +1118,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         if (session == null || sequenceRunning || steadyJob?.isActive == true) return
         steadyJob = viewModelScope.launch {
             val deadline = SystemClock.uptimeMillis() + STEADY_WAIT_MS
-            if (imu.gyroRate > STEADY_GYRO) {
+            if (imu.gyroRateSmooth > STEADY_GYRO) {
                 _state.update { it.copy(waitingSteady = true) }
-                while (imu.gyroRate > STEADY_GYRO && SystemClock.uptimeMillis() < deadline) delay(20)
+                while (imu.gyroRateSmooth > STEADY_GYRO && SystemClock.uptimeMillis() < deadline) delay(20)
                 _state.update { it.copy(waitingSteady = false) }
             }
             if (session != null) fire(ins.latest(), manual = true)
@@ -1123,13 +1133,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val ui = _state.value
         val pass = activePass
         // HDR sólo si el móvil está quieto: la ráfaga dura 3 exposiciones y no debe haber movimiento.
-        val bracket = if (ui.hdr && pass.hdr && (st?.stationary == true || imu.gyroRate < 0.05)) HDR_EV else emptyList()
+        val bracket = if (ui.hdr && pass.hdr && (st?.stationary == true || imu.gyroRateSmooth < 0.05)) HDR_EV else emptyList()
         var plan = focusPlanFor(pass)
         var bracketUsed = bracket
         // Medición de distancia por enfoque: cada AUTO_SWEEP_EVERY disparos, si el móvil está
         // quieto, este disparo es un barrido de enfoque (mapa de profundidad en mm + escala).
         shotsSinceSweep++
-        val still = st?.stationary == true || imu.gyroRate < 0.08
+        val still = st?.stationary == true || imu.gyroRateSmooth < 0.08
         if (ui.focusDepth && shotsSinceSweep >= AUTO_SWEEP_EVERY && still) {
             shotsSinceSweep = 0
             focusSweepCount++
@@ -1145,7 +1155,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         viewModelScope.launch {
             try {
                 val rig = rigPlan
-                shoot(bracketUsed, plan, burst)
+                shoot(bracketUsed, plan, burst, manual)
                 // Las cámaras por turnos cierran y reabren la vista previa: en disparo automático
                 // sólo con el móvil quieto (si no, al moverlo la vista quedaba congelada).
                 if (ui.rotateCameras && rig.separate.isNotEmpty() && (manual || st?.stationary == true)) {
@@ -1154,7 +1164,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     for (g in rig.separate) {
                         openRig(listOf(g))
                         delay(700) // convergencia de AE/AF
-                        shoot(bracketUsed, plan, burst)
+                        shoot(bracketUsed, plan, burst, manual)
                     }
                     openRig(rig.groups)
                 }
@@ -1165,10 +1175,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         }
     }
 
-    private suspend fun shoot(bracket: List<Int>, plan: MultiCameraController.FocusPlan?, burst: Int = 0) {
+    private suspend fun shoot(bracket: List<Int>, plan: MultiCameraController.FocusPlan?, burst: Int = 0, manual: Boolean = false) {
         val s = session ?: return
         trigger++
         if (plan != null) stackTriggers += trigger
+        if (manual) manualTriggers += trigger
+        if (plan != null || bracket.isNotEmpty() || burst > 1) multiTriggers += trigger
+        val t0 = SystemClock.uptimeMillis()
         val before = s.imageCount.get()
         val expected = cameras.capture(bracket, plan, burst)
         _state.update { it.copy(triggers = trigger) }
@@ -1176,6 +1189,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         // (HDR, apilado) quedaría etiquetada con el disparo siguiente.
         val deadline = SystemClock.uptimeMillis() + 1500 + 400L * expected
         while (s.imageCount.get() - before < expected && SystemClock.uptimeMillis() < deadline) delay(20)
+        com.tisma.scanner.diag.DiagLog.event("foto", "disparo $trigger listo: ${s.imageCount.get() - before}/$expected imágenes en " +
+            "${SystemClock.uptimeMillis() - t0} ms" + (if (plan != null) " · barrido de foco" else if (bracket.isNotEmpty()) " · HDR" else if (burst > 1) " · ráfaga" else ""))
     }
 
     /** Bucle a ~100 Hz: refresca la UI, guarda trayectoria y decide disparos automáticos. */
@@ -1215,7 +1230,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                         position = Triple(st.position.x, st.position.y, st.position.z),
                         eulerDeg = Triple(roll, pitch, yaw),
                         stationary = st.stationary,
-                        gyroRate = imu.gyroRate,
+                        gyroRate = imu.gyroRateSmooth,
                         imuSamples = imu.sampleCount,
                         images = s?.imageCount?.get() ?: it.images,
                         posStdM = kotlin.math.sqrt(ins.positionVariance),
@@ -1262,10 +1277,18 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val q = JpegAnalyzer.analyze(jpeg, width) ?: return
         // Dos pruebas: física (giro durante la exposición) y de imagen (nitidez relativa).
         // En un apilado los planos están desenfocados a propósito: sólo cuenta la física.
-        val blurry = blurPx > MAX_MOTION_BLUR_PX ||
-            (trig !in stackTriggers && blurJudge.isBlurry(cameraId, q.sharpness))
+        // El arrastre se mide a la resolución con la que trabaja la reconstrucción (REF_WIDTH_PX):
+        // a 4000 px el temblor normal de la mano ya da 3-8 px y se borraba todo.
+        val blurRef = blurPx * minOf(1.0, REF_WIDTH_PX / width.toDouble())
+        val sharpLow = trig !in stackTriggers && blurJudge.isBlurry(cameraId, q.sharpness)
+        val blurry = blurRef > MAX_MOTION_BLUR_PX || sharpLow
+        val manual = trig in manualTriggers
         var deleted = false
-        if (blurry && _state.value.discardBlurry) {
+        com.tisma.scanner.diag.DiagLog.event("calidad", "#$cameraId disparo $trig: arrastre %.1f px (%.1f a %d px) · nitidez %.1f%s%s".format(
+            blurPx, blurRef, REF_WIDTH_PX.toInt(), q.sharpness, if (sharpLow) " (baja)" else "", if (blurry) " → MOVIDA" else " → ok"))
+        if (blurry && manual) warnShot("Foto movida (%.0f px): repítela más quieto o apoyado".format(blurRef))
+        // Sólo se borran las automáticas sueltas: las tuyas y las de ráfagas/HDR se guardan marcadas.
+        if (blurry && _state.value.discardBlurry && !manual && trig !in multiTriggers) {
             val freed = s.deleteImage(cameraId, t)
             if (freed > 0) { deleted = true; discardedCount++; discardedBytes += freed; storedBytes.addAndGet(-freed) }
         }
@@ -1306,6 +1329,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * Desenfoque por movimiento en píxeles = ángulo girado durante la exposición × focal (px).
      * Usa la orientación de la INS (precisa a escala de milisegundos) en [t, t + exposición].
      */
+    private fun warnShot(msg: String) {
+        warnJob?.cancel()
+        _state.update { it.copy(shotWarning = msg) }
+        warnJob = viewModelScope.launch { delay(4000); _state.update { it.copy(shotWarning = "") } }
+    }
+
     private fun motionBlurPx(cameraId: String, t: Long, width: Int): Double {
         // Exposición real de esa foto (en HDR, +2 EV es 4× más larga que la previsualización).
         val exp = exposures.remove("$cameraId/$t") ?: cameras.exposureNsFor(cameraId)
@@ -1397,15 +1426,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val MAX_BLUR_RATIO = 0.2
         /** Por debajo de esto la pieza apenas tiene textura emparejable. */
         const val LOW_TEXTURE = 0.3
-        /** Más de ~1,5 px de arrastre ya borra la microtextura que usa SIFT. */
-        const val MAX_MOTION_BLUR_PX = 1.5
+        /** Arrastre máximo a REF_WIDTH_PX: más de ~2,5 px ya borra la microtextura que usa SIFT. */
+        const val MAX_MOTION_BLUR_PX = 2.5
+        /** Ancho de imagen con el que trabaja la reconstrucción (COLMAP: 3200 px). */
+        const val REF_WIDTH_PX = 3200.0
         /** Distancia típica de enfoque de las macro de foco fijo de 2 MP. */
         const val MACRO_FOCUS_M = 0.04
         const val IMU_TEST_SECONDS = 60
         const val ANTI_SHAKE_FRAMES = 4
         /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
         const val STEADY_GYRO = 0.25
-        const val STEADY_WAIT_MS = 1200L
+        const val STEADY_WAIT_MS = 600L
         /** Sin fotogramas en pantalla durante este tiempo = vista previa parada (ms). */
         const val PREVIEW_STALL_MS = 1500L
         /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */
