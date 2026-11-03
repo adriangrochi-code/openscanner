@@ -65,6 +65,55 @@ def test_refined_positions_override_ins():
     assert np.allclose(views[2][2], [9, 9, 9])
 
 
+
+def _colmap_like_db(path, names):
+    """Base de datos con el esquema de COLMAP 3.x (lo que crea feature_extractor)."""
+    import sqlite3
+    con = sqlite3.connect(str(path))
+    con.executescript("""
+        CREATE TABLE images (image_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL UNIQUE, camera_id INTEGER NOT NULL);
+        CREATE TABLE keypoints (image_id INTEGER PRIMARY KEY NOT NULL, rows INTEGER NOT NULL, cols INTEGER NOT NULL, data BLOB);
+        CREATE TABLE descriptors (image_id INTEGER PRIMARY KEY NOT NULL, rows INTEGER NOT NULL, cols INTEGER NOT NULL, data BLOB);
+        CREATE TABLE matches (pair_id INTEGER PRIMARY KEY NOT NULL, rows INTEGER NOT NULL, cols INTEGER NOT NULL, data BLOB);
+        CREATE TABLE two_view_geometries (pair_id INTEGER PRIMARY KEY NOT NULL, rows INTEGER NOT NULL, cols INTEGER NOT NULL,
+            data BLOB, config INTEGER NOT NULL, F BLOB, E BLOB, H BLOB, qvec BLOB, tvec BLOB);
+    """)
+    # Ids en orden inverso al alfabético: obliga a comprobar el orden del par (id menor primero).
+    for n in reversed(names):
+        con.execute("INSERT INTO images (name, camera_id) VALUES (?, 1)", (n,))
+    con.commit(); con.close()
+
+
+def test_learned_matching_writes_verified_pairs():
+    import tempfile, sqlite3, cv2
+    import learned_matching as lm
+    rng = np.random.default_rng(3)
+    base = np.full((480, 640), 120, np.uint8)
+    for _ in range(900):
+        x, y = rng.integers(0, 640), rng.integers(0, 480)
+        cv2.circle(base, (int(x), int(y)), int(rng.integers(2, 6)), int(rng.integers(0, 255)), -1)
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d); (d / "img" / "0").mkdir(parents=True)
+        names = []
+        for k in range(4):   # vistas giradas/desplazadas (homografías) de la misma superficie
+            H = cv2.getRotationMatrix2D((320, 240), 4 * k, 1.0 + 0.03 * k); H[0, 2] += 12 * k
+            cv2.imwrite(str(d / "img" / "0" / f"{k}.png"), cv2.warpAffine(base, H, (640, 480)))
+            names.append(f"0/{k}.png")
+        _colmap_like_db(d / "db.db", names)
+        n = lm.run(d / "db.db", d / "img", None, lm.CvSift(), log=print)
+        con = sqlite3.connect(str(d / "db.db"))
+        ids = dict(con.execute("SELECT name, image_id FROM images"))
+        rows = con.execute("SELECT pair_id, rows, config FROM two_view_geometries").fetchall()
+        kp = con.execute("SELECT rows, data FROM keypoints WHERE image_id = ?", (ids["0/0.png"],)).fetchone()
+        con.close()
+        assert n == 6 and len(rows) == 6, rows
+        for pid, cnt, cfg in rows:
+            a, b = divmod(pid, lm.MAX_ID)
+            assert a < b and cnt >= 50 and cfg == 3
+        pts = np.frombuffer(kp[1], np.float32).reshape(-1, 2)
+        assert kp[0] > 200 and pts.min() >= 0.5     # coordenadas de COLMAP (centro del píxel + 0,5)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

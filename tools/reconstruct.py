@@ -507,7 +507,7 @@ def ins_pairs(views, max_angle=50.0, k=30, temporal=3, max_dist_ratio=1.5):
     return [(views[i][0], views[j][0]) for i, j in sorted(pairs)]
 
 
-def run_sfm(work, session, records, matcher, scan=None):
+def run_sfm(work, session, records, matcher, scan=None, features="aliked"):
     db = work / "database.db"
     if db.exists():
         db.unlink()
@@ -533,22 +533,32 @@ def run_sfm(work, session, records, matcher, scan=None):
             args += ["--ImageReader.camera_params", ",".join(f"{p:.6f}" for p in params)]
             print(f"[sfm] cámara {cam} enfoque {fbucket:.2f} D: intrínsecos de fábrica {params[:4]}")
         colmap(*args)
+    # 1) Qué pares comparar: guiados por la INS (o todos si no hay pose).
+    pair_list = None
     if matcher == "ins":
         views = ins_views(records, read_refined(scan) if scan else None)
         total = len(records) * (len(records) - 1) // 2
         if len(views) >= 0.8 * len(records) and len(records) > 40:
-            pairs = ins_pairs(views)
-            lst = work / "pares_ins.txt"
-            lst.write_text("\n".join(f"{a} {b}" for a, b in pairs) + "\n")
-            print(f"[sfm] emparejado guiado por la INS: {len(pairs)} pares de {total} posibles")
-            colmap("matches_importer", "--database_path", db, "--match_list_path", lst, "--match_type", "pairs",
-                   "--SiftMatching.guided_matching", 1)
+            pair_list = ins_pairs(views)
+            print(f"[sfm] emparejado guiado por la INS: {len(pair_list)} pares de {total} posibles")
         else:
-            print("[sfm] pocas fotos o sin pose INS: emparejado exhaustivo")
+            print("[sfm] pocas fotos o sin pose INS: se comparan todas con todas")
             matcher = "exhaustive"
-    if matcher == "sequential":
+    # 2) Puntos y emparejado: con IA si está instalada; si no, SIFT de COLMAP como siempre.
+    learned = None
+    if features != "sift":
+        import learned_matching
+        learned = learned_matching.make_backend(features)
+    if learned is not None:
+        learned_matching.run(db, work / "images_feat", pair_list, learned)
+    elif pair_list is not None:
+        lst = work / "pares_ins.txt"
+        lst.write_text("\n".join(f"{a} {b}" for a, b in pair_list) + "\n")
+        colmap("matches_importer", "--database_path", db, "--match_list_path", lst, "--match_type", "pairs",
+               "--SiftMatching.guided_matching", 1)
+    elif matcher == "sequential":
         colmap("sequential_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
-    elif matcher == "exhaustive":
+    else:
         colmap("exhaustive_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
     sparse = work / "sparse"
     sparse.mkdir(exist_ok=True)
@@ -808,6 +818,8 @@ def main(argv=None):
     ap.add_argument("--superres", type=int, default=2, help="superresolución de las ráfagas (2 = doble; 1 = sólo promediar)")
     ap.add_argument("--matcher", choices=["ins", "exhaustive", "sequential"], default="ins",
                     help="ins = sólo pares de fotos tomadas desde direcciones parecidas según la INS (rápido y con menos falsos)")
+    ap.add_argument("--features", choices=["aliked", "cv-sift", "sift"], default="aliked",
+                    help="aliked = puntos y emparejado con IA (ALIKED+LightGlue, si está instalado); sift = SIFT de COLMAP")
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
     ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
@@ -831,7 +843,7 @@ def main(argv=None):
     if not (shutil.which(COLMAP_EXE) or Path(COLMAP_EXE).exists()):
         raise SystemExit(f"No se encuentra COLMAP ({COLMAP_EXE}): https://colmap.github.io/install.html")
 
-    model = run_sfm(a.work, session, records, a.matcher, scan)
+    model = run_sfm(a.work, session, records, a.matcher, scan, a.features)
     txt = a.work / "sparse_txt"
     txt.mkdir(exist_ok=True)
     colmap("model_converter", "--input_path", model, "--output_path", txt, "--output_type", "TXT")

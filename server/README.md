@@ -70,8 +70,19 @@ curl https://tismaservidores.net/api/health
 1. Recibe el .zip en trozos de 16 MB; si se corta la conexión, la app sigue donde lo dejó.
 2. Valida el zip (formato de Tisma Scanner, sin rutas peligrosas, tamaño descomprimido).
 3. Lo pone en cola (uno a la vez: la GPU es el cuello de botella).
-4. Proceso: HDR/apilados/ráfagas → realce de imágenes (Wallis) → COLMAP → descarte de fotos
+4. Proceso: HDR/apilados/ráfagas → realce de imágenes (Wallis) → pares a comparar según la
+   posición INS de cada foto → puntos y emparejado (IA o SIFT) → COLMAP → descarte de fotos
    mal registradas con la INS → escala (ArUco > enfoque > INS) → nube densa → postprocesado.
+
+### Puntos con IA (ALIKED + LightGlue), opcional
+
+Mucho mejores que SIFT en piezas lisas o mate. Licencias que permiten uso comercial
+(ALIKED BSD-3, LightGlue Apache-2.0). Para activarlo, en el Python del servidor:
+
+    pip install torch lightglue        # con GPU NVIDIA: torch con CUDA, mucho más rápido
+
+Si no está instalado, el log dice `aliked no disponible` y se usa SIFT de COLMAP como antes.
+(No usar SuperPoint original ni SuperGlue: su licencia es sólo para investigación.)
 5. Resultados descargables por la app: `pieza.stl` (mm), `pieza_informe.json`, `pieza.ply`,
    `textura.zip` (malla con color de OpenMVS), `log.txt`.
 6. Borra el zip al terminar y el trabajo entero a los `retention_days` días.

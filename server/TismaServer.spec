@@ -12,7 +12,7 @@ a = Analysis(
     pathex=["../tools"],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hiddenimports + ["reconstruct", "postprocess", "depth_from_focus", "ins_accuracy"],
+    hiddenimports=hiddenimports + ["reconstruct", "postprocess", "depth_from_focus", "ins_accuracy", "learned_matching"],
     excludes=["tkinter", "matplotlib", "IPython", "notebook", "jupyter",
               "open3d.visualization.gui", "PyQt5", "PySide2", "PySide6"],
 )
