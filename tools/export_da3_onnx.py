@@ -35,11 +35,12 @@ def _cartesian_prod(*ts):
 def patch_for_onnx():
     """La red usa aten::cartesian_prod (codificación de posiciones), que ONNX no soporta."""
     import torch.functional
+    original = torch.cartesian_prod
+    # Comprobación: idéntico al original antes de sustituirlo.
+    a, b = torch.arange(3.0), torch.arange(4.0)
+    assert torch.equal(_cartesian_prod(a, b), original(a, b))
     torch.cartesian_prod = _cartesian_prod
     torch.functional.cartesian_prod = _cartesian_prod
-    # Comprobación: idéntico al original.
-    a, b = torch.arange(3.0), torch.arange(4.0)
-    assert torch.equal(_cartesian_prod(a, b), torch._C._VariableFunctions.cartesian_prod(a, b))
 
 
 def test_image():
