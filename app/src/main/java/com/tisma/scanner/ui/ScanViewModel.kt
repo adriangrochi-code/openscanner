@@ -91,6 +91,8 @@ data class UiState(
     val driftReport: List<String> = emptyList(),
     /** Registros guardados (más recientes primero). */
     val driftFiles: List<File> = emptyList(),
+    /** Registro de diagnóstico de esta ejecución (vista previa, cámara, bloqueos). */
+    val diagFile: File? = null,
     /** Calibración en uso: "02/11 18:40 · giro 0,004 °/s · acel 0,045 m/s²" o "". */
     val calibrationText: String = "",
     // --- Calibración automática (en segundo plano) ---
@@ -261,6 +263,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val clockOffset = HashMap<String, Long>()
 
     init {
+        runCatching { com.tisma.scanner.diag.DiagLog.start(File(app.getExternalFilesDir(null), "scans/diagnostico")) }
         imu.start()
         inventory = runCatching { CameraInventory.enumerate(cameraManager) }.getOrDefault(emptyMap())
         concurrentSets = CameraInventory.concurrentSets(cameraManager)
@@ -291,6 +294,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val hidden = inventory.values.filter { it.probed }.map { it.id }
         if (hidden.isNotEmpty()) log("Cámaras ocultas encontradas por número: ${hidden.joinToString()}")
         log("Objetivos: ${roles.describe()}")
+        _state.update { it.copy(diagFile = com.tisma.scanner.diag.DiagLog.file) }
         loadAccelCalibration()
         loadCalibration()
         refreshDriftFiles()
@@ -299,6 +303,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         imu.accelTap = { t, a -> if (autoCal.feed(t, a)) viewModelScope.launch(Dispatchers.Default) { onNewPose() } }
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
+        com.tisma.scanner.diag.DiagLog.extra = {
+            "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
+                "escrituras=${pendingWrites.get()} · análisis=${pendingAnalysis.get()} · giro %.2f rad/s".format(imu.gyroRate)
+        }
+        com.tisma.scanner.diag.DiagLog.event("app", "foco fijo en escaneo: ${cameras.lockFocus} · vista previa estabilizada: ${_state.value.stabilizePreview}")
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
 
@@ -499,6 +508,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      */
     override fun onFlowFrame(cameraId: String, timestampNs: Long, w: Int, h: Int, gray: FloatArray) {
         if (!_state.value.cameraVelocity) return
+        val t0 = System.nanoTime()
+        try { flowFrame(cameraId, timestampNs, w, h, gray) }
+        finally { com.tisma.scanner.diag.DiagLog.max("flujo_ms", (System.nanoTime() - t0) / 1_000_000) }
+    }
+
+    private fun flowFrame(cameraId: String, timestampNs: Long, w: Int, h: Int, gray: FloatArray) {
         val t = timestampNs + (clockOffset[cameraId] ?: 0L)
         val prev = prevFlow
         prevFlow = Triple(t, gray, cameraId)
@@ -807,6 +822,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      */
     override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform? {
         lastPreviewFrameMs = SystemClock.uptimeMillis()
+        com.tisma.scanner.diag.DiagLog.tick("pantalla")
+        val t0 = System.nanoTime()
+        try { return stabilizeInner(frameTimestampNs, viewW, viewH) }
+        finally { com.tisma.scanner.diag.DiagLog.max("estab_us", (System.nanoTime() - t0) / 1000) }
+    }
+
+    private fun stabilizeInner(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform? {
         if (!_state.value.stabilizePreview || viewW <= 0 || viewH <= 0) return null
         val cam = cameras.previewCameraId ?: return null
         val info = inventory[cam] ?: return null
@@ -1025,11 +1047,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             it.copy(scanning = true, images = 0, triggers = 0, lastZip = null, analyzed = 0, blurry = 0,
                 coverage = coverage.snapshot(), coveragePct = 0.0, hints = coverage.hints(), ready = false)
         }
-        log("Escaneo iniciado: ${s.dir.name}")
+        log("Escaneo iniciado: ${s.dir.name} · bloqueo 3A=${cameras.lock3A} · foco fijo=${cameras.lockFocus} · auto=${_state.value.autoTrigger}")
     }
 
     override fun stopScan() {
         val s = session ?: return
+        com.tisma.scanner.diag.DiagLog.event("app", "detener escaneo")
         // La sesión pasa a "cerrándose": las fotos de la última ráfaga aún llegan y se guardan.
         stopping = s
         session = null
@@ -1207,6 +1230,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     // ------------------------------------------------------------------ callbacks de cámara
 
     override fun onImage(cameraId: String, timestampNs: Long, width: Int, height: Int, jpeg: ByteArray) {
+        com.tisma.scanner.diag.DiagLog.count("jpeg")
         val s = session ?: stopping ?: return
         val t = timestampNs + (clockOffset[cameraId] ?: 0L)
         val trig = trigger
@@ -1346,6 +1370,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     private fun log(msg: String) {
         android.util.Log.i("TismaScanner", msg)
+        com.tisma.scanner.diag.DiagLog.event("app", msg)
         _state.update { it.copy(log = (it.log + msg).takeLast(8)) }
     }
 

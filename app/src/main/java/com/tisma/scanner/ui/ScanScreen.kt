@@ -498,6 +498,14 @@ private fun TextSetting(label: String, value: String, placeholder: String, secre
 
 @Composable
 private fun LogTab(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
+    Section("Diagnóstico")
+    Hint("Registro siempre activo: cada segundo guarda los fotogramas que llegan a la pantalla y los que " +
+        "entrega la cámara, fallos, bloqueos de la interfaz y memoria, más cada evento (escanear, fotos, " +
+        "cambios de la cámara). Si la imagen se congela, compártelo justo después.")
+    SecondaryButton("Compartir registro de diagnóstico", Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        enabled = s.diagFile != null) {
+        com.tisma.scanner.diag.DiagLog.flush(); s.diagFile?.let(onShare)
+    }
     Section("Calibración automática")
     Hint("Se hace sola: cada vez que dejas el móvil quieto unos segundos en una postura distinta " +
         "(boca arriba, de pie, de costado…) mejora la corrección del acelerómetro.")

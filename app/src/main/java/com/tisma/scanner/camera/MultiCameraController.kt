@@ -18,6 +18,7 @@ import android.os.HandlerThread
 import android.util.Log
 import android.util.Size
 import android.view.Surface
+import com.tisma.scanner.diag.DiagLog
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONArray
 import org.json.JSONObject
@@ -166,8 +167,24 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             setAf(act.characteristics, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             applyQuality(act)
         }.build()
+        DiagLog.event("cam", "repetitiva #${act.group.deviceId}: lock3A=$lock3A foco_fijo=${lockFocus && lock3A && act.settled} " +
+            "asentada=${act.settled} foco=%.2f dpt linterna=$torch flujo=${act.flow != null}".format(act.lastFocus))
         act.session.setRepeatingRequest(repeating, object : CameraCaptureSession.CaptureCallback() {
+            override fun onCaptureFailed(s: CameraCaptureSession, r: CaptureRequest, f: android.hardware.camera2.CaptureFailure) {
+                DiagLog.count("cam_fail")
+                if ((DiagLog.sinceMs("cam_fail_ev") ?: Long.MAX_VALUE) > 1000) {
+                    DiagLog.tick("cam_fail_ev")
+                    DiagLog.event("cam", "fallo de fotograma #${act.group.deviceId}: motivo ${if (f.reason == 0) "error" else "descartado"} · imagen capturada=${f.wasImageCaptured()}")
+                }
+            }
+            override fun onCaptureBufferLost(s: CameraCaptureSession, r: CaptureRequest, target: Surface, frame: Long) {
+                DiagLog.count("cam_buffer_lost")
+            }
+            override fun onCaptureSequenceAborted(s: CameraCaptureSession, sequenceId: Int) {
+                DiagLog.event("cam", "repetitiva #${act.group.deviceId} abortada (secuencia $sequenceId)")
+            }
             override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
+                DiagLog.tick("cam_frame")
                 res.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { act.lastExposureNs = it }
                 res.get(CaptureResult.SENSOR_SENSITIVITY)?.let { act.lastIso = it }
                 val locked = lock3A && lockFocus && act.settled
@@ -197,6 +214,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      */
     suspend fun open(groups: List<CameraGroup>, preview: Surface?, previewSize: Size) {
         close()
+        DiagLog.event("cam", "abrir: " + groups.joinToString { "#${it.deviceId}${it.physicalStreams}" + (it.previewPhysicalId?.let { v -> " vista $v" } ?: "") } +
+            " · vista ${previewSize.width}x${previewSize.height}")
         for (g in groups) {
             val device = openDevice(g.deviceId)
             if (device == null) { listener.onLog("No se pudo abrir la cámara ${g.deviceId}"); continue }
@@ -207,6 +226,8 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             }
             active += result
             result.readers.forEach { (id, r) -> openedStreams += OpenedStream(id, Size(r.width, r.height), g.deviceId) }
+            DiagLog.event("cam", "abierta #${g.deviceId}: JPEG " + result.readers.entries.joinToString { (id, r) -> "$id ${r.width}x${r.height}" } +
+                " · velocímetro ${if (result.flow != null) "sí" else "no"}")
         }
     }
 
@@ -294,17 +315,22 @@ class MultiCameraController(context: Context, private val listener: Listener) {
                     }
                     else -> listOf(stillRequest(a).build())
                 }
+                DiagLog.event("foto", "#${a.group.deviceId}: ${burst.size} petición(es)" +
+                    (if (focusList.size > 1) " · barrido de foco" else if (bracketEv.isNotEmpty()) " · HDR" else if (burstFrames > 1) " · ráfaga" else "") +
+                    " · ${a.readers.size} lector(es) JPEG")
                 if (burst.size == 1) a.session.capture(burst[0], metadataCallback(a), camHandler)
                 else a.session.captureBurst(burst, metadataCallback(a), camHandler)
                 n += a.readers.size * burst.size
             } catch (e: Exception) {
                 listener.onLog("Error al capturar en ${a.group.deviceId}: ${e.message}")
+                DiagLog.event("foto", "error #${a.group.deviceId}: $e")
             }
         }
         return n
     }
 
     fun close() {
+        if (active.isNotEmpty()) DiagLog.event("cam", "cerrar " + active.joinToString { "#${it.group.deviceId}" })
         previewCameraId = null
         for (a in active) {
             runCatching { a.session.close() }
@@ -329,10 +355,12 @@ class MultiCameraController(context: Context, private val listener: Listener) {
                 // Si quien esperaba ya se canceló, cerrar: si no, la cámara quedaría ocupada.
                 override fun onOpened(camera: CameraDevice) { if (cont.isActive) cont.resume(camera) else camera.close() }
                 override fun onDisconnected(camera: CameraDevice) {
+                    DiagLog.event("cam", "cámara $id desconectada (otra app o el sistema la tomó)")
                     camera.close(); if (cont.isActive) cont.resume(null)
                 }
                 override fun onError(camera: CameraDevice, error: Int) {
                     listener.onLog("Cámara $id error $error")
+                    DiagLog.event("cam", "cámara $id error $error")
                     camera.close(); if (cont.isActive) cont.resume(null)
                 }
             })
@@ -434,6 +462,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         val r = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
         r.setOnImageAvailableListener({ rd ->
             val img = rd.acquireLatestImage() ?: return@setOnImageAvailableListener
+            DiagLog.tick("flujo")
             try {
                 val plane = img.planes[0]
                 val buf = plane.buffer
@@ -461,7 +490,11 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             val cfg = SessionConfiguration(SessionConfiguration.SESSION_REGULAR, outputs, executor,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) { if (cont.isActive) cont.resume(session) else session.close() }
-                    override fun onConfigureFailed(session: CameraCaptureSession) { if (cont.isActive) cont.resume(null) }
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        DiagLog.event("cam", "sesión ${device.id}: configuración rechazada")
+                        if (cont.isActive) cont.resume(null)
+                    }
+                    override fun onClosed(session: CameraCaptureSession) { DiagLog.event("cam", "sesión ${device.id} cerrada") }
                 })
             try {
                 @Suppress("DEPRECATION")
