@@ -82,8 +82,10 @@ en el propio móvil (Ajustes → Nube → IA de profundidad). Deja el archivo ON
 `da3_small.onnx`; se sirve en `GET /models/da3_small.onnx` con la misma clave de API.
 
 Licencia: DA3-SMALL y DA3-BASE son Apache-2.0 (uso comercial permitido); NO usar Large/Giant
-(CC BY-NC, sólo no comercial). El ONNX se obtiene exportando el modelo oficial
-(github.com/ByteDance-Seed/Depth-Anything-3) o de una exportación ONNX de esos pesos.
+(CC BY-NC, sólo no comercial). El ONNX lo genera el workflow de GitHub Actions
+"Modelo IA de profundidad (DA3-Small → ONNX)" (`tools/export_da3_onnx.py`) a partir del modelo
+oficial (github.com/ByteDance-Seed/Depth-Anything-3) y lo comprueba contra su inferencia: descargar
+el artefacto `da3_small-onnx`, descomprimir y copiar `da3_small.onnx` a `modelos`.
 
 ### GLOMAP (reconstrucción global), opcional
 
