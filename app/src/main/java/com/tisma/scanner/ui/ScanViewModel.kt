@@ -880,7 +880,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val q = st.orientation
         val z = q.rotate(az)
         val w = MultiCameraController.KF_W
-        _arPose.value = ArPose(q.rotate(ax), q.rotate(ay), z, z * -orbitDist, Optics.fxPixels(focal, sw, w), w, MultiCameraController.KF_H, orient)
+        _arPose.value = ArPose(q.rotate(ax), q.rotate(ay), z, st.position + live.insOffset, Optics.fxPixels(focal, sw, w), w, MultiCameraController.KF_H, orient)
     }
 
     /** Miniatura vertical pequeña (para las fotos flotantes) desde la miniatura del sensor. */
@@ -910,7 +910,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val (ax, ay, az) = com.tisma.scanner.ins.OpticalVelocity.cameraAxesInDevice(orient)
         val q = st.orientation
         val w = MultiCameraController.KF_W; val h = MultiCameraController.KF_H
-        val view = com.tisma.scanner.recon.LivePointCloud.orbitView(q.rotate(ax), q.rotate(ay), q.rotate(az), orbitDist,
+        // Posición de la INS en el instante del fotograma (la imagen la corrige y se la devuelve).
+        val view = com.tisma.scanner.recon.LivePointCloud.View(q.rotate(ax), q.rotate(ay), q.rotate(az), st.position,
             Optics.fxPixels(focal, sw, w), w / 2.0, h / 2.0)
         val dist = orbitDist
         reconPending.incrementAndGet()
@@ -918,8 +919,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             try {
                 val t0 = System.nanoTime()
                 live.depthRange = dist * 0.4..dist * 2.0
-                live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
+                val fixed = live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
                     MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                if (fixed != null) {
+                    // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
+                    session?.addRefinedPose(t, fixed, q)
+                    com.tisma.scanner.diag.DiagLog.max("vis_corr_mm", ((fixed - view.center).norm() * 1000).toLong())
+                }
                 // Foto flotante cada ~7° de cambio de dirección (como mucho 60).
                 val prevDir = lastCardDir
                 if (prevDir == null || Math.toDegrees(kotlin.math.acos((prevDir dot view.zAxis).coerceIn(-1.0, 1.0))) >= 7.0) {

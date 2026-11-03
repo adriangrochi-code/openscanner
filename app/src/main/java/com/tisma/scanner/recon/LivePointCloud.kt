@@ -25,6 +25,13 @@ class LivePointCloud(
     private val maxTracks: Int = 300,
     private val maxPoints: Int = 60_000,
     private val maxThumbs: Int = 400,
+    /** Corrección máxima que se acepta de la posición INS con la imagen (m). 0 = no corregir. */
+    private val maxCorrectionM: Double = 0.05,
+    /**
+     * Con este paralaje el punto queda fijo. Si se siguiera recalculando con cada vista nueva
+     * (cuyas posiciones derivan), el mapa "acompañaría" a la deriva y no podría corregirla.
+     */
+    private val freezeDeg: Double = 8.0,
 ) {
     /**
      * Pose de una vista: ejes de la cámara (x derecha, y abajo, z delante) en el mundo y su centro.
@@ -55,7 +62,8 @@ class LivePointCloud(
 
     private class Keyframe(val view: View, val thumb: IntArray?, val tw: Int, val th: Int, val gw: Int, val gh: Int)
     private class Obs(val kf: Int, val u: Double, val v: Double)
-    private class Track(val obs: ArrayList<Obs> = ArrayList(), var point: Int = -1)
+    /** `frozen`: punto ya bien triangulado (≥ freezeDeg): no se recalcula, sirve de referencia. */
+    private class Track(val obs: ArrayList<Obs> = ArrayList(), var point: Int = -1, var frozen: Boolean = false)
 
     private val keyframes = ArrayList<Keyframe?>()
     private var prevImage: OpticalFlow.Image? = null
@@ -72,21 +80,70 @@ class LivePointCloud(
      * Añade un fotograma clave: imagen en grises (p.ej. 320×240), miniatura RGB opcional para
      * el color (ARGB, `tw`×`th`, misma encuadre) y su pose.
      */
-    @Synchronized fun addKeyframe(gray: OpticalFlow.Image, view: View, thumb: IntArray? = null, tw: Int = 0, th: Int = 0) {
+    /**
+     * Añade un fotograma clave y devuelve el centro de la cámara CORREGIDO con la imagen (o null).
+     *
+     * La pose llega de la INS (orientación del giróscopo + posición del Kalman). Con la orientación
+     * conocida, los puntos 3D ya triangulados que se ven en esta imagen fijan la posición por
+     * mínimos cuadrados (cada uno es un rayo que debe pasar por su punto). Así la deriva de la
+     * posición INS no ensucia la nube, y quien llama puede devolver esa medida a la INS.
+     */
+    @Synchronized fun addKeyframe(gray: OpticalFlow.Image, view: View, thumb: IntArray? = null, tw: Int = 0, th: Int = 0): Vec3? {
         val k = keyframes.size
-        keyframes += Keyframe(view, thumb, tw, th, gray.w, gray.h)
+        val prev = prevImage
+        var moved: List<DoubleArray?> = emptyList()
+        if (prev != null && tracks.isNotEmpty()) {
+            moved = OpticalFlow.trackPoints(prev, gray, tracks.map { val o = it.obs.last(); doubleArrayOf(o.u, o.v) })
+        }
+        // Posición: el desplazamiento desde la vista anterior en la DIRECCIÓN que dice la imagen
+        // y con la LONGITUD que dice la INS, encadenado desde la vista anterior ya corregida.
+        // (La deriva de la INS entre dos fotos es un % apreciable del paso y, al triangular, se
+        // amplificaría en centímetros de profundidad.)
+        var fixed: Vec3? = null
+        val prevKf = keyframes.lastOrNull()
+        val lastIns = lastInsCenter
+        if (maxCorrectionM > 0 && prevKf != null && lastIns != null && moved.isNotEmpty()) {
+            val dIns = view.center - lastIns
+            val mag = dIns.norm()
+            var step = dIns
+            if (mag > 0.002) {
+                val a = ArrayList<Vec3>(); val b = ArrayList<Vec3>()
+                for ((i, t) in tracks.withIndex()) {
+                    val p = moved[i] ?: continue
+                    val o = t.obs.last()
+                    a += prevKf.view.ray(o.u, o.v); b += view.ray(p[0], p[1])
+                }
+                translationDirection(a, b)?.let { dir ->
+                    val d = if ((dir dot dIns) < 0) -dir else dir
+                    if (Math.toDegrees(acos((d dot (dIns * (1.0 / mag))).coerceIn(-1.0, 1.0))) < 60.0) step = d * mag
+                }
+            }
+            val c = prevKf.view.center + step
+            if ((c - view.center).norm() <= maxCorrectionM * 4) fixed = c
+        }
+        // Ajuste fino con los puntos fijos ya conocidos (ahora fiables: las direcciones son de la imagen).
+        if (fixed != null) {
+            val refs = tracks.indices.mapNotNull { i ->
+                val p = moved.getOrNull(i) ?: return@mapNotNull null
+                val t = tracks[i]
+                if (t.point < 0 || !t.frozen) null else Ref(px[t.point], p, t.obs.first().kf)
+            }
+            val chained = View(view.xAxis, view.yAxis, view.zAxis, fixed, view.f, view.cx, view.cy)
+            visualCenter(chained, refs, maxShift = 0.01)?.let { fixed = it }
+        }
+        lastInsCenter = view.center
+        if (fixed != null) insOffset = fixed!! - view.center
+        val v = if (fixed != null) View(view.xAxis, view.yAxis, view.zAxis, fixed, view.f, view.cx, view.cy) else view
+        keyframes += Keyframe(v, thumb, tw, th, gray.w, gray.h)
         // Las miniaturas viejas ya se usaron para colorear: se liberan.
         if (k - maxThumbs >= 0) keyframes[k - maxThumbs]?.let { keyframes[k - maxThumbs] = Keyframe(it.view, null, 0, 0, it.gw, it.gh) }
-        val prev = prevImage
-        if (prev != null && tracks.isNotEmpty()) {
-            val last = tracks.map { val o = it.obs.last(); doubleArrayOf(o.u, o.v) }
-            val moved = OpticalFlow.trackPoints(prev, gray, last)
+        if (moved.isNotEmpty()) {
             val alive = ArrayList<Track>()
             for ((i, t) in tracks.withIndex()) {
                 val p = moved[i] ?: continue
                 t.obs += Obs(k, p[0], p[1])
                 alive += t
-                triangulate(t)
+                if (t.frozen) pointObs[t.point] = t.obs.toList() else triangulate(t)
             }
             tracks = alive
         }
@@ -99,6 +156,106 @@ class LivePointCloud(
         }
         prevImage = gray
         buildFragment(k)
+        return fixed
+    }
+
+    /**
+     * Centro de cámara con orientación conocida a partir de correspondencias 2D-3D:
+     * Σ(I − ddᵀ)·C = Σ(I − ddᵀ)·X. Dos pasadas (la segunda sin los que no reproyectan) y sólo si
+     * la corrección es razonable frente a la INS.
+     */
+    private var lastInsCenter: Vec3? = null
+    /** Corrección actual de la posición INS (centro corregido − centro INS) para la AR. */
+    @Volatile var insOffset: Vec3 = Vec3.ZERO; private set
+
+    /**
+     * Dirección del desplazamiento entre dos vistas con la rotación conocida: cada punto seguido
+     * da dos rayos (mundo) a y b que, con la traslación t, deben ser coplanarios: (a × b)·t = 0.
+     * t es el autovector menor de Σ nnᵀ (n = a × b); una segunda pasada quita los que no cuadran.
+     */
+    internal fun translationDirection(a: List<Vec3>, b: List<Vec3>): Vec3? {
+        if (a.size < 12) return null
+        var ns = a.indices.map { a[it] cross b[it] }.filter { it.norm() > 1e-6 }
+        if (ns.size < 12) return null
+        var t: Vec3? = null
+        repeat(2) { pass ->
+            if (pass == 1) {
+                val cur = t ?: return null
+                // Residuo angular de cada punto respecto al plano epipolar.
+                val res = ns.map { kotlin.math.abs((it dot cur) / it.norm()) }
+                val lim = res.sorted()[res.size * 3 / 4] * 2.5 + 1e-5
+                ns = ns.filterIndexed { i, _ -> res[i] <= lim }
+                if (ns.size < 10) return null
+            }
+            val m = DoubleArray(9)
+            for (n in ns) { val nn = doubleArrayOf(n.x, n.y, n.z); for (r in 0..2) for (c in 0..2) m[r * 3 + c] += nn[r] * nn[c] }
+            t = smallestEigenvector(m) ?: return null
+        }
+        return t
+    }
+
+    /** Autovector del menor autovalor de una matriz simétrica 3×3 (Jacobi: exacto aunque haya dos casi iguales). */
+    private fun smallestEigenvector(m0: DoubleArray): Vec3? {
+        val a = Array(3) { r -> DoubleArray(3) { c -> m0[r * 3 + c] } }
+        val v = Array(3) { r -> DoubleArray(3) { c -> if (r == c) 1.0 else 0.0 } }
+        repeat(50) {
+            var p = 0; var q = 1
+            var off = kotlin.math.abs(a[0][1])
+            if (kotlin.math.abs(a[0][2]) > off) { p = 0; q = 2; off = kotlin.math.abs(a[0][2]) }
+            if (kotlin.math.abs(a[1][2]) > off) { p = 1; q = 2; off = kotlin.math.abs(a[1][2]) }
+            if (off < 1e-18) return@repeat
+            val theta = (a[q][q] - a[p][p]) / (2 * a[p][q])
+            val t = (if (theta >= 0) 1.0 else -1.0) / (kotlin.math.abs(theta) + sqrt(theta * theta + 1))
+            val c = 1 / sqrt(t * t + 1); val sn = t * c
+            for (k in 0..2) {   // A = Jᵀ A J
+                val akp = a[k][p]; val akq = a[k][q]
+                a[k][p] = c * akp - sn * akq; a[k][q] = sn * akp + c * akq
+            }
+            for (k in 0..2) {
+                val apk = a[p][k]; val aqk = a[q][k]
+                a[p][k] = c * apk - sn * aqk; a[q][k] = sn * apk + c * aqk
+            }
+            for (k in 0..2) {
+                val vkp = v[k][p]; val vkq = v[k][q]
+                v[k][p] = c * vkp - sn * vkq; v[k][q] = sn * vkp + c * vkq
+            }
+        }
+        val i = (0..2).minByOrNull { a[it][it] } ?: return null
+        return Vec3(v[0][i], v[1][i], v[2][i]).normalized()
+    }
+
+    /** Referencia para situar la cámara: punto fijo, dónde se ve ahora y en qué vista nació. */
+    internal class Ref(val x: Vec3, val uv: DoubleArray, val born: Int = 0)
+
+    internal fun visualCenter(view: View, pairs: List<Ref>, maxShift: Double = maxCorrectionM): Vec3? {
+        if (pairs.size < 8) return null
+        // Más peso a los puntos más viejos: nacieron de poses con menos deriva acumulada.
+        val oldest = pairs.minOf { it.born }
+        fun weight(r: Ref): Double { val a = 1.0 + (r.born - oldest) / 2.0; return 1.0 / (a * a) }
+        var c = view.center
+        var use = pairs
+        repeat(2) { pass ->
+            if (pass == 1) {
+                val trial = View(view.xAxis, view.yAxis, view.zAxis, c, view.f, view.cx, view.cy)
+                use = pairs.filter { r ->
+                    val q = trial.project(r.x) ?: return@filter false
+                    kotlin.math.hypot(q[0] - r.uv[0], q[1] - r.uv[1]) < 3.0
+                }
+                if (use.size < 8) return null
+            }
+            val a = DoubleArray(9); val b = DoubleArray(3)
+            for (ref in use) {
+                val d = view.ray(ref.uv[0], ref.uv[1]); val w = weight(ref)
+                val dd = doubleArrayOf(d.x, d.y, d.z); val xx = doubleArrayOf(ref.x.x, ref.x.y, ref.x.z)
+                for (r in 0..2) for (s2 in 0..2) {
+                    val m = w * ((if (r == s2) 1.0 else 0.0) - dd[r] * dd[s2])
+                    a[r * 3 + s2] += m; b[r] += m * xx[s2]
+                }
+            }
+            val sol = solve3(a, b) ?: return null
+            c = Vec3(sol[0], sol[1], sol[2])
+        }
+        return if ((c - view.center).norm() <= maxShift) c else null
     }
 
     /** Superficie desde la vista k, si mira desde una dirección nueva. */
@@ -143,38 +300,39 @@ class LivePointCloud(
     /** Copia de los trozos de superficie para dibujar. */
     @Synchronized fun fragments(): List<Fragment> = fragments.toList()
 
-    /** Triangula (o refina) un punto seguido con todas sus vistas. */
+    /**
+     * Triangula un punto seguido con su PRIMERA y su ÚLTIMA vista (la de mayor paralaje). Usar sólo
+     * esas dos ata el punto a la pose más antigua (la que menos ha derivado) en vez de arrastrarlo
+     * con la deriva de todas las intermedias. Al llegar a `freezeDeg` queda fijo como referencia.
+     */
     private fun triangulate(t: Track) {
-        if (t.obs.size < 2) return
-        val views = t.obs.map { keyframes[it.kf]!!.view }
-        val rays = t.obs.mapIndexed { i, o -> views[i].ray(o.u, o.v) }
-        // Paralaje: mayor ángulo entre el primer rayo y los demás.
-        val parallax = rays.drop(1).maxOf { Math.toDegrees(acos((it dot rays[0]).coerceIn(-1.0, 1.0))) }
+        if (t.obs.size < 2 || t.frozen) return
+        val o0 = t.obs.first(); val o1 = t.obs.last()
+        val v0 = keyframes[o0.kf]!!.view; val v1 = keyframes[o1.kf]!!.view
+        val d0 = v0.ray(o0.u, o0.v); val d1 = v1.ray(o1.u, o1.v)
+        val parallax = Math.toDegrees(acos((d0 dot d1).coerceIn(-1.0, 1.0)))
         if (parallax < minParallaxDeg) return
-        // Punto más cercano a todos los rayos: Σ(I − ddᵀ) X = Σ(I − ddᵀ) C.
+        // Punto más cercano a ambos rayos: Σ(I − ddᵀ) X = Σ(I − ddᵀ) C.
         val a = DoubleArray(9); val b = DoubleArray(3)
-        for ((i, d) in rays.withIndex()) {
-            val c = views[i].center
+        for ((d, c) in listOf(d0 to v0.center, d1 to v1.center)) {
             val dd = doubleArrayOf(d.x, d.y, d.z); val cc = doubleArrayOf(c.x, c.y, c.z)
-            for (r in 0..2) for (s in 0..2) {
-                val m = (if (r == s) 1.0 else 0.0) - dd[r] * dd[s]
-                a[r * 3 + s] += m; b[r] += m * cc[s]
+            for (r in 0..2) for (s2 in 0..2) {
+                val m = (if (r == s2) 1.0 else 0.0) - dd[r] * dd[s2]
+                a[r * 3 + s2] += m; b[r] += m * cc[s2]
             }
         }
         val x = solve3(a, b) ?: return
         val p = Vec3(x[0], x[1], x[2])
-        for ((i, o) in t.obs.withIndex()) {
-            val v = views[i]
-            val z = v.depth(p)
-            if (z !in depthRange) return
+        for ((v, o) in listOf(v0 to o0, v1 to o1)) {
+            if (v.depth(p) !in depthRange) return
             val q = v.project(p) ?: return
-            val e = sqrt((q[0] - o.u) * (q[0] - o.u) + (q[1] - o.v) * (q[1] - o.v))
-            if (e > maxReprojPx) return
+            if (kotlin.math.hypot(q[0] - o.u, q[1] - o.v) > maxReprojPx) return
         }
         if (t.point >= 0) { px[t.point] = p; pointObs[t.point] = t.obs.toList() }
         else if (px.size < maxPoints) {
             t.point = px.size; px += p; colors += 0; pointObs += t.obs.toList()
         }
+        if (parallax >= freezeDeg) t.frozen = true
     }
 
     /**
@@ -247,7 +405,7 @@ class LivePointCloud(
 
     @Synchronized fun reset() {
         keyframes.clear(); tracks.clear(); px.clear(); colors.clear(); pointObs.clear(); prevImage = null
-        fragments.clear()
+        fragments.clear(); lastInsCenter = null; insOffset = Vec3.ZERO
     }
 
     private fun solve3(a: DoubleArray, b: DoubleArray): DoubleArray? {

@@ -109,6 +109,39 @@ class LivePointCloudTest {
         assertTrue(colored.all { it == 0xFFAA3322.toInt() })
     }
 
+    /**
+     * La posición de la INS deriva ~2 cm a lo largo de la vuelta: con la corrección por imagen la
+     * nube sigue pegada a la pieza (y los centros corregidos se acercan a los reales).
+     */
+    private var lastInsErr = 0.0
+
+    @Test fun imageCorrectsInsPositionDrift() {
+        fun run(correct: Boolean): Pair<Double, Double> {
+            val cloud = LivePointCloud(maxCorrectionM = if (correct) 0.05 else 0.0)
+            cloud.depthRange = 0.1..0.5
+            var az = 0.0; var k = 0
+            var centerErr = 0.0; var n = 0; var insErr = 0.0
+            while (az <= 90.0) {
+                val truth = view(az)
+                val drift = Vec3(0.0007 * k, -0.0004 * k, 0.0002 * k)       // deriva de la INS
+                val insC = truth.center + drift
+                val ins = LivePointCloud.View(truth.xAxis, truth.yAxis, truth.zAxis, insC, f, w / 2.0, h / 2.0)
+                val fixed = cloud.addKeyframe(render(truth), ins)
+                if (fixed != null) { centerErr += (fixed - truth.center).norm(); insErr += drift.norm(); n++ }
+                az += 3.0; k++
+            }
+            val err = cloud.points().map { boxDistance(it) }.sorted()
+            lastInsErr = if (n > 0) insErr / n else Double.NaN
+            return err[err.size / 2] to (if (n > 0) centerErr / n else Double.NaN)
+        }
+        val (withoutErr, _) = run(false)
+        val (withErr, centerErr) = run(true)
+        println("deriva INS hasta 2,4 cm: posición INS media %.1f mm -> corregida %.1f mm · nube %.2f -> %.2f mm".format(
+            lastInsErr * 1000, centerErr * 1000, withoutErr * 1000, withErr * 1000))
+        assertTrue("posición %.4f vs INS %.4f".format(centerErr, lastInsErr), centerErr < lastInsErr * 0.7)
+        assertTrue("nube corregida %.4f vs sin corregir %.4f".format(withErr, withoutErr), withErr < withoutErr * 0.8)
+    }
+
     @Test fun noParallaxNoPoints() {
         // Girar en el sitio (sin rodear la pieza) no da profundidad: no debe inventar puntos.
         val cloud = LivePointCloud()

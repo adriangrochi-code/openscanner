@@ -33,6 +33,7 @@ class ScanSession(baseDir: File) {
     private val frames: BufferedWriter
     private val trajectory: BufferedWriter
     private val meta: BufferedWriter
+    private val refined: BufferedWriter
     private val quality: BufferedWriter
     val imageCount = AtomicInteger(0)
 
@@ -45,6 +46,9 @@ class ScanSession(baseDir: File) {
             write("t_ns,px,py,pz,vx,vy,vz,qw,qx,qy,qz,stationary\n")
         }
         meta = File(dir, "capture_meta.jsonl").bufferedWriter()
+        refined = File(dir, "refined_poses.csv").bufferedWriter().apply {
+            write("t_ns,px,py,pz,qw,qx,qy,qz\n")
+        }
         quality = File(dir, "quality.csv").bufferedWriter().apply {
             write("t_ns,pass,camera_id,sharpness,texture,clipped_high,clipped_low,mean_luma,blurry,motion_blur_px,deleted,view_az_deg,view_el_deg,coverage_ring,coverage_bin\n")
         }
@@ -96,6 +100,15 @@ class ScanSession(baseDir: File) {
         return if (f.delete()) len else 0L
     }
 
+    /**
+     * Pose de un fotograma clave con la posición INS corregida por la imagen (dirección del
+     * movimiento por visión, longitud por INS). El servidor la usa como prior de cada foto.
+     */
+    @Synchronized
+    fun addRefinedPose(tNs: Long, c: com.tisma.scanner.ins.Vec3, q: com.tisma.scanner.ins.Quat) {
+        runCatching { refined.write("$tNs,${c.x},${c.y},${c.z},${q.w},${q.x},${q.y},${q.z}\n") }
+    }
+
     @Synchronized
     fun addTrajectory(s: InsState) {
         trajectory.write("${s.timestampNs},${s.position.x},${s.position.y},${s.position.z}," +
@@ -124,6 +137,7 @@ class ScanSession(baseDir: File) {
     @Synchronized
     fun close() {
         runCatching { frames.close() }; runCatching { trajectory.close() }; runCatching { meta.close() }
+        runCatching { refined.close() }
         runCatching { quality.close() }
     }
 
