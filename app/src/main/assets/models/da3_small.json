@@ -1,0 +1,25 @@
+{
+  "model": "depth-anything/DA3-SMALL",
+  "license": "Apache-2.0",
+  "input": [
+    1,
+    1,
+    3,
+    378,
+    504
+  ],
+  "normalization": "ImageNet",
+  "outputs": [
+    "depth",
+    "conf"
+  ],
+  "depth_kind": "relative (DA3 'depth')",
+  "check_onnx_vs_torch": 1.09596749098273e-05,
+  "check_vs_official": 0.9999973478376059,
+  "int8": {
+    "file": "da3_small_int8.onnx",
+    "mb": 27.84391,
+    "check_vs_official": 0.9878955249711364,
+    "accepted": false
+  }
+}
