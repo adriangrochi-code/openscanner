@@ -102,6 +102,18 @@ class TranslationKalman(
         for (i in 0..2) updateComponent(3, i, 0.0 - v[i], sigma * sigma)
     }
 
+    /**
+     * Tras un hueco en los sensores la velocidad es desconocida: se pone a 0 con incertidumbre
+     * `std` y sin correlaciones (lo aprendido antes del hueco ya no vale para ella).
+     */
+    fun velocityUnknown(std: Double) {
+        v = Vec3.ZERO; prevAccel = null
+        for (i in 3..5) {
+            for (j in 0 until dim) { P[i * dim + j] = 0.0; P[j * dim + i] = 0.0 }
+            P[i * dim + i] = std * std
+        }
+    }
+
     /** Medida de la componente de la velocidad a lo largo de `dir` (unitario, mundo). */
     fun velocityAlong(dir: Vec3, value: Double, sigma: Double) {
         val h = DoubleArray(dim)

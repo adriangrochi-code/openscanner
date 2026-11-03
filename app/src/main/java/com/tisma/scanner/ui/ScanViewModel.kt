@@ -355,6 +355,33 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
 
+    // ------------------------------------------------------------------ segundo plano
+
+    @Volatile private var backgrounded = false
+
+    /** La app deja de verse: sensores parados (y el escaneo, si lo había, se guarda). */
+    fun onAppBackground() {
+        if (backgrounded) return
+        backgrounded = true
+        com.tisma.scanner.diag.DiagLog.event("app", "segundo plano: sensores parados")
+        if (session != null) {
+            log("Escaneo guardado al pasar a segundo plano (sin cámara ni sensores no puede seguir)")
+            stopScan()
+        }
+        if (_state.value.driftProgress.isNotEmpty() && driftJob?.isActive == true) cancelDriftTest()
+        imu.stop()
+    }
+
+    /** Vuelve a verse: sensores en marcha y la INS desde cero (calibraciones conservadas). */
+    fun onAppForeground() {
+        if (!backgrounded) return
+        backgrounded = false
+        imu.start()
+        ins.reset()
+        stabilizer.reset()
+        com.tisma.scanner.diag.DiagLog.event("app", "primer plano: sensores en marcha, INS reiniciada")
+    }
+
     // ------------------------------------------------------------------ vigilancia de la vista previa
 
     /** Último fotograma que llegó a la pantalla (lo marca cada actualización de la textura). */

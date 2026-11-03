@@ -75,7 +75,7 @@ class StrapdownIns(
     @Synchronized fun reset() {
         filter.reset(gyroBiasPrior); lastGyroT = -1; lastMag = null
         prevAccelT = -1; prevAccel = null; lastAccelT = -1; lastAccel = null; pendingGyro.clear()
-        kf.reset(accelBiasPrior); vo.reset()
+        kf.reset(accelBiasPrior); vo.reset(); gaps = 0
         winPos = 0; winFill = 0
         stillCount = 0; stationary = false; history.clear()
         geo = null; gnssUpdates = 0
@@ -231,7 +231,14 @@ class StrapdownIns(
         // El giróscopo del móvil ya entrega el giro MEDIO del intervalo anterior (filtro interno):
         // promediar dos muestras añadiría medio periodo de retraso.
         val w = wNow
-        if (dt > 0.2) return
+        if (dt > MAX_GAP_S) {
+            // Hueco en los sensores (segundo plano, sistema ocupado): no se integra a ciegas.
+            // La velocidad pasa a ser desconocida hasta el próximo reposo (ZUPT) o medida.
+            kf.velocityUnknown(GAP_SPEED_STD)
+            stillCount = 0; stationary = false; winFill = 0
+            gaps++
+            return
+        }
         val g0 = Vec3(0.0, 0.0, MahonyFilter.GRAVITY)
 
         // El error del acelerómetro es del SENSOR: se corrige en el marco del dispositivo, así
@@ -282,6 +289,9 @@ class StrapdownIns(
 
     /** Sesgo del acelerómetro estimado (marco del dispositivo, m/s²). */
     @Synchronized fun accelBias(): Vec3 = kf.b
+
+    /** Huecos en los sensores detectados desde el último reinicio (diagnóstico). */
+    @Volatile var gaps = 0; private set
 
     private fun push(s: InsState) {
         history.addLast(s)
@@ -342,6 +352,10 @@ class StrapdownIns(
         const val GNSS_MAX_ACC_FOR_VELOCITY = 25.0
         /** Incertidumbre de velocidad GNSS si el móvil no la informa (m/s). */
         const val DEFAULT_SPEED_ACC = 0.3
+        /** Más tiempo que esto sin giróscopo = hueco: no se integra (s). */
+        const val MAX_GAP_S = 0.15
+        /** Velocidad tras un hueco: desconocida, con esta incertidumbre (m/s). */
+        const val GAP_SPEED_STD = 0.3
         /** Espera máxima por la muestra del acelerómetro posterior a un giro (ns). */
         const val MAX_ACCEL_WAIT_NS = 20_000_000L
     }

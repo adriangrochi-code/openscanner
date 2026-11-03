@@ -40,6 +40,18 @@ class MainActivity : ComponentActivity() {
 
     private val vm: ScanViewModel by viewModels()
 
+    // En segundo plano Android corta o ralentiza los sensores de movimiento: la INS no puede
+    // seguir integrando. Se paran al salir y se arrancan (con la INS reiniciada) al volver.
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations) vm.onAppBackground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        vm.onAppForeground()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Barras del sistema oscuras, como la barra superior de TISMA.
         enableEdgeToEdge(
