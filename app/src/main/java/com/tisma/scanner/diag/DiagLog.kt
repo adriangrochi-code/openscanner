@@ -101,6 +101,8 @@ object DiagLog {
             if (kf > 0 || fast > 0) sb.append(" · vídeo: $kf clave, $fast movidos (JPEG máx $jpegMs ms)")
             val rec = take(maxima, "recon_ms"); val skip = take(counters, "recon_saltado")
             if (rec > 0 || skip > 0) sb.append(" · nube: máx $rec ms" + if (skip > 0) ", $skip saltados" else "")
+            val vio = take(counters, "vio_puntos"); val corr = take(maxima, "vis_corr_mm")
+            if (vio > 0 || corr > 0) sb.append(" · odometría: $vio puntos, corrección máx $corr mm")
             runCatching { extra() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { sb.append(" · ").append(it) }
             write(sb.toString())
             runCatching { out?.flush() }

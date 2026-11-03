@@ -36,6 +36,8 @@ class StrapdownIns(
     @Volatile var accelBiasPrior: Vec3 = Vec3.ZERO
     /** Posición, velocidad y sesgo del acelerómetro (Kalman). */
     val kf = TranslationKalman()
+    /** Odometría visual-inercial (MSCKF) sobre el mismo Kalman: puntos de la cámara + IMU. */
+    private val vo = VisualOdometry(kf)
     private val aWin = DoubleArray(WINDOW)
     private val wWin = DoubleArray(WINDOW)
     /** Giro (vector) en la ventana: su media cancela el temblor de la mano para el ZARU. */
@@ -73,7 +75,7 @@ class StrapdownIns(
     @Synchronized fun reset() {
         filter.reset(gyroBiasPrior); lastGyroT = -1; lastMag = null
         prevAccelT = -1; prevAccel = null; lastAccelT = -1; lastAccel = null; pendingGyro.clear()
-        kf.reset(accelBiasPrior)
+        kf.reset(accelBiasPrior); vo.reset()
         winPos = 0; winFill = 0
         stillCount = 0; stationary = false; history.clear()
         geo = null; gnssUpdates = 0
@@ -146,6 +148,21 @@ class StrapdownIns(
     }
 
     private var originOffset = Vec3.ZERO
+
+    /**
+     * Fotograma clave de la cámara para la odometría visual-inercial: puntos seguidos (id, u, v en
+     * px de una imagen con focal `f` y centro cx, cy) y los ejes de la cámara en ese instante.
+     * Devuelve la posición de la cámara en ese fotograma, corregida (null si aún no hay estado).
+     */
+    @Synchronized fun onVisualKeyframe(tNs: Long, xAxis: Vec3, yAxis: Vec3, zAxis: Vec3,
+                                       obs: List<Triple<Int, Double, Double>>, f: Double, cx: Double, cy: Double): Vec3? {
+        if (lastGyroT < 0) return null
+        val dtBack = ((lastGyroT - tNs) * 1e-9).coerceIn(0.0, 1.0)
+        return vo.onKeyframe(tNs, dtBack, xAxis, yAxis, zAxis, obs, f, cx, cy)
+    }
+
+    /** Puntos usados en la última actualización visual (para el registro). */
+    val visualFeaturesUsed get() = vo.lastFeaturesUsed
 
     /**
      * Calibración de 6 caras del acelerómetro (sesgo + escala por eje). Se aplica a cada muestra

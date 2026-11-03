@@ -69,7 +69,7 @@ class LivePointCloud(
     private class Keyframe(val view: View, val thumb: IntArray?, val tw: Int, val th: Int, val gw: Int, val gh: Int)
     private class Obs(val kf: Int, val u: Double, val v: Double)
     /** `frozen`: punto ya bien triangulado (≥ freezeDeg): no se recalcula, sirve de referencia. */
-    private class Track(val obs: ArrayList<Obs> = ArrayList(), var point: Int = -1, var frozen: Boolean = false)
+    private class Track(val obs: ArrayList<Obs> = ArrayList(), var point: Int = -1, var frozen: Boolean = false, val id: Int = nextId++)
 
     private val keyframes = ArrayList<Keyframe?>()
     private var prevImage: OpticalFlow.Image? = null
@@ -95,12 +95,31 @@ class LivePointCloud(
      * posición INS no ensucia la nube, y quien llama puede devolver esa medida a la INS.
      */
     @Synchronized fun addKeyframe(gray: OpticalFlow.Image, view: View, thumb: IntArray? = null, tw: Int = 0, th: Int = 0): Vec3? {
-        val k = keyframes.size
+        track(gray)
+        return commit(view, thumb, tw, th)
+    }
+
+    private var pendingGray: OpticalFlow.Image? = null
+    private var pendingMoved: List<DoubleArray?> = emptyList()
+
+    /**
+     * Paso 1: seguir los puntos en la imagen nueva. Devuelve (id, u, v) de los que se siguen, para
+     * la odometría visual-inercial, ANTES de conocer la pose (que esa odometría corrige).
+     */
+    @Synchronized fun track(gray: OpticalFlow.Image): List<Triple<Int, Double, Double>> {
         val prev = prevImage
-        var moved: List<DoubleArray?> = emptyList()
-        if (prev != null && tracks.isNotEmpty()) {
-            moved = OpticalFlow.trackPoints(prev, gray, tracks.map { val o = it.obs.last(); doubleArrayOf(o.u, o.v) })
-        }
+        pendingMoved = if (prev != null && tracks.isNotEmpty())
+            OpticalFlow.trackPoints(prev, gray, tracks.map { val o = it.obs.last(); doubleArrayOf(o.u, o.v) }) else emptyList()
+        pendingGray = gray
+        return tracks.indices.mapNotNull { i -> pendingMoved.getOrNull(i)?.let { Triple(tracks[i].id, it[0], it[1]) } }
+    }
+
+    /** Paso 2: con la pose ya decidida, triangular, añadir puntos nuevos y superficie. */
+    @Synchronized fun commit(view: View, thumb: IntArray? = null, tw: Int = 0, th: Int = 0): Vec3? {
+        val gray = pendingGray ?: return null
+        pendingGray = null
+        val k = keyframes.size
+        val moved = pendingMoved
         // Posición: el desplazamiento desde la vista anterior en la DIRECCIÓN que dice la imagen
         // y con la LONGITUD que dice la INS, encadenado desde la vista anterior ya corregida.
         // (La deriva de la INS entre dos fotos es un % apreciable del paso y, al triangular, se
@@ -457,6 +476,7 @@ class LivePointCloud(
     }
 
     companion object {
+        private var nextId = 1
         const val MAX_FRAGMENTS = 60
 
         /**

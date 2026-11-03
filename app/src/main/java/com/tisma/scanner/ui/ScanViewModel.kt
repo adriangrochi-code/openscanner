@@ -895,7 +895,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     // ------------------------------------------------------------------ vídeo 360
 
     /** Reconstrucción en vivo: forma primero (sin color), color después. Hilo propio. */
-    private val live = com.tisma.scanner.recon.LivePointCloud()
+    /** La posición ya la corrige la odometría visual-inercial (MSCKF) de la INS: sin corrección propia. */
+    private val live = com.tisma.scanner.recon.LivePointCloud(maxCorrectionM = 0.0)
     private val reconExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "recon").apply { priority = Thread.NORM_PRIORITY - 1 } }
     private val reconPending = java.util.concurrent.atomic.AtomicInteger()
     @Volatile private var orbitDist = 0.0
@@ -950,22 +951,24 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val (ax, ay, az) = com.tisma.scanner.ins.OpticalVelocity.cameraAxesInDevice(orient)
         val q = st.orientation
         val w = MultiCameraController.KF_W; val h = MultiCameraController.KF_H
-        // Posición de la INS en el instante del fotograma (la imagen la corrige y se la devuelve).
-        val view = com.tisma.scanner.recon.LivePointCloud.View(q.rotate(ax), q.rotate(ay), q.rotate(az), st.position,
-            Optics.fxPixels(focal, sw, w), w / 2.0, h / 2.0)
+        val xw = q.rotate(ax); val yw = q.rotate(ay); val zw = q.rotate(az)
+        val fpx = Optics.fxPixels(focal, sw, w)
         val dist = orbitDist
         reconPending.incrementAndGet()
         reconExec.execute {
             try {
                 val t0 = System.nanoTime()
                 live.depthRange = dist * 0.4..dist * 2.0
-                val fixed = live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
-                    MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
-                if (fixed != null) {
-                    // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
-                    session?.addRefinedPose(t, fixed, q)
-                    com.tisma.scanner.diag.DiagLog.max("vis_corr_mm", ((fixed - view.center).norm() * 1000).toLong())
-                }
+                // 1) Seguir los puntos; 2) la INS (MSCKF) se corrige con ellos y da la posición de
+                // la cámara en este fotograma; 3) con esa posición se triangula y se arma la superficie.
+                val obs = live.track(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray))
+                val c = ins.onVisualKeyframe(t, xw, yw, zw, obs, fpx, w / 2.0, h / 2.0) ?: st.position
+                val view = com.tisma.scanner.recon.LivePointCloud.View(xw, yw, zw, c, fpx, w / 2.0, h / 2.0)
+                live.commit(view, thumb, MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
+                session?.addRefinedPose(t, c, q)
+                com.tisma.scanner.diag.DiagLog.max("vis_corr_mm", ((c - st.position).norm() * 1000).toLong())
+                com.tisma.scanner.diag.DiagLog.count("vio_puntos", ins.visualFeaturesUsed.toLong())
                 // Foto flotante cada ~7° de cambio de dirección (como mucho 60).
                 val prevDir = lastCardDir
                 if (prevDir == null || Math.toDegrees(kotlin.math.acos((prevDir dot view.zAxis).coerceIn(-1.0, 1.0))) >= 7.0) {
