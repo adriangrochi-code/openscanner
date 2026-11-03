@@ -24,6 +24,24 @@ MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
 
+def _cartesian_prod(*ts):
+    """torch.cartesian_prod con operaciones que ONNX sí tiene (meshgrid + stack): mismo resultado."""
+    if len(ts) == 1:
+        return ts[0]
+    grids = torch.meshgrid(*ts, indexing="ij")
+    return torch.stack([g.reshape(-1) for g in grids], dim=-1)
+
+
+def patch_for_onnx():
+    """La red usa aten::cartesian_prod (codificación de posiciones), que ONNX no soporta."""
+    import torch.functional
+    torch.cartesian_prod = _cartesian_prod
+    torch.functional.cartesian_prod = _cartesian_prod
+    # Comprobación: idéntico al original.
+    a, b = torch.arange(3.0), torch.arange(4.0)
+    assert torch.equal(_cartesian_prod(a, b), torch._C._VariableFunctions.cartesian_prod(a, b))
+
+
 def test_image():
     """Imagen de prueba con textura y profundidad variada (no hace falta ninguna foto)."""
     rng = np.random.default_rng(0)
@@ -80,6 +98,7 @@ def main():
     img = test_image()
     x = torch.from_numpy(((img.astype(np.float32) / 255 - MEAN) / STD).transpose(2, 0, 1))[None, None].contiguous()
 
+    patch_for_onnx()
     wrap = Wrapper(net).eval()
     with torch.no_grad():
         ref = wrap(x)
