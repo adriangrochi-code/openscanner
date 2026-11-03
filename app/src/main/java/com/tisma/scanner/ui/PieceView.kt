@@ -109,7 +109,9 @@ fun PieceView(
                 var nx = uy * wz - uz * wy; var ny = uz * wx - ux * wz; var nz = ux * wy - uy * wx
                 val nl = sqrt(nx * nx + ny * ny + nz * nz); if (nl < 1e-12f) continue
                 nx /= nl; ny /= nl; nz /= nl
-                if (nx * vd.x + ny * vd.y + nz * vd.z > 0) { nx = -nx; ny = -ny; nz = -nz }
+                // Trozos de la vista en vivo: la cara de fuera es la que miraba la cámara.
+                // Malla cerrada (modelo local): ya viene orientada hacia fuera.
+                if (!f.outward && nx * vd.x + ny * vd.y + nz * vd.z > 0) { nx = -nx; ny = -ny; nz = -nz }
                 // Dirección hacia el observador en el mundo: contraria al gradiente de la profundidad
                 // (depth = (x·sy + y·cy)·cp − z·sp).
                 val tx = -sy * cp; val ty = -cy * cp; val tz = sp
@@ -131,7 +133,8 @@ fun PieceView(
                 val f = fragments[fi]; val p = proj[fi]
                 val cnt = j - i
                 val verts = FloatArray(cnt * 6)
-                val texs = if (textured && shaders[f.id] != null) FloatArray(cnt * 6) else null
+                val texs = if (textured && f.vertexColors == null && shaders[f.id] != null) FloatArray(cnt * 6) else null
+                val vcol = if (textured) f.vertexColors else null
                 val cols = if (texs == null) IntArray(cnt * 3) else null
                 for (k in 0 until cnt) {
                     val tr = list[i + k]
@@ -140,8 +143,15 @@ fun PieceView(
                         verts[6 * k + 2 * e] = p[3 * v]; verts[6 * k + 2 * e + 1] = p[3 * v + 1]
                         if (texs != null) { texs[6 * k + 2 * e] = f.uv[2 * v]; texs[6 * k + 2 * e + 1] = f.uv[2 * v + 1] }
                         if (cols != null) {
-                            val g = (tr.shade * 225).toInt().coerceIn(0, 255)
-                            cols[3 * k + e] = (0xFF shl 24) or (g shl 16) or ((g * 0.97f).toInt() shl 8) or (g * 0.92f).toInt()
+                            if (vcol != null) {
+                                // Color de la foto con un poco de sombreado (se aprecia el relieve).
+                                val c = vcol[v]; val sh = 0.55f + 0.45f * tr.shade
+                                cols[3 * k + e] = (0xFF shl 24) or (((c shr 16) and 0xFF) * sh).toInt().coerceIn(0, 255).shl(16) or
+                                    ((((c shr 8) and 0xFF) * sh).toInt().coerceIn(0, 255) shl 8) or ((c and 0xFF) * sh).toInt().coerceIn(0, 255)
+                            } else {
+                                val g = (tr.shade * 225).toInt().coerceIn(0, 255)
+                                cols[3 * k + e] = (0xFF shl 24) or (g shl 16) or ((g * 0.97f).toInt() shl 8) or (g * 0.92f).toInt()
+                            }
                         }
                     }
                 }

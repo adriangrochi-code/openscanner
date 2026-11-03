@@ -943,15 +943,17 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
     BackHandler { onClose() }
     var textured by remember { mutableStateOf(true) }
     Box(Modifier.fillMaxSize().background(Tisma.Bg)) {
-        if (s.surface.isNotEmpty()) {
-            PieceView(s.surface, textured = textured, modifier = Modifier.fillMaxSize().padding(top = 90.dp, bottom = 230.dp), interactive = true)
+        val shown = s.localModel?.let { listOf(it) } ?: s.surface
+        if (shown.isNotEmpty()) {
+            PieceView(shown, textured = textured, modifier = Modifier.fillMaxSize().padding(top = 90.dp, bottom = 280.dp), interactive = true)
         } else Text(if (s.busy) "Guardando…" else "No se pudo armar la vista previa (poca textura o sin girar alrededor).",
             color = Tisma.TextDim, fontSize = 14.sp, modifier = Modifier.align(Alignment.Center).padding(24.dp))
         Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding().padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Tu pieza", color = Tisma.Text, fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                    Text("Vista previa · arrastra para girarla", color = Tisma.TextDim, fontSize = 13.sp)
+                    Text(if (s.localModel != null) "Modelo hecho en el móvil · arrastra para girarlo" else "Vista previa · arrastra para girarla",
+                        color = Tisma.TextDim, fontSize = 13.sp)
                 }
                 RoundIcon("✕", "Cerrar", onClose)
             }
@@ -968,6 +970,13 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
                 .clickable(enabled = zip != null && !s.cloudBusy && !s.busy) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
                 Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Procesando en Tisma Server…"; else -> "Crear modelo final en Tisma Server" },
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            }
+            // Sin servidor: el modelo se calcula en el propio móvil (calidad media, escala real de la INS).
+            if (s.localModel == null) {
+                SecondaryButton(if (s.localBusy) "Creando en el móvil…" else "Crear modelo en el móvil (sin servidor)",
+                    Modifier.fillMaxWidth(), enabled = s.surface.isNotEmpty() && !s.localBusy && !s.busy) { vm.buildLocalModel() }
+            } else s.localStl?.let { stl ->
+                SecondaryButton("Compartir STL del móvil (mm)", Modifier.fillMaxWidth()) { onShare(stl) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SecondaryButton("Compartir", Modifier.weight(1f), enabled = zip != null) { zip?.let(onShare) }

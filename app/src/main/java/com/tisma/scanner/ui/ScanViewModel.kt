@@ -134,6 +134,10 @@ data class UiState(
     val arXyz: FloatArray = FloatArray(0),
     val arQuality: FloatArray = FloatArray(0),
     val arCards: List<ArCard> = emptyList(),
+    /** Modelo calculado en el móvil (malla cerrada con color) y su STL en mm. */
+    val localModel: com.tisma.scanner.recon.LivePointCloud.Fragment? = null,
+    val localStl: File? = null,
+    val localBusy: Boolean = false,
     /** Quitar el desenfoque de movimiento de las fotos en el móvil (con el giro medido por la INS). */
     val deblurMotion: Boolean = true,
     /** Trabajo largo en curso (p.ej. "Mejorando nitidez 12/40"). */
@@ -850,6 +854,36 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     override fun setDeblurMotion(v: Boolean) = _state.update { it.copy(deblurMotion = v) }
 
+    /** Carpeta del último escaneo (para guardar el modelo local junto a él). */
+    @Volatile private var lastScanDir: File? = null
+
+    override fun buildLocalModel() {
+        if (_state.value.localBusy || _state.value.scanning) return
+        _state.update { it.copy(localBusy = true, progressText = "Creando modelo en el móvil…") }
+        reconExec.execute {
+            try {
+                val t0 = SystemClock.uptimeMillis()
+                val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = 128) { p ->
+                    _state.update { it.copy(progressText = "Creando modelo en el móvil %d %%".format((p * 100).toInt())) }
+                }
+                if (model == null) {
+                    _state.update { it.copy(localBusy = false, progressText = "",
+                        cloudStatus = "✗ No hay suficiente superficie: rodea la pieza a dos alturas") }
+                    return@execute
+                }
+                val dir = lastScanDir ?: getApplication<Application>().getExternalFilesDir(null)!!
+                val stl = File(dir, "pieza_movil.stl")
+                model.writeStl(stl); model.writePly(File(dir, "pieza_movil.ply"))
+                log("Modelo en el móvil: ${model.triangleCount} triángulos en ${(SystemClock.uptimeMillis() - t0) / 1000} s")
+                _state.update { it.copy(localModel = model.asFragment(), localStl = stl, localBusy = false, progressText = "",
+                    cloudStatus = "✓ Modelo creado en el móvil · ${model.triangleCount / 1000}k triángulos") }
+            } catch (e: Throwable) {
+                log("Modelo en el móvil: error $e")
+                _state.update { it.copy(localBusy = false, progressText = "") }
+            }
+        }
+    }
+
     override fun setVideoMode(v: Boolean) {
         if (session != null || _state.value.videoMode == v) return
         _state.update { it.copy(videoMode = v) }
@@ -1222,7 +1256,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         orbitDist = 0.0
         cards.clear(); lastCardDir = null
         reconExec.execute { live.reset(); publishCloud() }
-        _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null) }
+        _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null, localModel = null, localStl = null) }
+        lastScanDir = s.dir
         lastInstruction = null
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
         stackTriggers.clear(); coveredShots.clear(); exposures.clear()

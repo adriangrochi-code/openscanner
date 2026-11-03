@@ -54,11 +54,17 @@ class LivePointCloud(
      * `xyz` en metros (mundo), `uv` en píxeles de la miniatura, `tris` índices de 3 en 3.
      */
     class Fragment(val id: Int, val xyz: FloatArray, val uv: FloatArray, val tris: IntArray,
-                   val thumb: IntArray?, val tw: Int, val th: Int, val viewDir: Vec3)
+                   val thumb: IntArray?, val tw: Int, val th: Int, val viewDir: Vec3,
+                   /** Vista desde la que se hizo (para la fusión volumétrica del modelo local). */
+                   val view: View? = null, val gw: Int = 0, val gh: Int = 0,
+                   /** Malla cerrada con normales hacia fuera por el orden de vértices (modelo local). */
+                   val outward: Boolean = false,
+                   /** Color por vértice (ARGB) en vez de textura. */
+                   val vertexColors: IntArray? = null)
 
     private val fragments = ArrayList<Fragment>()
     /** Nueva superficie sólo si la vista difiere al menos esto de las que ya hay (grados). */
-    var fragmentEveryDeg = 12.0
+    var fragmentEveryDeg = 8.0
 
     private class Keyframe(val view: View, val thumb: IntArray?, val tw: Int, val th: Int, val gw: Int, val gh: Int)
     private class Obs(val kf: Int, val u: Double, val v: Double)
@@ -141,6 +147,12 @@ class LivePointCloud(
             val alive = ArrayList<Track>()
             for ((i, t) in tracks.withIndex()) {
                 val p = moved[i] ?: continue
+                // Un punto fijo debe seguir viéndose donde se proyecta: si no, el seguimiento se
+                // ha ido a otra superficie (p.ej. su cara ya no se ve) y el track se termina.
+                if (t.frozen) {
+                    val q = v.project(px[t.point])
+                    if (q == null || kotlin.math.hypot(q[0] - p[0], q[1] - p[1]) > maxReprojPx * 2) continue
+                }
                 t.obs += Obs(k, p[0], p[1])
                 alive += t
                 if (t.frozen) pointObs[t.point] = t.obs.toList() else triangulate(t)
@@ -263,10 +275,23 @@ class LivePointCloud(
         val kf = keyframes[k] ?: return
         val dir = kf.view.zAxis
         if (fragments.any { Math.toDegrees(acos((it.viewDir dot dir).coerceIn(-1.0, 1.0))) < fragmentEveryDeg }) return
-        val vis = tracks.filter { it.point >= 0 && it.obs.last().kf == k }
-        if (vis.size < 12) return
-        val us = DoubleArray(vis.size) { vis[it].obs.last().u }
-        val vs = DoubleArray(vis.size) { vis[it].obs.last().v }
+        // Sólo puntos fijos (bien triangulados) y que se ven donde se proyectan.
+        val cand = tracks.filter { it.point >= 0 && it.frozen && it.obs.last().kf == k }
+        if (cand.size < 12) return
+        val cu = DoubleArray(cand.size) { cand[it].obs.last().u }
+        val cv = DoubleArray(cand.size) { cand[it].obs.last().v }
+        val cd = cand.map { kf.view.depth(px[it.point]) }
+        // Fuera los que no cuadran con sus vecinos en la imagen (profundidad ≠ mediana local).
+        val keep = cand.indices.filter { i ->
+            val nb = cand.indices.filter { j -> j != i && kotlin.math.hypot(cu[i] - cu[j], cv[i] - cv[j]) < kf.gw * 0.08 }
+            if (nb.size < 3) return@filter false
+            val med = nb.map { cd[it] }.sorted()[nb.size / 2]
+            kotlin.math.abs(cd[i] - med) < 0.04 * med
+        }
+        if (keep.size < 12) return
+        val vis = keep.map { cand[it] }
+        val us = DoubleArray(vis.size) { cu[keep[it]] }
+        val vs = DoubleArray(vis.size) { cv[keep[it]] }
         val pts = vis.map { px[it.point] }
         val depth = pts.map { kf.view.depth(it) }
         val maxEdgePx = kf.gw * 0.12
@@ -293,7 +318,7 @@ class LivePointCloud(
             xyz[3 * i] = p.x.toFloat(); xyz[3 * i + 1] = p.y.toFloat(); xyz[3 * i + 2] = p.z.toFloat()
             uv[2 * i] = (us[i] * kf.tw / kf.gw).toFloat(); uv[2 * i + 1] = (vs[i] * kf.th / kf.gh).toFloat()
         }
-        fragments += Fragment(fragments.size, xyz, uv, tris.toIntArray(), kf.thumb, kf.tw, kf.th, dir)
+        fragments += Fragment(fragments.size, xyz, uv, tris.toIntArray(), kf.thumb, kf.tw, kf.th, dir, kf.view, kf.gw, kf.gh)
         if (fragments.size > MAX_FRAGMENTS) fragments.removeAt(0)
     }
 

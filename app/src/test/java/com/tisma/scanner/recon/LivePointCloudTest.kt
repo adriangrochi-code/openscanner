@@ -142,6 +142,66 @@ class LivePointCloudTest {
         assertTrue("nube corregida %.4f vs sin corregir %.4f".format(withErr, withoutErr), withErr < withoutErr * 0.8)
     }
 
+    /** Modelo en el móvil: vuelta completa a dos alturas -> malla cerrada pegada a la caja. */
+    @Test fun localModelFromAFullTurn() {
+        val cloud = LivePointCloud()
+        cloud.depthRange = 0.1..0.5
+        cloud.fragmentEveryDeg = 8.0
+        val thumb = IntArray(80 * 60) { 0xFFAA3322.toInt() }
+        // Como pide el recuadro de encuadre: la pieza llena buena parte de la imagen (~14 cm).
+        cloud.depthRange = 0.05..0.4
+        for (el in listOf(25.0, 55.0)) {
+            var az = 0.0
+            while (az < 360.0) { val v = view(az, el, dist = 0.14); cloud.addKeyframe(render(v), v, thumb, 80, 60); az += 3.0 }
+        }
+        val t0 = System.currentTimeMillis()
+        val model = LocalModel.build(cloud.fragments(), resolution = 96)!!
+        val ms = System.currentTimeMillis() - t0
+        val err = (0 until model.vertexCount).map { i ->
+            boxDistance(Vec3(model.xyz[3 * i].toDouble(), model.xyz[3 * i + 1].toDouble(), model.xyz[3 * i + 2].toDouble()))
+        }.sorted()
+        // Normales hacia fuera: apuntan lejos del centro de la caja en casi todos los triángulos.
+        var out = 0
+        for (t in 0 until model.triangleCount) {
+            fun p(i: Int) = Vec3(model.xyz[3 * i].toDouble(), model.xyz[3 * i + 1].toDouble(), model.xyz[3 * i + 2].toDouble())
+            val a = p(model.tris[3 * t]); val b = p(model.tris[3 * t + 1]); val c = p(model.tris[3 * t + 2])
+            val n = (b - a) cross (c - a)
+            if ((n dot ((a + b + c) * (1.0 / 3) - Vec3(0.0, 0.0, 0.02))) > 0) out++
+        }
+        println("modelo local: ${cloud.fragments().size} vistas · ${model.triangleCount} triángulos · " +
+            "error mediano %.2f mm · p90 %.2f mm · %.0f %% hacia fuera · %d ms".format(err[err.size / 2] * 1000, err[err.size * 9 / 10] * 1000,
+                100.0 * out / model.triangleCount, ms))
+        assertTrue(model.triangleCount > 500)
+        assertTrue("error mediano", err[err.size / 2] < 0.002)
+        assertTrue("orientación", out > 0.85 * model.triangleCount)
+        assertTrue(model.colors.count { it == 0xFFAA3322.toInt() } > 0.8 * model.vertexCount)
+        val stl = java.io.File.createTempFile("pieza", ".stl")
+        model.writeStl(stl)
+        assertEquals(84L + 50L * model.triangleCount, stl.length())
+    }
+
+    /** Fusión con superficies perfectas (sin seguimiento ni triangulación): aísla TSDF + malla. */
+    @Test fun localModelFromPerfectViews() {
+        val frs = ArrayList<LivePointCloud.Fragment>()
+        for (el in listOf(25.0, 55.0)) for (az in 0 until 360 step 15) {
+            val v = view(az.toDouble(), el)
+            val vis = surface.indices.filter { (normals[faceOf[it]] dot (v.center - surface[it].first)) > 0 }
+            val uv = vis.map { v.project(surface[it].first)!! }
+            val tri = Delaunay.triangulate(DoubleArray(vis.size) { uv[it][0] }, DoubleArray(vis.size) { uv[it][1] })
+                .filter { t -> (0..2).all { e -> faceOf[vis[t[e]]] == faceOf[vis[t[(e + 1) % 3]]] } }   // sin puentes entre caras
+            val xyz = FloatArray(vis.size * 3)
+            for ((i, k) in vis.withIndex()) { val p = surface[k].first; xyz[3 * i] = p.x.toFloat(); xyz[3 * i + 1] = p.y.toFloat(); xyz[3 * i + 2] = p.z.toFloat() }
+            frs += LivePointCloud.Fragment(frs.size, xyz, FloatArray(vis.size * 2), tri.flatMap { it.toList() }.toIntArray(), null, 0, 0,
+                v.zAxis, v, w, h)
+        }
+        val model = LocalModel.build(frs, resolution = 96)!!
+        val err = (0 until model.vertexCount).map { i ->
+            boxDistance(Vec3(model.xyz[3 * i].toDouble(), model.xyz[3 * i + 1].toDouble(), model.xyz[3 * i + 2].toDouble()))
+        }.sorted()
+        println("fusión perfecta: ${model.triangleCount} triángulos · error mediano %.2f mm · p90 %.2f mm".format(err[err.size / 2] * 1000, err[err.size * 9 / 10] * 1000))
+        assertTrue(err[err.size * 9 / 10] < 0.002)
+    }
+
     @Test fun noParallaxNoPoints() {
         // Girar en el sitio (sin rodear la pieza) no da profundidad: no debe inventar puntos.
         val cloud = LivePointCloud()

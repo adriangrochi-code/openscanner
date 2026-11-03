@@ -48,6 +48,8 @@ interface ScanActions {
     fun setVideoMode(v: Boolean)
     /** Quitar el desenfoque de movimiento de las fotos en el móvil. */
     fun setDeblurMotion(v: Boolean)
+    /** Crear el modelo 3D en el móvil (sin servidor) con lo reconstruido en vivo. */
+    fun buildLocalModel()
     /** Pose de la cámara en tiempo real para la guía en realidad aumentada (modo vídeo). */
     val arPose: kotlinx.coroutines.flow.StateFlow<ArPose?>
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */
