@@ -280,6 +280,7 @@ private fun StatusLine(s: UiState) {
         Text(left, color = Tisma.TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
         val (txt, col) = when {
+            s.progressText.isNotEmpty() -> s.progressText to Tisma.Warn
             s.busy -> "Procesando…" to Tisma.Warn
             s.scanning -> "Escaneando" to Tisma.PurpleText
             s.ready -> "Listo" to Tisma.Ok
@@ -427,6 +428,8 @@ private fun ScanSettings(s: UiState, vm: ScanActions) {
     SettingSwitch("Descartar fotos movidas", s.discardBlurry, onChange = vm::setDiscardBlurry)
     SettingSwitch("Estabilizar vista previa (giróscopo)", s.stabilizePreview, onChange = vm::setStabilizePreview)
     SettingSwitch("Ráfaga anti-movimiento (4 fotos cortas)", s.antiShakeBurst, onChange = vm::setAntiShakeBurst)
+    SettingSwitch("Corregir fotos movidas en el móvil", s.deblurMotion, onChange = vm::setDeblurMotion)
+    Hint("Con el giro medido durante cada foto se deshace su arrastre al terminar el escaneo (sin servidor).")
     SettingRow("Calidad JPEG") {
         val opts = listOf(85, 90, 92, 95)
         ValueField("${s.jpegQuality}" + if (s.jpegQuality == 92) " · recomendada" else "") {
@@ -963,7 +966,7 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp))
                 .background(if (zip != null && !s.cloudBusy && !s.busy) Tisma.Purple else Tisma.Field)
                 .clickable(enabled = zip != null && !s.cloudBusy && !s.busy) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
-                Text(when { s.busy -> "Guardando…"; s.cloudBusy -> "Procesando en Tisma Server…"; else -> "Crear modelo final en Tisma Server" },
+                Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Procesando en Tisma Server…"; else -> "Crear modelo final en Tisma Server" },
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

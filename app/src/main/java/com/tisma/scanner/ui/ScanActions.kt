@@ -46,6 +46,8 @@ interface ScanActions {
     fun setAntiShakeBurst(v: Boolean)
     /** Vídeo 360 (una cámara, flujo continuo, fotogramas automáticos) o fotos sueltas. */
     fun setVideoMode(v: Boolean)
+    /** Quitar el desenfoque de movimiento de las fotos en el móvil. */
+    fun setDeblurMotion(v: Boolean)
     /** Pose de la cámara en tiempo real para la guía en realidad aumentada (modo vídeo). */
     val arPose: kotlinx.coroutines.flow.StateFlow<ArPose?>
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */

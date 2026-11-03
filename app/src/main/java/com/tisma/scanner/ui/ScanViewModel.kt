@@ -134,6 +134,10 @@ data class UiState(
     val arXyz: FloatArray = FloatArray(0),
     val arQuality: FloatArray = FloatArray(0),
     val arCards: List<ArCard> = emptyList(),
+    /** Quitar el desenfoque de movimiento de las fotos en el móvil (con el giro medido por la INS). */
+    val deblurMotion: Boolean = true,
+    /** Trabajo largo en curso (p.ej. "Mejorando nitidez 12/40"). */
+    val progressText: String = "",
     /** Indicación grande de la grabación (estable ~1 s para que no parpadee). */
     val instruction: Instruction? = null,
     /** Guía en vivo de la cobertura (anillo actual, hueco y sentido de giro). */
@@ -844,6 +848,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun setStabilizePreview(v: Boolean) = _state.update { it.copy(stabilizePreview = v) }
     override fun setAntiShakeBurst(v: Boolean) = _state.update { it.copy(antiShakeBurst = v) }
 
+    override fun setDeblurMotion(v: Boolean) = _state.update { it.copy(deblurMotion = v) }
+
     override fun setVideoMode(v: Boolean) {
         if (session != null || _state.value.videoMode == v) return
         _state.update { it.copy(videoMode = v) }
@@ -971,8 +977,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             Math.toDegrees(last.orientation.angleTo(st.orientation)) >= VIDEO_MIN_ANGLE_DEG ||
             (st.position - last.position).norm() >= VIDEO_MIN_TRANSLATION_M
         if (!moved) return false
-        val blur = motionBlurPx(cameraId, t, width) * minOf(1.0, REF_WIDTH_PX / width)
-        if (blur > MAX_MOTION_BLUR_PX) {
+        val blurFull = motionBlurPx(cameraId, t, width)
+        val blur = blurFull * minOf(1.0, REF_WIDTH_PX / width)
+        // Con la corrección de nitidez, se aceptan arrastres que luego se pueden deshacer.
+        val tooBlurred = if (_state.value.deblurMotion) blurFull > com.tisma.scanner.quality.MotionDeblur.MAX_PX * 0.8 else blur > MAX_MOTION_BLUR_PX
+        if (tooBlurred) {
             videoFast.incrementAndGet(); com.tisma.scanner.diag.DiagLog.count("video_rapido")
             return false
         }
@@ -1197,6 +1206,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 put("focus_depth_every", if (_state.value.focusDepth) AUTO_SWEEP_EVERY else 0)
                 put("anti_shake_burst", if (_state.value.antiShakeBurst) ANTI_SHAKE_FRAMES else 0)
                 put("max_motion_blur_px", MAX_MOTION_BLUR_PX)
+                put("deblur_on_phone", _state.value.deblurMotion)
                 put("motion_blur_ref_width_px", REF_WIDTH_PX)
                 put("min_angle_deg", selector.minAngleDeg)
                 put("min_translation_m", selector.minTranslationM)
@@ -1262,6 +1272,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         delay(800) // últimos JPEG del HAL
         val deadline = SystemClock.uptimeMillis() + 8000
         while ((pendingWrites.get() > 0 || pendingAnalysis.get() > 0) && SystemClock.uptimeMillis() < deadline) delay(50)
+        if (_state.value.deblurMotion) deblurAll(s) else deblurJobs.clear()
+        deblurTimes.clear()
         runCatching { s.writeQualitySummary(qualitySummary()) }
         s.close()
         stopping = null
@@ -1463,7 +1475,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 val pose = ins.stateAt(t)
                 runCatching { s.addImage(trig, pass.name, cameraId, t, width, height, jpeg, pose) }
                     .onFailure { log("Error guardando imagen: ${it.message}") }
-                val blurPx = motionBlurPx(cameraId, t, width)
+                val vec = motionBlurVec(cameraId, t, width)
+                val blurPx = vec?.let { kotlin.math.hypot(it.first, it.second) } ?: 0.0
+                if (vec != null && _state.value.deblurMotion && blurPx >= com.tisma.scanner.quality.MotionDeblur.MIN_PX &&
+                    blurPx <= com.tisma.scanner.quality.MotionDeblur.MAX_PX) {
+                    deblurJobs += Triple(File(s.dir, "images/$cameraId/$t.jpg"), vec.first, vec.second)
+                    deblurTimes += t
+                }
                 // Análisis en segundo plano; si se acumula (ráfagas), se salta para no agotar memoria.
                 if (pendingAnalysis.get() >= 6) { skippedAnalysis++; return@execute }
                 pendingAnalysis.incrementAndGet()
@@ -1484,8 +1502,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         // El arrastre se mide a la resolución con la que trabaja la reconstrucción (REF_WIDTH_PX):
         // a 4000 px el temblor normal de la mano ya da 3-8 px y se borraba todo.
         val blurRef = blurPx * minOf(1.0, REF_WIDTH_PX / width.toDouble())
-        val sharpLow = trig !in stackTriggers && blurJudge.isBlurry(cameraId, q.sharpness)
-        val blurry = blurRef > MAX_MOTION_BLUR_PX || sharpLow
+        // El arrastre que se va a corregir en el móvil no es motivo para tirar la foto.
+        val fixable = t in deblurTimes
+        val sharpLow = trig !in stackTriggers && !fixable && blurJudge.isBlurry(cameraId, q.sharpness)
+        val blurry = (!fixable && blurRef > MAX_MOTION_BLUR_PX) || sharpLow
         val manual = trig in manualTriggers
         var deleted = false
         com.tisma.scanner.diag.DiagLog.event("calidad", "#$cameraId disparo $trig: arrastre %.1f px (%.1f a %d px) · nitidez %.1f%s%s".format(
@@ -1539,16 +1559,57 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         warnJob = viewModelScope.launch { delay(4000); _state.update { it.copy(shotWarning = "") } }
     }
 
-    private fun motionBlurPx(cameraId: String, t: Long, width: Int): Double {
+    private fun motionBlurPx(cameraId: String, t: Long, width: Int): Double =
+        motionBlurVec(cameraId, t, width, consume = false)?.let { kotlin.math.hypot(it.first, it.second) } ?: 0.0
+
+    /**
+     * Arrastre de la foto durante su exposición (px de la foto, ejes del sensor), con el giro que
+     * midió la INS entre el inicio y el final de la exposición.
+     */
+    private fun motionBlurVec(cameraId: String, t: Long, width: Int, consume: Boolean = true): Pair<Double, Double>? {
         // Exposición real de esa foto (en HDR, +2 EV es 4× más larga que la previsualización).
-        val exp = exposures.remove("$cameraId/$t") ?: cameras.exposureNsFor(cameraId)
-        if (exp <= 0) return 0.0
-        val a = ins.stateAt(t) ?: return 0.0
-        val b = ins.stateAt(t + exp) ?: return 0.0
-        val info = inventory[cameraId] ?: return 0.0
-        val f = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return 0.0
-        val sw = info.sensorSizeMm?.first?.toDouble() ?: return 0.0
-        return a.orientation.angleTo(b.orientation) * Optics.fxPixels(f, sw, width)
+        val key = "$cameraId/$t"
+        val exp = (if (consume) exposures.remove(key) else exposures[key]) ?: cameras.exposureNsFor(cameraId)
+        if (exp <= 0) return null
+        val a = ins.stateAt(t) ?: return null
+        val b = ins.stateAt(t + exp) ?: return null
+        val info = inventory[cameraId] ?: return null
+        val f = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return null
+        val sw = info.sensorSizeMm?.first?.toDouble() ?: return null
+        val orient = sensorOrientationCache.getOrPut(cameraId) { cameras.sensorOrientation(cameraId) }
+        return com.tisma.scanner.quality.MotionDeblur.blurVector(a.orientation, b.orientation,
+            com.tisma.scanner.ins.OpticalVelocity.cameraAxesInDevice(orient), Optics.fxPixels(f, sw, width))
+    }
+
+    /** Fotos a enfocar en el móvil al terminar: (archivo, arrastre x, arrastre y). */
+    private val deblurJobs = java.util.concurrent.ConcurrentLinkedQueue<Triple<File, Double, Double>>()
+    private val deblurTimes = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+    /** Quita el desenfoque de movimiento de las fotos marcadas (en el móvil, 2 a la vez). */
+    private suspend fun deblurAll(s: ScanSession) {
+        val jobs = generateSequence { deblurJobs.poll() }.filter { it.first.exists() }.toList()
+        if (jobs.isEmpty()) return
+        val done = java.util.concurrent.atomic.AtomicInteger()
+        val ok = java.util.concurrent.atomic.AtomicInteger()
+        val log = java.util.Collections.synchronizedList(ArrayList<String>())
+        _state.update { it.copy(progressText = "Mejorando nitidez 0/${jobs.size}") }
+        val t0 = SystemClock.uptimeMillis()
+        kotlinx.coroutines.coroutineScope {
+            val gate = kotlinx.coroutines.sync.Semaphore(2)
+            for ((f, dx, dy) in jobs) launch(Dispatchers.Default) {
+                gate.acquire()
+                try {
+                    val r = runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy) }.getOrDefault(false)
+                    if (r) ok.incrementAndGet()
+                    log += "${f.relativeTo(s.dir).invariantSeparatorsPath},%.2f,%.2f,%d".format(java.util.Locale.US, dx, dy, if (r) 1 else 0)
+                } finally { gate.release() }
+                val n = done.incrementAndGet()
+                _state.update { it.copy(progressText = "Mejorando nitidez $n/${jobs.size}") }
+            }
+        }
+        runCatching { File(s.dir, "deblurred.csv").writeText("file,blur_dx_px,blur_dy_px,applied\n" + log.joinToString("\n") + "\n") }
+        log("Nitidez: ${ok.get()}/${jobs.size} fotos corregidas en ${(SystemClock.uptimeMillis() - t0) / 1000} s")
+        _state.update { it.copy(progressText = "") }
     }
 
     /** Criterios mínimos antes de gastar cómputo en la nube. */

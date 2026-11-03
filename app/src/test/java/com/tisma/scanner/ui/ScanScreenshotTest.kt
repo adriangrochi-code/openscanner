@@ -26,6 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 class ScanScreenshotTest {
 
     private object NoActions : ScanActions {
+        override fun setDeblurMotion(v: Boolean) {}
         override val arPose = kotlinx.coroutines.flow.MutableStateFlow<ArPose?>(demoPose())
         override fun setVideoMode(v: Boolean) {}
         override fun onPreviewAvailable(texture: SurfaceTexture) {}

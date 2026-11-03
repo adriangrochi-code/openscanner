@@ -73,7 +73,14 @@ def drop_blurry(scan: Path, frames, max_drop: float = 0.3):
     for fr in frames:
         key = (fr.get("trigger", ""), fr["camera_id"])
         per_shot[key] = per_shot.get(key, 0) + 1
+    # Las fotos que el móvil ya enfocó (deblurred.csv) no se tiran por su arrastre original.
+    fixed = set()
+    dp = scan / "deblurred.csv"
+    if dp.exists():
+        with open(dp) as f:
+            fixed = {r["file"] for r in csv.DictReader(f) if r.get("applied") == "1"}
     candidates = [fr for fr in frames if (fr["camera_id"], fr["t_ns"]) in blur
+                  and fr.get("file") not in fixed
                   and per_shot[(fr.get("trigger", ""), fr["camera_id"])] == 1]
     candidates.sort(key=lambda fr: -blur[(fr["camera_id"], fr["t_ns"])])
     drop = {id(fr) for fr in candidates[:int(len(frames) * max_drop)]}
