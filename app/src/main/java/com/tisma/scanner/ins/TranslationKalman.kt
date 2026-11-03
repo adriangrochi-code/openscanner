@@ -7,7 +7,8 @@ import kotlin.math.sqrt
  * posición p, velocidad v (marco mundo) y sesgo del acelerómetro b (marco del dispositivo).
  * La actitud la da el filtro de Mahony (ya afinado: brújula sólo en rumbo, ZARU).
  *
- *   predicción:  a = R·(a_medida − b) − g ;  p += v·dt + a·dt²/2 ;  v += a·dt
+ *   predicción:  a = R·(a_medida − b) − g   (trapecio entre la muestra anterior a₀ y la actual a₁)
+ *                v += (a₀ + a₁)/2·dt ;  p += v·dt + (2a₀ + a₁)/6·dt²   (exacto si a varía linealmente)
  *   errores:     δp' = δv ;  δv' = −R·δb + ruido ;  δb' = paseo aleatorio
  *
  * Correcciones (cada una pesa según su incertidumbre):
@@ -30,6 +31,8 @@ class TranslationKalman(
     var p = Vec3.ZERO; private set
     var v = Vec3.ZERO; private set
     var b = Vec3.ZERO; private set
+    /** Aceleración lineal (mundo) de la muestra anterior, para integrar por trapecio. */
+    private var prevAccel: Vec3? = null
     /** Covarianza 9×9 (fila mayor): índices 0-2 posición, 3-5 velocidad, 6-8 sesgo. */
     private val P = DoubleArray(N * N)
     private val tmp = DoubleArray(N * N)
@@ -38,7 +41,7 @@ class TranslationKalman(
     init { reset(Vec3.ZERO) }
 
     fun reset(biasPrior: Vec3) {
-        p = Vec3.ZERO; v = Vec3.ZERO; b = biasPrior
+        p = Vec3.ZERO; v = Vec3.ZERO; b = biasPrior; prevAccel = null
         P.fill(0.0)
         for (i in 3..5) P[i * N + i] = 1e-4
         for (i in 6..8) P[i * N + i] = initialBiasStd * initialBiasStd
@@ -52,9 +55,11 @@ class TranslationKalman(
         q.rotate(accelBody - b) - Vec3(0.0, 0.0, MahonyFilter.GRAVITY)
 
     fun predict(q: Quat, accelBody: Vec3, dt: Double, maxSpeed: Double) {
-        val a = linearAccel(q, accelBody)
-        p = p + v * dt + a * (0.5 * dt * dt)
-        v = v + a * dt
+        val a1 = linearAccel(q, accelBody)
+        val a0 = prevAccel ?: a1
+        prevAccel = a1
+        p = p + v * dt + (a0 * 2.0 + a1) * (dt * dt / 6)
+        v = v + (a0 + a1) * (0.5 * dt)
         val s = v.norm()
         if (s > maxSpeed) v = v * (maxSpeed / s)
 

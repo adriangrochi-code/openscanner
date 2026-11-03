@@ -44,7 +44,7 @@ class RestAfterRotationTest {
                     val earth = Vec3(0.0, 23.0, -19.0)
                     ins.onMag(t, q.conj().rotate(earth + magDisturbance) + n() * 10.0)
                 }
-                ins.onGyro(t + 1_000_000, w * gyroScale + n() * 0.003)   // giróscopo con error de escala
+                ins.onGyro(t, w * gyroScale + n() * 0.003)   // giróscopo con error de escala
                 t += (dt * 1e9).toLong()
                 val p = ins.latest()?.position?.norm() ?: 0.0
                 if (k == plan.lastIndex) {

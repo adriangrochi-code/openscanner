@@ -49,7 +49,13 @@ class StrapdownIns(
     // del acelerómetro con sesgo del giróscopo.
     val filter = MahonyFilter(kp = 0.3, ki = 0.004)
     private var lastGyroT = -1L
+    /** Las dos últimas muestras del acelerómetro: se interpola entre ellas al instante del giróscopo. */
+    private var prevAccelT = -1L
+    private var prevAccel: Vec3? = null
+    private var lastAccelT = -1L
     private var lastAccel: Vec3? = null
+    /** Muestras del giróscopo esperando a que llegue la del acelerómetro posterior (≈2,5 ms). */
+    private val pendingGyro = ArrayDeque<Pair<Long, Vec3>>()
     private var lastMag: Vec3? = null
     private var stillCount = 0
     private var stationary = false
@@ -65,7 +71,8 @@ class StrapdownIns(
     private val capacity = historyCapacity
 
     @Synchronized fun reset() {
-        filter.reset(gyroBiasPrior); lastGyroT = -1; lastAccel = null; lastMag = null
+        filter.reset(gyroBiasPrior); lastGyroT = -1; lastMag = null
+        prevAccelT = -1; prevAccel = null; lastAccelT = -1; lastAccel = null; pendingGyro.clear()
         kf.reset(accelBiasPrior)
         winPos = 0; winFill = 0
         stillCount = 0; stationary = false; history.clear()
@@ -148,8 +155,36 @@ class StrapdownIns(
 
     @Synchronized fun onAccel(tNs: Long, raw: Vec3) {
         val a = accelCalibration?.apply(raw) ?: raw
-        lastAccel = a
+        if (lastAccel != null && tNs <= lastAccelT) return       // duplicada o desordenada
+        prevAccelT = lastAccelT; prevAccel = lastAccel
+        lastAccelT = tNs; lastAccel = a
         if (!filter.isInitialized) filter.initialize(a - kf.b)
+        drainGyro()
+    }
+
+    /**
+     * Acelerómetro en el instante exacto `t` (interpolación lineal entre las dos muestras que lo
+     * rodean). Los dos sensores llegan en instantes distintos: usar "la última muestra" desfasaba
+     * la aceleración hasta medio periodo, un error que en movimiento se integra dos veces.
+     */
+    private fun accelAt(t: Long): Vec3? {
+        val a1 = lastAccel ?: return null
+        val a0 = prevAccel ?: return a1
+        if (t >= lastAccelT) return a1
+        if (t <= prevAccelT) return a0
+        val f = (t - prevAccelT).toDouble() / (lastAccelT - prevAccelT).toDouble()
+        return a0 + (a1 - a0) * f
+    }
+
+    /** Procesa los giros cuyo instante ya está cubierto por el acelerómetro. */
+    private fun drainGyro() {
+        while (pendingGyro.isNotEmpty()) {
+            val (t, w) = pendingGyro.first()
+            // Si el acelerómetro se retrasa demasiado, no esperar más: se usa la última muestra.
+            if (lastAccel == null || (t > lastAccelT && t - lastAccelT < MAX_ACCEL_WAIT_NS)) return
+            pendingGyro.removeFirst()
+            propagate(t, w, accelAt(t)!!)
+        }
     }
 
     @Synchronized fun onMag(tNs: Long, m: Vec3) {
@@ -164,13 +199,22 @@ class StrapdownIns(
         filter.expectedInclinationDeg = inclinationDeg
     }
 
-    /** El giróscopo marca el ritmo de propagación. */
+    /** El giróscopo marca el ritmo de propagación (con un retraso de una muestra del acelerómetro). */
     @Synchronized fun onGyro(tNs: Long, w: Vec3) {
-        val accel = lastAccel ?: return
-        if (lastGyroT < 0) { lastGyroT = tNs; return }
+        if (lastAccel == null) return
+        pendingGyro.addLast(tNs to w)
+        while (pendingGyro.size > 64) pendingGyro.removeFirst()
+        drainGyro()
+    }
+
+    private fun propagate(tNs: Long, wNow: Vec3, accel: Vec3) {
+        if (lastGyroT < 0 || tNs <= lastGyroT) { lastGyroT = maxOf(lastGyroT, tNs); return }
         val dt = (tNs - lastGyroT) * 1e-9
         lastGyroT = tNs
-        if (dt <= 0 || dt > 0.2) return
+        // El giróscopo del móvil ya entrega el giro MEDIO del intervalo anterior (filtro interno):
+        // promediar dos muestras añadiría medio periodo de retraso.
+        val w = wNow
+        if (dt > 0.2) return
         val g0 = Vec3(0.0, 0.0, MahonyFilter.GRAVITY)
 
         // El error del acelerómetro es del SENSOR: se corrige en el marco del dispositivo, así
@@ -188,8 +232,8 @@ class StrapdownIns(
 
         // Detector de reposo por ventana (~0,1 s): con el móvil en la mano nunca está
         // perfectamente quieto, pero el temblor tiene poca varianza y giro pequeño.
-        aWin[winPos] = aCorr.norm(); wWin[winPos] = (w - filter.gyroBias).norm()
-        gxWin[winPos] = w.x; gyWin[winPos] = w.y; gzWin[winPos] = w.z
+        aWin[winPos] = aCorr.norm(); wWin[winPos] = (wNow - filter.gyroBias).norm()
+        gxWin[winPos] = wNow.x; gyWin[winPos] = wNow.y; gzWin[winPos] = wNow.z
         winPos = (winPos + 1) % WINDOW; if (winFill < WINDOW) winFill++
         val still = winFill == WINDOW && run {
             var m = 0.0; var m2 = 0.0; var wm = 0.0
@@ -211,7 +255,7 @@ class StrapdownIns(
             // Uno rápido metía el temblor en el sesgo del giróscopo, eso inclinaba la actitud en
             // cada giro posterior y la gravedad "se filtraba" como aceleración (deriva sin fin).
             val wMean = Vec3(gxWin.average(), gyWin.average(), gzWin.average())
-            if ((wMean - filter.gyroBias).norm() < ZARU_MAX_RATE) filter.zaru(w, ZARU_ALPHA)
+            if ((wMean - filter.gyroBias).norm() < ZARU_MAX_RATE) filter.zaru(wNow, ZARU_ALPHA)
         } else {
             // Una mano no mueve el móvil a más de ~2 m/s: el Kalman lo limita.
             kf.predict(filter.q, accel, dt, MAX_SPEED)
@@ -240,14 +284,27 @@ class StrapdownIns(
             if (history[mid].timestampNs <= tNs) lo = mid else hi = mid
         }
         val a = history[lo]; val b = history[hi]
+        val h = (b.timestampNs - a.timestampNs) * 1e-9
         val f = (tNs - a.timestampNs).toDouble() / (b.timestampNs - a.timestampNs).toDouble()
         return InsState(
             tNs,
             a.orientation.slerp(b.orientation, f),
-            a.position + (b.position - a.position) * f,
+            hermite(a.position, a.velocity, b.position, b.velocity, h, f),
             a.velocity + (b.velocity - a.velocity) * f,
             a.stationary && b.stationary,
         )
+    }
+
+    /**
+     * Curva cúbica de Hermite entre dos estados: pasa por ambas posiciones con la velocidad de
+     * cada extremo, en vez de una recta. Si entre muestras hay un hueco (sensor que se salta
+     * eventos, o el instante de una foto cae entre dos), la curva sigue la trayectoria real.
+     */
+    private fun hermite(p0: Vec3, v0: Vec3, p1: Vec3, v1: Vec3, h: Double, f: Double): Vec3 {
+        val f2 = f * f; val f3 = f2 * f
+        val h00 = 2 * f3 - 3 * f2 + 1; val h10 = f3 - 2 * f2 + f
+        val h01 = -2 * f3 + 3 * f2; val h11 = f3 - f2
+        return p0 * h00 + v0 * (h10 * h) + p1 * h01 + v1 * (h11 * h)
     }
 
     /** Velocidad angular actual (sin sesgo) para descartar fotos movidas. */
@@ -268,5 +325,7 @@ class StrapdownIns(
         const val GNSS_MAX_ACC_FOR_VELOCITY = 25.0
         /** Incertidumbre de velocidad GNSS si el móvil no la informa (m/s). */
         const val DEFAULT_SPEED_ACC = 0.3
+        /** Espera máxima por la muestra del acelerómetro posterior a un giro (ns). */
+        const val MAX_ACCEL_WAIT_NS = 20_000_000L
     }
 }

@@ -89,7 +89,7 @@ class AccelCalibrationTest {
                 val specific = q.conj().rotate(aW + Vec3(0.0, 0.0, g))
                 val n = Vec3(r.nextDouble(-1.0, 1.0), r.nextDouble(-1.0, 1.0), r.nextDouble(-1.0, 1.0)) * 0.03
                 ins.onAccel(t, measure(specific) + n)
-                ins.onGyro(t + 1_000_000, w + n * 0.05)
+                ins.onGyro(t, w + n * 0.05)
                 t += 2_500_000
                 ins.latest()?.let { maxErr = maxOf(maxErr, (it.position - p).norm()) }
             }
