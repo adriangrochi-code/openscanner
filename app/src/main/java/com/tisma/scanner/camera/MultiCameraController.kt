@@ -95,6 +95,11 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      */
     @Volatile var jpegQuality = 92
     @Volatile var lock3A = false
+    /**
+     * Con lock3A, fijar también el foco a mano. Algunos móviles (cámara lógica multi-objetivo)
+     * paran la vista previa con el foco manual: entonces se bloquea sólo exposición y balance.
+     */
+    @Volatile var lockFocus = true
 
     /** Aplica a una petición los ajustes comunes de calidad. */
     private fun CaptureRequest.Builder.applyQuality(a: Active) {
@@ -115,7 +120,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             set(CaptureRequest.CONTROL_AE_LOCK, true)
             set(CaptureRequest.CONTROL_AWB_LOCK, true)
             val minFocus = ch.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-            if (minFocus > 0f && a.lastFocus > 0f) {
+            if (lockFocus && minFocus > 0f && a.lastFocus > 0f) {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
                 set(CaptureRequest.LENS_FOCUS_DISTANCE, a.lastFocus)
             }
@@ -165,7 +170,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                 res.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { act.lastExposureNs = it }
                 res.get(CaptureResult.SENSOR_SENSITIVITY)?.let { act.lastIso = it }
-                val locked = lock3A && act.settled
+                val locked = lock3A && lockFocus && act.settled
                 if (!locked) res.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { act.lastFocus = it }
                 // Al converger, re-emitir la petición para que el bloqueo surta efecto.
                 if (++act.frames == SETTLE_FRAMES && lock3A) camHandler.post { runCatching { startRepeating(act) } }

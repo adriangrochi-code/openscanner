@@ -217,7 +217,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     /** Evita disparos solapados (ráfagas HDR o secuencias de rotación en curso). */
     @Volatile private var sequenceRunning = false
-        set(v) { field = v; _state.update { it.copy(capturing = v) } }
+        set(v) {
+            field = v
+            // Al terminar una toma la vista vuelve: no contarla como vista previa parada.
+            if (!v) lastPreviewFrameMs = SystemClock.uptimeMillis()
+            _state.update { it.copy(capturing = v) }
+        }
     private val cameras = MultiCameraController(app, this)
     private var inventory: Map<String, CameraInfo> = emptyMap()
     private var lenses: List<Lens> = emptyList()
@@ -293,7 +298,46 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         // nueva puede mejorarla, sin pedir nada al usuario.
         imu.accelTap = { t, a -> if (autoCal.feed(t, a)) viewModelScope.launch(Dispatchers.Default) { onNewPose() } }
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
+        cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
+    }
+
+    // ------------------------------------------------------------------ vigilancia de la vista previa
+
+    /** Último fotograma que llegó a la pantalla (lo marca cada actualización de la textura). */
+    @Volatile private var lastPreviewFrameMs = 0L
+    private var lastRecoveryMs = 0L
+    private var recoveryStage = 0
+
+    /**
+     * Si durante el escaneo la vista previa deja de recibir fotogramas (pasaba en el Honor al
+     * pulsar Escanear: el bloqueo de foco/exposición paraba la cámara), se recupera sola por pasos:
+     * 1) sin foco manual, 2) sin bloqueo 3A, 3) reabrir la cámara. Lo que funcione se recuerda.
+     */
+    private fun previewWatchdog(now: Long) {
+        if (session == null || sequenceRunning || _state.value.busy || previewTexture == null) return
+        if (cameras.openedStreams.isEmpty() || lastPreviewFrameMs == 0L) return
+        if (now - lastPreviewFrameMs < PREVIEW_STALL_MS || now - lastRecoveryMs < PREVIEW_STALL_MS) return
+        lastRecoveryMs = now
+        recoveryStage++
+        when {
+            recoveryStage == 1 && cameras.lock3A && cameras.lockFocus -> {
+                cameras.lockFocus = false
+                prefs.edit().putBoolean("lock_focus_ok", false).apply()
+                log("Vista previa parada con el foco bloqueado: se bloquea sólo exposición y balance")
+                cameras.refreshRepeating()
+            }
+            recoveryStage <= 2 && cameras.lock3A -> {
+                recoveryStage = 2
+                cameras.lock3A = false
+                log("Vista previa parada con el bloqueo 3A: escaneo sin bloqueo (foco y exposición automáticos)")
+                cameras.refreshRepeating()
+            }
+            else -> {
+                log("Vista previa parada: se reabre la cámara")
+                viewModelScope.launch { openRig(rigPlan.groups); lastPreviewFrameMs = SystemClock.uptimeMillis() }
+            }
+        }
     }
 
     /**
@@ -762,6 +806,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * null = sin estabilizar (desactivada o sin datos de la INS).
      */
     override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform? {
+        lastPreviewFrameMs = SystemClock.uptimeMillis()
         if (!_state.value.stabilizePreview || viewW <= 0 || viewH <= 0) return null
         val cam = cameras.previewCameraId ?: return null
         val info = inventory[cam] ?: return null
@@ -972,6 +1017,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         analyzedCount = 0; blurryCount = 0; skippedAnalysis = 0
         discardedCount = 0; discardedBytes = 0; storedBytes.set(0)
         cameras.lock3A = _state.value.lock3A; cameras.refreshRepeating()
+        recoveryStage = 0; lastPreviewFrameMs = SystemClock.uptimeMillis(); lastRecoveryMs = lastPreviewFrameMs
         imu.startLogging(s.imuWriter())
         gps.startLogging(java.io.File(s.dir, "gps.csv").bufferedWriter())
         session = s
@@ -1123,6 +1169,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 }
             }
             val now = SystemClock.uptimeMillis()
+            previewWatchdog(now)
             if (now - lastSensorUi > 1000) {
                 lastSensorUi = now
                 val status = imu.status()
@@ -1334,6 +1381,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
         const val STEADY_GYRO = 0.25
         const val STEADY_WAIT_MS = 1200L
+        /** Sin fotogramas en pantalla durante este tiempo = vista previa parada (ms). */
+        const val PREVIEW_STALL_MS = 1500L
         /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */
         const val AUTO_SWEEP_EVERY = 6
         const val DEFAULT_CLOUD_URL = "https://tismaservidores.net"
