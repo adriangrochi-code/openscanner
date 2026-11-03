@@ -22,8 +22,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-          pip install onnx onnxruntime opencv-python-headless
           pip install "git+https://github.com/ByteDance-Seed/Depth-Anything-3"
+          # El repo usa `addict` sin declararlo; trae su propio OpenCV (y numpy 1.x).
+          pip install addict onnx onnxruntime
       - name: Exportar y comprobar
         run: python tools/export_da3_onnx.py --out modelos/da3_small.onnx
       - uses: actions/upload-artifact@v4
