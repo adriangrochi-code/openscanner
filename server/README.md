@@ -74,6 +74,13 @@ curl https://tismaservidores.net/api/health
    posición INS de cada foto → puntos y emparejado (IA o SIFT) → COLMAP → descarte de fotos
    mal registradas con la INS → escala (ArUco > enfoque > INS) → nube densa → postprocesado.
 
+### GLOMAP (reconstrucción global), opcional
+
+Del mismo grupo que COLMAP (ETH Zúrich), usa su misma base de datos y suele ser igual o más
+preciso y mucho más rápido. Descargar el binario de https://github.com/colmap/glomap/releases,
+y dejar `glomap.exe` en el PATH o indicar su ruta en la variable `TISMA_GLOMAP`.
+Si no está o falla, se usa el mapper de COLMAP automáticamente.
+
 ### Puntos con IA (ALIKED + LightGlue), opcional
 
 Mucho mejores que SIFT en piezas lisas o mate. Licencias que permiten uso comercial

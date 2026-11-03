@@ -114,6 +114,40 @@ def test_learned_matching_writes_verified_pairs():
         assert kp[0] > 200 and pts.min() >= 0.5     # coordenadas de COLMAP (centro del píxel + 0,5)
 
 
+def test_mapper_prefers_glomap_and_falls_back_to_colmap():
+    import tempfile
+    calls = []
+
+    def fake_colmap(*args):
+        calls.append(("colmap", args[0]))
+        if args[0] == "mapper":
+            (Path(args[args.index("--output_path") + 1]) / "0").mkdir(parents=True, exist_ok=True)
+
+    def run_with(glomap_ok, glomap_present=True):
+        calls.clear()
+
+        def fake_run_tool(cmd, cwd=None):
+            calls.append(("glomap", cmd[1]))
+            if not glomap_ok:
+                raise RuntimeError("glomap terminó con código 1")
+            (Path(cmd[cmd.index("--output_path") + 1]) / "0").mkdir(parents=True, exist_ok=True)
+
+        old = rc.colmap, rc.run_tool, rc.find_glomap
+        rc.colmap, rc.run_tool = fake_colmap, fake_run_tool
+        rc.find_glomap = (lambda: "glomap") if glomap_present else (lambda: None)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                recs = [("0/1.jpg", {"camera_id": "0", "width": "4000", "height": "3000", "t_ns": "1"})]
+                rc.run_sfm(Path(d), {"cameras": []}, recs, "exhaustive", None, features="sift", mapper="auto")
+        finally:
+            rc.colmap, rc.run_tool, rc.find_glomap = old
+        return [c for c in calls if c[1] == "mapper"]
+
+    assert run_with(True) == [("glomap", "mapper")]
+    assert run_with(False) == [("glomap", "mapper"), ("colmap", "mapper")]
+    assert run_with(True, glomap_present=False) == [("colmap", "mapper")]
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

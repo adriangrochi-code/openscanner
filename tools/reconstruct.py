@@ -396,6 +396,12 @@ def prepare_images(scan, work, frames, meta, filter_mode="wallis", denoise=-1, c
 # servidor (tisma_server.py) o las variables de entorno TISMA_COLMAP / TISMA_OPENMVS.
 COLMAP_EXE = os.environ.get("TISMA_COLMAP", "colmap")
 OPENMVS_DIR = os.environ.get("TISMA_OPENMVS", "")
+GLOMAP_EXE = os.environ.get("TISMA_GLOMAP", "glomap")
+
+
+def find_glomap():
+    """Ruta de GLOMAP si está instalado (global SfM: misma calidad o mejor y mucho más rápido)."""
+    return shutil.which(GLOMAP_EXE) or (GLOMAP_EXE if Path(GLOMAP_EXE).is_file() else None)
 
 
 def run_tool(cmd, cwd=None):
@@ -507,7 +513,7 @@ def ins_pairs(views, max_angle=50.0, k=30, temporal=3, max_dist_ratio=1.5):
     return [(views[i][0], views[j][0]) for i, j in sorted(pairs)]
 
 
-def run_sfm(work, session, records, matcher, scan=None, features="aliked"):
+def run_sfm(work, session, records, matcher, scan=None, features="aliked", mapper="auto"):
     db = work / "database.db"
     if db.exists():
         db.unlink()
@@ -561,8 +567,26 @@ def run_sfm(work, session, records, matcher, scan=None, features="aliked"):
     else:
         colmap("exhaustive_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
     sparse = work / "sparse"
-    sparse.mkdir(exist_ok=True)
-    colmap("mapper", "--database_path", db, "--image_path", work / "images_feat", "--output_path", sparse)
+    if sparse.exists():
+        shutil.rmtree(sparse)
+    sparse.mkdir()
+    # 3) Reconstrucción: GLOMAP (global, rápido) si está; si falla o no está, COLMAP incremental.
+    glomap = find_glomap() if mapper in ("auto", "glomap") else None
+    if mapper == "glomap" and not glomap:
+        print("[sfm] GLOMAP no encontrado (TISMA_GLOMAP): se usa el mapper de COLMAP")
+    done = False
+    if glomap:
+        try:
+            run_tool([glomap, "mapper", "--database_path", db, "--image_path", work / "images_feat",
+                      "--output_path", sparse])
+            done = any(sparse.iterdir())
+            if done:
+                print("[sfm] reconstrucción global con GLOMAP")
+        except RuntimeError as e:
+            print(f"[sfm] GLOMAP falló ({e}): se usa el mapper de COLMAP")
+            shutil.rmtree(sparse); sparse.mkdir()
+    if not done:
+        colmap("mapper", "--database_path", db, "--image_path", work / "images_feat", "--output_path", sparse)
     models = sorted(sparse.iterdir(), key=lambda p: -sum(1 for _ in p.iterdir()))
     return models[0]
 
@@ -820,6 +844,8 @@ def main(argv=None):
                     help="ins = sólo pares de fotos tomadas desde direcciones parecidas según la INS (rápido y con menos falsos)")
     ap.add_argument("--features", choices=["aliked", "cv-sift", "sift"], default="aliked",
                     help="aliked = puntos y emparejado con IA (ALIKED+LightGlue, si está instalado); sift = SIFT de COLMAP")
+    ap.add_argument("--mapper", choices=["auto", "glomap", "colmap"], default="auto",
+                    help="auto = GLOMAP si está instalado (TISMA_GLOMAP), si no el mapper incremental de COLMAP")
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
     ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
@@ -843,7 +869,7 @@ def main(argv=None):
     if not (shutil.which(COLMAP_EXE) or Path(COLMAP_EXE).exists()):
         raise SystemExit(f"No se encuentra COLMAP ({COLMAP_EXE}): https://colmap.github.io/install.html")
 
-    model = run_sfm(a.work, session, records, a.matcher, scan, a.features)
+    model = run_sfm(a.work, session, records, a.matcher, scan, a.features, a.mapper)
     txt = a.work / "sparse_txt"
     txt.mkdir(exist_ok=True)
     colmap("model_converter", "--input_path", model, "--output_path", txt, "--output_type", "TXT")
