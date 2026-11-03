@@ -118,6 +118,20 @@ data class UiState(
     val capturing: Boolean = false,
     /** Esperando a que el móvil se quede quieto para disparar. */
     val waitingSteady: Boolean = false,
+    /** Vídeo 360: una sola cámara con flujo continuo; los fotogramas clave salen solos. */
+    val videoMode: Boolean = true,
+    /** Fotogramas clave guardados en este escaneo (modo vídeo). */
+    val videoFrames: Int = 0,
+    /** En el último segundo se saltaron fotogramas por ir demasiado rápido. */
+    val videoTooFast: Boolean = false,
+    /** Nube en vivo (vista previa): xyz intercalados y colores (0 = aún sin color). */
+    val cloudXyz: FloatArray = FloatArray(0),
+    val cloudColors: IntArray = IntArray(0),
+    val cloudColored: Int = 0,
+    /** PLY de la vista previa del último escaneo. */
+    val cloudPly: File? = null,
+    /** Guía en vivo de la cobertura (anillo actual, hueco y sentido de giro). */
+    val guide: CoverageMap.Guidance? = null,
     /** Aviso de la última foto a mano (p.ej. salió movida). */
     val shotWarning: String = "",
     val images: Int = 0,
@@ -310,6 +324,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         imu.accelTap = { t, a -> if (autoCal.feed(t, a)) viewModelScope.launch(Dispatchers.Default) { onNewPose() } }
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
+        cameras.videoMode = _state.value.videoMode
         com.tisma.scanner.diag.DiagLog.extra = {
             "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
                 "escrituras=${pendingWrites.get()} · análisis=${pendingAnalysis.get()} · giro %.2f rad/s".format(imu.gyroRate)
@@ -823,6 +838,95 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun setStabilizePreview(v: Boolean) = _state.update { it.copy(stabilizePreview = v) }
     override fun setAntiShakeBurst(v: Boolean) = _state.update { it.copy(antiShakeBurst = v) }
 
+    override fun setVideoMode(v: Boolean) {
+        if (session != null || _state.value.videoMode == v) return
+        _state.update { it.copy(videoMode = v) }
+        cameras.videoMode = v
+        com.tisma.scanner.diag.DiagLog.event("app", if (v) "modo vídeo 360" else "modo fotos")
+        viewModelScope.launch { openRig(planCurrentPass().groups) }
+    }
+
+    // ------------------------------------------------------------------ vídeo 360
+
+    /** Reconstrucción en vivo: forma primero (sin color), color después. Hilo propio. */
+    private val live = com.tisma.scanner.recon.LivePointCloud()
+    private val reconExec = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "recon").apply { priority = Thread.NORM_PRIORITY - 1 } }
+    private val reconPending = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile private var orbitDist = 0.0
+
+    override fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray) {
+        if (session == null) return
+        // Si el móvil no da abasto, se salta (es sólo la vista previa).
+        if (reconPending.get() >= 2) { com.tisma.scanner.diag.DiagLog.count("recon_saltado"); return }
+        val t = timestampNs + (clockOffset[cameraId] ?: 0L)
+        val st = ins.stateAt(t) ?: return
+        val info = inventory[cameraId] ?: return
+        val focal = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return
+        val sw = info.sensorSizeMm?.first?.toDouble() ?: return
+        val orient = sensorOrientationCache.getOrPut(cameraId) { cameras.sensorOrientation(cameraId) }
+        // Distancia de la órbita: la del enfoque, suavizada (el AF continuo "respira").
+        val d = Optics.distanceM(cameras.primaryFocusDiopters())?.coerceIn(0.05, 2.0) ?: 0.3
+        orbitDist = if (orbitDist == 0.0) d else orbitDist * 0.8 + d * 0.2
+        val (ax, ay, az) = com.tisma.scanner.ins.OpticalVelocity.cameraAxesInDevice(orient)
+        val q = st.orientation
+        val w = MultiCameraController.KF_W; val h = MultiCameraController.KF_H
+        val view = com.tisma.scanner.recon.LivePointCloud.orbitView(q.rotate(ax), q.rotate(ay), q.rotate(az), orbitDist,
+            Optics.fxPixels(focal, sw, w), w / 2.0, h / 2.0)
+        val dist = orbitDist
+        reconPending.incrementAndGet()
+        reconExec.execute {
+            try {
+                val t0 = System.nanoTime()
+                live.depthRange = dist * 0.4..dist * 2.0
+                live.addKeyframe(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray), view, thumb,
+                    MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                // Etapa 2 (color) cada pocos fotogramas, para los puntos que ya no se ven.
+                if (live.keyframeCount % 4 == 0) live.colorize()
+                com.tisma.scanner.diag.DiagLog.max("recon_ms", (System.nanoTime() - t0) / 1_000_000)
+                publishCloud()
+            } catch (e: Exception) {
+                com.tisma.scanner.diag.DiagLog.event("recon", "error: $e")
+            } finally { reconPending.decrementAndGet() }
+        }
+    }
+
+    private fun publishCloud() {
+        val (xyz, col) = live.snapshot()
+        _state.update { it.copy(cloudXyz = xyz, cloudColors = col, cloudColored = col.count { c -> c != 0 }) }
+    }
+
+    @Volatile private var lastVideoState: InsState? = null
+    @Volatile private var lastVideoSaveMs = 0L
+    private val videoKept = java.util.concurrent.atomic.AtomicInteger()
+    private val videoFast = java.util.concurrent.atomic.AtomicInteger()
+
+    /**
+     * ¿Guardar este fotograma del vídeo? (hilo de la cámara, debe ser rápido). Sólo si el móvil se
+     * ha movido lo suficiente desde el último (vista nueva), no va demasiado rápido (arrastre) y
+     * no se superan VIDEO_MAX_FPS. Lo mismo que haría el usuario, pero ~3 veces por segundo.
+     */
+    override fun wantVideoFrame(cameraId: String, timestampNs: Long, width: Int): Boolean {
+        if (session == null || !_state.value.videoMode) return false
+        val now = SystemClock.uptimeMillis()
+        if (now - lastVideoSaveMs < VIDEO_MIN_INTERVAL_MS) return false
+        val t = timestampNs + (clockOffset[cameraId] ?: 0L)
+        val st = ins.stateAt(t) ?: return false
+        val last = lastVideoState
+        val moved = last == null ||
+            Math.toDegrees(last.orientation.angleTo(st.orientation)) >= VIDEO_MIN_ANGLE_DEG ||
+            (st.position - last.position).norm() >= VIDEO_MIN_TRANSLATION_M
+        if (!moved) return false
+        val blur = motionBlurPx(cameraId, t, width) * minOf(1.0, REF_WIDTH_PX / width)
+        if (blur > MAX_MOTION_BLUR_PX) {
+            videoFast.incrementAndGet(); com.tisma.scanner.diag.DiagLog.count("video_rapido")
+            return false
+        }
+        lastVideoState = st; lastVideoSaveMs = now
+        trigger++
+        videoKept.incrementAndGet(); com.tisma.scanner.diag.DiagLog.count("video_kf")
+        return true
+    }
+
     /**
      * Transformación de estabilización para el fotograma de vista previa con ese timestamp.
      * null = sin estabilizar (desactivada o sin datos de la INS).
@@ -1019,6 +1123,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             cameras.openedStreams.map { it.cameraId to "${it.size.width}x${it.size.height}" },
             JSONObject().apply {
                 put("auto_trigger", _state.value.autoTrigger)
+                put("video_mode", _state.value.videoMode)
+                cameras.videoSize()?.let { v -> put("video_size", "${v.width}x${v.height}") }
+                put("video_min_angle_deg", VIDEO_MIN_ANGLE_DEG)
+                put("video_min_translation_m", VIDEO_MIN_TRANSLATION_M)
                 put("concurrent", _state.value.useConcurrent)
                 put("hdr_bracket_ev", org.json.JSONArray(HDR_EV))
                 put("rotate_cameras", _state.value.rotateCameras)
@@ -1043,6 +1151,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         // El primer disparo es una foto normal (rápida); el barrido de enfoque va cada AUTO_SWEEP_EVERY.
         shotsSinceSweep = 0; focusSweepCount = 0
         manualTriggers.clear(); multiTriggers.clear()
+        lastVideoState = null; lastVideoSaveMs = 0; videoKept.set(0); videoFast.set(0)
+        orbitDist = 0.0
+        reconExec.execute { live.reset(); publishCloud() }
+        _state.update { it.copy(cloudPly = null) }
         coverageMaps.values.forEach { it.reset() }; blurJudge.reset()
         stackTriggers.clear(); coveredShots.clear(); exposures.clear()
         synchronized(recentTexture) { recentTexture.clear() }
@@ -1063,6 +1175,17 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun stopScan() {
         val s = session ?: return
         com.tisma.scanner.diag.DiagLog.event("app", "detener escaneo")
+        // Última etapa de color con todo y vista previa guardada junto al escaneo.
+        reconExec.execute {
+            live.colorize(all = true); publishCloud()
+            if (live.pointCount() > 0) {
+                val f = File(s.dir, "preview_cloud.ply")
+                runCatching { live.writePly(f) }.onSuccess {
+                    _state.update { st -> st.copy(cloudPly = f) }
+                    log("Vista previa 3D: ${live.pointCount()} puntos (preview_cloud.ply)")
+                }
+            }
+        }
         // La sesión pasa a "cerrándose": las fotos de la última ráfaga aún llegan y se guardan.
         stopping = s
         session = null
@@ -1194,6 +1317,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     /** Bucle a ~100 Hz: refresca la UI, guarda trayectoria y decide disparos automáticos. */
+    private var lastFastCheck = 0L
+
     private suspend fun insLoop() {
         var lastUi = 0L
         var lastSensorUi = 0L
@@ -1202,7 +1327,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             val s = session
             if (st != null && s != null) {
                 s.addTrajectory(st)
-                if (_state.value.autoTrigger && !sequenceRunning && selector.shouldTrigger(st, imu.gyroRate)) {
+                if (_state.value.autoTrigger && !_state.value.videoMode && !sequenceRunning && selector.shouldTrigger(st, imu.gyroRate)) {
                     kotlinx.coroutines.withContext(Dispatchers.Main) { fire(st) }
                 }
             }
@@ -1223,9 +1348,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 val pitch = Math.toDegrees(asin((2 * (q.w * q.y - q.z * q.x)).coerceIn(-1.0, 1.0)))
                 val yaw = Math.toDegrees(atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)))
                 val (liveAz, liveEl) = CoverageMap.azEl(CoverageMap.viewDirection(st.orientation, backFacing = true))
+                val relAz = coverage.relativeAz(liveAz)
+                val guide = if (s != null) coverage.guidance(relAz, liveEl) else null
+                val fast = if (now - lastFastCheck >= 1000) { lastFastCheck = now; videoFast.getAndSet(0) > 2 } else null
                 _state.update {
                     it.copy(
-                        liveAzDeg = coverage.relativeAz(liveAz),
+                        guide = guide,
+                        videoFrames = videoKept.get(),
+                        videoTooFast = fast ?: it.videoTooFast,
+                        liveAzDeg = relAz,
                         liveElDeg = liveEl,
                         position = Triple(st.position.x, st.position.y, st.position.z),
                         eulerDeg = Triple(roll, pitch, yaw),
@@ -1416,6 +1547,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         gps.stop()
         cameras.release()
         analysis.shutdown()
+        reconExec.shutdown()
         writer.shutdown()
     }
 
@@ -1437,6 +1569,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
         const val STEADY_GYRO = 0.25
         const val STEADY_WAIT_MS = 600L
+        /** Vídeo 360: un fotograma clave cada ~3° de giro o 1,5 cm, como mucho 4 por segundo. */
+        const val VIDEO_MIN_ANGLE_DEG = 3.0
+        const val VIDEO_MIN_TRANSLATION_M = 0.015
+        const val VIDEO_MIN_INTERVAL_MS = 250L
         /** Sin fotogramas en pantalla durante este tiempo = vista previa parada (ms). */
         const val PREVIEW_STALL_MS = 1500L
         /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */

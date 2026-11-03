@@ -1,6 +1,7 @@
 package com.tisma.scanner.ins
 
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.floor
 import kotlin.math.sqrt
 
@@ -74,6 +75,62 @@ object OpticalFlow {
             median(inliers.map { it[2].toDouble() }), median(inliers.map { it[3].toDouble() }),
             inliers.size, mad, inliers,
         )
+    }
+
+    /**
+     * Sigue puntos concretos de `prev` a `cur` (pirámide de 3 niveles) con comprobación ida y
+     * vuelta: si al volver no cae a menos de `fbMaxPx` del origen, el seguimiento no vale (null).
+     */
+    fun trackPoints(prev: Image, cur: Image, pts: List<DoubleArray>, fbMaxPx: Double = 1.0): List<DoubleArray?> {
+        val p0 = listOf(prev, prev.half()).let { it + it[1].half() }
+        val p1 = listOf(cur, cur.half()).let { it + it[1].half() }
+        fun one(a: List<Image>, b: List<Image>, x: Double, y: Double): DoubleArray? {
+            var dx = 0.0; var dy = 0.0
+            for (level in 2 downTo 0) {
+                val s = 1.0 / (1 shl level)
+                if (level < 2) { dx *= 2; dy *= 2 }
+                val r = lk(a[level], b[level], x * s, y * s, dx, dy) ?: return null
+                dx = r[0]; dy = r[1]
+            }
+            return doubleArrayOf(x + dx, y + dy)
+        }
+        return pts.map { p ->
+            val f = one(p0, p1, p[0], p[1]) ?: return@map null
+            if (f[0] < 2 || f[1] < 2 || f[0] > cur.w - 3 || f[1] > cur.h - 3) return@map null
+            val back = one(p1, p0, f[0], f[1]) ?: return@map null
+            if (hypot(back[0] - p[0], back[1] - p[1]) > fbMaxPx) null else f
+        }
+    }
+
+    /**
+     * Esquinas de Shi-Tomasi: la mejor de cada celda de una rejilla (reparto uniforme), saltando
+     * las celdas que ya tienen un punto (`occupied`).
+     */
+    fun corners(im: Image, cellsX: Int, cellsY: Int, occupied: List<DoubleArray> = emptyList(), minEig: Double = MIN_EIG): List<DoubleArray> {
+        val cw = im.w.toDouble() / cellsX; val ch = im.h.toDouble() / cellsY
+        val taken = BooleanArray(cellsX * cellsY)
+        for (p in occupied) {
+            val cx = (p[0] / cw).toInt(); val cy = (p[1] / ch).toInt()
+            if (cx in 0 until cellsX && cy in 0 until cellsY) taken[cy * cellsX + cx] = true
+        }
+        val out = ArrayList<DoubleArray>()
+        val m = HALF_WIN + 2
+        for (cy in 0 until cellsY) for (cx in 0 until cellsX) {
+            if (taken[cy * cellsX + cx]) continue
+            var best = minEig; var bx = -1.0; var by = -1.0
+            var y = maxOf(m.toDouble(), cy * ch + 1)
+            while (y < minOf(im.h - m.toDouble(), (cy + 1) * ch)) {
+                var x = maxOf(m.toDouble(), cx * cw + 1)
+                while (x < minOf(im.w - m.toDouble(), (cx + 1) * cw)) {
+                    val e = minEigen(im, x, y)
+                    if (e > best) { best = e; bx = x; by = y }
+                    x += 2.0
+                }
+                y += 2.0
+            }
+            if (bx >= 0) out += doubleArrayOf(bx, by)
+        }
+        return out
     }
 
     /** Menor autovalor del tensor de estructura en la ventana (Shi-Tomasi): ¿hay textura? */

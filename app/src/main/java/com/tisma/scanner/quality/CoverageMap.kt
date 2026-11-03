@@ -90,6 +90,44 @@ class CoverageMap(
     }
 
     /** Hueco circular más largo de sectores vacíos: (inicio, longitud). */
+    /**
+     * Guía en vivo para el modo vídeo 360 (como las apps de escaneo):
+     * @property ring anillo de altura en el que está la cámara (null: por debajo de todos)
+     * @property ringCoverage fracción de sectores de ese anillo con al menos `minCount` vistas
+     * @property turn +1 = el hueco más cercano está girando en sentido de azimut creciente
+     *   (horario en la cúpula), −1 = decreciente, 0 = anillo completo
+     * @property gapStartDeg/gapEndDeg hueco objetivo (azimut relativo) para dibujarlo
+     * @property nextRing anillo pendiente más cercano cuando éste ya está completo
+     */
+    data class Guidance(
+        val ring: Int?, val ringCoverage: Double, val turn: Int,
+        val gapStartDeg: Double?, val gapEndDeg: Double?, val nextRing: Int?,
+    )
+
+    @Synchronized fun guidance(relAzDeg: Double, elDeg: Double, minCount: Int = 1, doneAt: Double = 0.9): Guidance {
+        val r = rings.indexOfFirst { elDeg >= it.elMinDeg && elDeg < it.elMaxDeg + if (it.elMaxDeg >= 90) 1e-9 else 0.0 }
+        fun pending(i: Int) = counts[i].count { it >= minCount }.toDouble() / counts[i].size < doneAt
+        val nearestPending = { from: Int -> rings.indices.filter { it != from && pending(it) }.minByOrNull { kotlin.math.abs(it - from) } }
+        if (r < 0) return Guidance(null, 0.0, 0, null, null, rings.indices.firstOrNull { pending(it) })
+        val c = counts[r]; val n = c.size; val step = 360.0 / n
+        val cov = c.count { it >= minCount }.toDouble() / n
+        val here = (((relAzDeg % 360) + 360) % 360 / step).toInt().coerceIn(0, n - 1)
+        // Sector sin cubrir más cercano en cada sentido.
+        var up: Int? = null; var down: Int? = null
+        for (d in 0 until n) { if (c[(here + d) % n] < minCount) { up = d; break } }
+        for (d in 0 until n) { if (c[((here - d) % n + n) % n] < minCount) { down = d; break } }
+        if (up == null || down == null) return Guidance(r, cov, 0, null, null, nearestPending(r))
+        val turn = if (up == 0) 0 else if (up <= down) 1 else -1
+        // El hueco entero que contiene ese sector (para resaltarlo).
+        val target = if (turn >= 0) (here + up) % n else ((here - down) % n + n) % n
+        var a = target; var b = target
+        while (c[((a - 1) % n + n) % n] < minCount && ((a - 1) % n + n) % n != target) a = ((a - 1) % n + n) % n
+        while (c[(b + 1) % n] < minCount && (b + 1) % n != a) b = (b + 1) % n
+        val gapStart = a * step; var gapEnd = (b + 1) * step
+        if (gapEnd <= gapStart) gapEnd += 360.0
+        return Guidance(r, cov, if (up == 0) 0 else turn, gapStart, gapEnd, if (cov >= doneAt) nearestPending(r) else null)
+    }
+
     private fun largestGap(c: IntArray, minCount: Int): Pair<Int, Int>? {
         val n = c.size
         if (c.all { it < minCount }) return 0 to n

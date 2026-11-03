@@ -44,6 +44,8 @@ interface ScanActions {
     /** Enviar el último escaneo a Tisma Server y traer la pieza. */
     fun sendToCloud()
     fun setAntiShakeBurst(v: Boolean)
+    /** Vídeo 360 (una cámara, flujo continuo, fotogramas automáticos) o fotos sueltas. */
+    fun setVideoMode(v: Boolean)
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */
     fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int): com.tisma.scanner.camera.PreviewStabilizer.Transform?
 }

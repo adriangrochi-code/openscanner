@@ -97,6 +97,10 @@ object DiagLog {
                     take(counters, "jpeg"), memMb))
             val flowMs = take(maxima, "flujo_ms"); if (flowMs > 0) sb.append(" · flujo cálculo máx $flowMs ms")
             val stabMs = take(maxima, "estab_us"); if (stabMs > 0) sb.append(" · estabilización máx $stabMs µs")
+            val kf = take(counters, "video_kf"); val fast = take(counters, "video_rapido"); val jpegMs = take(maxima, "jpeg_ms")
+            if (kf > 0 || fast > 0) sb.append(" · vídeo: $kf clave, $fast movidos (JPEG máx $jpegMs ms)")
+            val rec = take(maxima, "recon_ms"); val skip = take(counters, "recon_saltado")
+            if (rec > 0 || skip > 0) sb.append(" · nube: máx $rec ms" + if (skip > 0) ", $skip saltados" else "")
             runCatching { extra() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { sb.append(" · ").append(it) }
             write(sb.toString())
             runCatching { out?.flush() }

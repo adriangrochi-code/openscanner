@@ -26,6 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 class ScanScreenshotTest {
 
     private object NoActions : ScanActions {
+        override fun setVideoMode(v: Boolean) {}
         override fun onPreviewAvailable(texture: SurfaceTexture) {}
         override fun onPreviewDestroyed() {}
         override fun startScan() {}
@@ -82,7 +83,7 @@ class ScanScreenshotTest {
     }
 
     private val scanning = UiState(
-        scanning = true, images = 214, triggers = 71, analyzed = 210, blurry = 9, discarded = 9,
+        scanning = true, videoMode = false, images = 214, triggers = 71, analyzed = 210, blurry = 9, discarded = 9,
         savedMb = 31.0, storedMb = 742.0, textureRecent = 0.22, stationary = true, gyroRate = 0.04,
         coverage = coverage(), coveragePct = 0.46, liveAzDeg = 265.0, liveElDeg = 38.0,
         passCoverage = mapOf(ScanPass.FAR to 0.46, ScanPass.CLOSE to 0.0),
@@ -97,7 +98,38 @@ class ScanScreenshotTest {
 
     @Test fun scanning() = shot("scan_tab", scanning, 0)
 
-    @Test fun capturing() = shot("capturing", scanning.copy(capturing = true), 0)
+    @Test fun capturing() = shot("capturing", scanning.copy(capturing = true, videoMode = false), 0)
+
+    @Test fun video360() = shot("video360", scanning.copy(
+        videoMode = true, videoFrames = 87, liveAzDeg = 150.0, liveElDeg = 38.0,
+        guide = com.tisma.scanner.quality.CoverageMap.Guidance(1, 0.46, 1, 165.0, 255.0, null),
+        cloudXyz = demoCloud().first, cloudColors = demoCloud().second, cloudColored = 900,
+    ), 0)
+
+    /** Nube de prueba: caja de 6 cm, mitad pintada (como a mitad de la etapa de color). */
+    private fun demoCloud(): Pair<FloatArray, IntArray> {
+        val r = java.util.Random(1); val n = 1800
+        val xyz = FloatArray(n * 3); val col = IntArray(n)
+        for (i in 0 until n) {
+            val a = r.nextFloat() * 0.06f - 0.03f; val b = r.nextFloat() * 0.04f
+            when (i % 5) {
+                0 -> { xyz[3 * i] = 0.03f; xyz[3 * i + 1] = a; xyz[3 * i + 2] = b }
+                1 -> { xyz[3 * i] = -0.03f; xyz[3 * i + 1] = a; xyz[3 * i + 2] = b }
+                2 -> { xyz[3 * i] = a; xyz[3 * i + 1] = 0.03f; xyz[3 * i + 2] = b }
+                3 -> { xyz[3 * i] = a; xyz[3 * i + 1] = -0.03f; xyz[3 * i + 2] = b }
+                else -> { xyz[3 * i] = a; xyz[3 * i + 1] = r.nextFloat() * 0.06f - 0.03f; xyz[3 * i + 2] = 0.04f }
+            }
+            col[i] = if (i < n / 2) (0xFF000000.toInt() or ((120 + i % 90) shl 16) or (80 shl 8) or 60) else 0
+        }
+        return xyz to col
+    }
+
+    @Test fun video360TooFast() = shot("video360_fast", scanning.copy(
+        videoMode = true, videoFrames = 12, videoTooFast = true, liveAzDeg = 40.0, liveElDeg = 38.0,
+        guide = com.tisma.scanner.quality.CoverageMap.Guidance(1, 0.2, 1, 60.0, 360.0, null),
+    ), 0)
+
+    @Test fun video360Idle() = shot("video360_idle", scanning.copy(scanning = false, videoMode = true), 0)
 
     @Test fun captureSettings() = shot("settings_capture", scanning, 0, settings = true)
 
@@ -147,7 +179,9 @@ class ScanScreenshotTest {
 
     private fun shot(name: String, state: UiState, tab: Int, settings: Boolean = false) {
         captureRoboImage("build/screenshots/$name.png") {
-            TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, openSettings = settings, preview = fakeCamera) }
+            androidx.compose.runtime.CompositionLocalProvider(LocalAnimate provides false) {
+                TismaTheme { ScanContent(state, NoActions, onShare = {}, initialTab = tab, openSettings = settings, preview = fakeCamera) }
+            }
         }
     }
 }

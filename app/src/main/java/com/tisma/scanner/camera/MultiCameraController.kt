@@ -42,6 +42,16 @@ class MultiCameraController(context: Context, private val listener: Listener) {
          * óptico. `cameraId` es el objetivo que se ve.
          */
         fun onFlowFrame(cameraId: String, timestampNs: Long, w: Int, h: Int, gray: FloatArray) {}
+        /**
+         * Modo vídeo: ¿guardar este fotograma del flujo continuo? Se pregunta por cada uno; si
+         * devuelve true, se codifica a JPEG y llega por [onImage] como una foto más.
+         */
+        fun wantVideoFrame(cameraId: String, timestampNs: Long, width: Int): Boolean = false
+        /**
+         * Modo vídeo: fotograma clave reducido para la reconstrucción en vivo — grises
+         * [KF_W]×[KF_H] y miniatura en color [THUMB_W]×[THUMB_H], en la orientación del sensor.
+         */
+        fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray) {}
     }
 
     /** Lo que finalmente se ha conseguido abrir. */
@@ -54,6 +64,17 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     private val ioHandler = Handler(ioThread.looper)
     private val flowThread = HandlerThread("camera-flow").apply { start() }
     private val flowHandler = Handler(flowThread.looper)
+    private val videoThread = HandlerThread("camera-video").apply { start() }
+    private val videoHandler = Handler(videoThread.looper)
+    private val encodeThread = HandlerThread("camera-encode").apply { start() }
+    private val encodeHandler = Handler(encodeThread.looper)
+    @Volatile private var encoding = false
+
+    /**
+     * Modo "Vídeo 360": sólo la cámara de la vista previa, con un flujo YUV continuo grande en vez
+     * de fotos. La vista previa nunca se para; los fotogramas clave salen del flujo.
+     */
+    @Volatile var videoMode = false
     private val executor = Executor { camHandler.post(it) }
 
     private inner class Active(
@@ -68,7 +89,11 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         val manualSensor: Boolean,
         val exposureRange: android.util.Range<Long>?,
         val isoRange: android.util.Range<Int>?,
+        /** Modo vídeo: flujo YUV continuo grande (fotogramas clave + velocímetro). */
+        val video: ImageReader? = null,
     ) {
+        /** Resultados recientes de la repetitiva (por timestamp) para los metadatos de cada fotograma. */
+        val recentResults = java.util.concurrent.ConcurrentHashMap<Long, TotalCaptureResult>()
         /** Última exposición elegida por el AE automático (para el horquillado HDR). */
         @Volatile var lastExposureNs: Long = 0
         @Volatile var lastIso: Int = 0
@@ -152,6 +177,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
     fun exposureNsFor(cameraId: String): Long =
         active.firstOrNull { cameraId in it.readers.keys || it.group.deviceId == cameraId }?.lastExposureNs ?: 0L
 
+    /** Tamaño del flujo de vídeo abierto (null si no se está en modo vídeo). */
+    fun videoSize(): Size? = active.firstNotNullOfOrNull { it.video }?.let { Size(it.width, it.height) }
+
     /** Distancia de enfoque actual de la cámara principal (dioptrías; 0 = infinito/desconocido). */
     fun primaryFocusDiopters(): Float = active.firstOrNull()?.lastFocus ?: 0f
 
@@ -164,6 +192,16 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         val repeating = act.device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(act.streamSurface)
             act.flow?.let { addTarget(it.surface) }
+            act.video?.let { v ->
+                addTarget(v.surface)
+                // Exposición corta y constante: a 30 fps fijos cada fotograma dura ≤ 33 ms (menos arrastre).
+                act.characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?.filter { it.lower >= 24 }?.maxWithOrNull(compareBy({ it.lower }, { -it.upper }))
+                    ?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+                set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                set(CaptureRequest.DISTORTION_CORRECTION_MODE, CaptureRequest.DISTORTION_CORRECTION_MODE_OFF)
+            }
             setAf(act.characteristics, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             applyQuality(act)
         }.build()
@@ -185,6 +223,10 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             }
             override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, res: TotalCaptureResult) {
                 DiagLog.tick("cam_frame")
+                if (act.video != null) res.get(CaptureResult.SENSOR_TIMESTAMP)?.let { ts ->
+                    act.recentResults[ts] = res
+                    if (act.recentResults.size > 12) act.recentResults.keys.sorted().dropLast(12).forEach { act.recentResults.remove(it) }
+                }
                 res.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { act.lastExposureNs = it }
                 res.get(CaptureResult.SENSOR_SENSITIVITY)?.let { act.lastIso = it }
                 val locked = lock3A && lockFocus && act.settled
@@ -214,6 +256,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      */
     suspend fun open(groups: List<CameraGroup>, preview: Surface?, previewSize: Size) {
         close()
+        // En modo vídeo sólo se abre la cámara de la vista previa.
+        @Suppress("NAME_SHADOWING")
+        val groups = if (videoMode && preview != null) groups.filter { it.primary }.take(1) else groups
         DiagLog.event("cam", "abrir: " + groups.joinToString { "#${it.deviceId}${it.physicalStreams}" + (it.previewPhysicalId?.let { v -> " vista $v" } ?: "") } +
             " · vista ${previewSize.width}x${previewSize.height}")
         for (g in groups) {
@@ -226,6 +271,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             }
             active += result
             result.readers.forEach { (id, r) -> openedStreams += OpenedStream(id, Size(r.width, r.height), g.deviceId) }
+            result.video?.let { v -> openedStreams += OpenedStream(g.deviceId, Size(v.width, v.height), g.deviceId) }
             DiagLog.event("cam", "abierta #${g.deviceId}: JPEG " + result.readers.entries.joinToString { (id, r) -> "$id ${r.width}x${r.height}" } +
                 " · velocímetro ${if (result.flow != null) "sí" else "no"}")
         }
@@ -338,12 +384,14 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             a.readers.values.forEach { runCatching { it.close() } }
             runCatching { a.sink?.close() }
             runCatching { a.flow?.close() }
+            runCatching { a.video?.close() }
         }
         active.clear(); openedStreams.clear()
     }
 
     fun release() {
         close(); camThread.quitSafely(); ioThread.quitSafely(); flowThread.quitSafely()
+        videoThread.quitSafely(); encodeThread.quitSafely()
     }
 
     // ---------------------------------------------------------------------------------------
@@ -375,6 +423,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
      * físicas a máxima resolución → físicas a 4 MP → sólo lógica a máx → sólo lógica a 1440p.
      */
     private suspend fun configure(device: CameraDevice, g: CameraGroup, preview: Surface?, previewSize: Size): Active? {
+        if (videoMode && preview != null) configureVideo(device, g, preview)?.let { return it }
         val concurrentCap = 1920L * 1440
         val attempts = buildList {
             if (g.physicalStreams.isNotEmpty()) {
@@ -449,6 +498,74 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             readers.values.forEach { it.close() }
         }
         return null
+    }
+
+    /** Modo vídeo: vista previa + flujo YUV continuo, el mayor tamaño 4:3 que el móvil acepte. */
+    private suspend fun configureVideo(device: CameraDevice, g: CameraGroup, preview: Surface): Active? {
+        val ch = manager.getCameraCharacteristics(g.deviceId)
+        val sizes = ch.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: return null
+        for (size in VideoFrames.candidateSizes(sizes)) {
+            val reader = ImageReader.newInstance(size.width, size.height, ImageFormat.YUV_420_888, 3)
+            val session = createSession(device, listOf(OutputConfiguration(preview), OutputConfiguration(reader.surface)))
+            if (session == null) { reader.close(); DiagLog.event("cam", "vídeo ${size.width}x${size.height} no admitido"); continue }
+            previewCameraId = g.deviceId
+            val caps = ch.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: IntArray(0)
+            val act = Active(
+                g, device, session, preview, emptyMap(), null, null,
+                manualSensor = caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR),
+                exposureRange = ch.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE),
+                isoRange = ch.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE),
+                video = reader,
+            )
+            act.characteristics = ch
+            reader.setOnImageAvailableListener({ rd -> onVideoFrame(act, rd) }, videoHandler)
+            startRepeating(act)
+            listener.onLog("Cámara ${g.deviceId}: vídeo 360 a ${size.width}x${size.height}")
+            return act
+        }
+        return null
+    }
+
+    private fun onVideoFrame(act: Active, rd: ImageReader) {
+        val img = rd.acquireLatestImage() ?: return
+        val id = act.group.deviceId
+        var nv21: ByteArray? = null
+        val ts = img.timestamp
+        val w = img.width; val h = img.height
+        try {
+            DiagLog.tick("flujo")
+            // Velocímetro a ~15 fps (cada 2 fotogramas): suficiente y libera la CPU para el JPEG.
+            if (act.frames % 2 == 0) listener.onFlowFrame(id, ts, FLOW_W, FLOW_H, VideoFrames.gray(img, FLOW_W, FLOW_H))
+            if (!encoding && listener.wantVideoFrame(id, ts, w)) {
+                encoding = true
+                nv21 = VideoFrames.toNv21(img)
+            }
+        } catch (e: Exception) {
+            DiagLog.event("vídeo", "error de fotograma: $e"); encoding = false
+        } finally {
+            img.close()
+        }
+        val data = nv21 ?: return
+        encodeHandler.post {
+            try {
+                // Primero lo pequeño (la nube en vivo no espera al JPEG).
+                listener.onVideoKeyframe(id, ts, VideoFrames.grayFromNv21(data, w, h, KF_W, KF_H),
+                    VideoFrames.rgbFromNv21(data, w, h, THUMB_W, THUMB_H))
+                val t0 = System.nanoTime()
+                val bos = java.io.ByteArrayOutputStream(w * h / 4)
+                android.graphics.YuvImage(data, ImageFormat.NV21, w, h, null)
+                    .compressToJpeg(android.graphics.Rect(0, 0, w, h), jpegQuality.coerceIn(50, 100), bos)
+                DiagLog.max("jpeg_ms", (System.nanoTime() - t0) / 1_000_000)
+                // Metadatos del mismo fotograma (exposición, foco, intrínsecos) antes que la imagen.
+                act.recentResults.remove(ts)?.let { emitMeta(id, it, null) }
+                listener.onImage(id, ts, w, h, bos.toByteArray())
+            } catch (e: Exception) {
+                DiagLog.event("vídeo", "error JPEG: $e")
+            } finally {
+                encoding = false
+            }
+        }
     }
 
     /** Lector YUV ~320×240 (4:3) para el flujo óptico; entrega fotogramas 160×120 en grises. */
@@ -577,6 +694,10 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         /** ~0,7 s a 30 fps: suficiente para que AE/AF/AWB converjan tras abrir. */
         private const val SETTLE_FRAMES = 20
         /** Tamaño de la imagen del velocímetro óptico. */
+        const val KF_W = 320
+        const val KF_H = 240
+        const val THUMB_W = 160
+        const val THUMB_H = 120
         const val FLOW_W = 160
         const val FLOW_H = 120
     }
