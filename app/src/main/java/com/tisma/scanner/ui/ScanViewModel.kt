@@ -1046,9 +1046,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     /** Vista nueva para la IA: se calcula ya (2 núcleos), y la malla final no tendrá que esperarla. */
     private fun preAiDepth(index: Int, shot: com.tisma.scanner.recon.DepthShot) {
         if (!_state.value.useDepthAi || !_state.value.depthModelReady) return
+        val gen = reconGen
         pre.submit(com.tisma.scanner.session.IdleWorker.Priority.HIGH) {
+            if (gen != reconGen) return@submit
             val m = captureModel ?: com.tisma.scanner.recon.DepthModel.load(depthModelFile, threads = 2)?.also { captureModel = it } ?: return@submit
-            aiCache[index] = aiViewFor(m, shot)
+            val v = aiViewFor(m, shot)
+            if (gen == reconGen) aiCache[index] = v
             prepText()
         }
     }
@@ -1167,7 +1170,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val q = st.orientation
         val z = q.rotate(az)
         val w = MultiCameraController.KF_W
-        _arPose.value = ArPose(q.rotate(ax), q.rotate(ay), z, st.position + live.insOffset, Optics.fxPixels(focal, sw, w), w, MultiCameraController.KF_H, orient)
+        val center = if (poseSource.mode == com.tisma.scanner.recon.PoseSource.Mode.ORBIT) z * -orbitDist else st.position + live.insOffset
+        _arPose.value = ArPose(q.rotate(ax), q.rotate(ay), z, center, Optics.fxPixels(focal, sw, w), w, MultiCameraController.KF_H, orient)
     }
 
     /** Miniatura vertical pequeña (para las fotos flotantes) desde la miniatura del sensor. */
@@ -1212,9 +1216,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 // 1) Seguir los puntos; 2) la INS (MSCKF) se corrige con ellos y da la posición de
                 // la cámara en este fotograma; 3) con esa posición se triangula y se arma la superficie.
                 val obs = live.track(com.tisma.scanner.ins.OpticalFlow.Image(w, h, gray))
-                val c = ins.onVisualKeyframe(t, xw, yw, zw, obs, fpx, w / 2.0, h / 2.0) ?: st.position
+                val cIns = ins.onVisualKeyframe(t, xw, yw, zw, obs, fpx, w / 2.0, h / 2.0) ?: st.position
+                // Posición: la de la INS (MSCKF) o, si ésta no "ve" el desplazamiento, la órbita
+                // (la cámara mira a la pieza a la distancia del enfoque: −distancia·eje óptico).
+                val c = if (poseSource.mode == com.tisma.scanner.recon.PoseSource.Mode.ORBIT) zw * -dist else cIns
+                val fd = firstDir ?: zw.also { firstDir = it }
+                turnedDeg = maxOf(turnedDeg, Math.toDegrees(kotlin.math.acos((fd dot zw).coerceIn(-1.0, 1.0))))
                 val view = com.tisma.scanner.recon.LivePointCloud.View(xw, yw, zw, c, fpx, w / 2.0, h / 2.0)
                 live.commit(view, thumb, MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                if (poseSource.update(live.keyframeCount, live.pointCount(), turnedDeg)) switchToOrbit()
                 // Una vista para la IA de profundidad cada ~8° (como mucho 72): foto pequeña + puntos medidos.
                 val pd = lastDepthDir
                 val samples = live.lastObservedDepths
@@ -1248,6 +1258,28 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 com.tisma.scanner.diag.DiagLog.event("recon", "error: $e")
             } finally { reconPending.decrementAndGet() }
         }
+    }
+
+    /** Origen de la posición en la reconstrucción en vivo (INS o, si ésta no sirve, órbita). */
+    private val poseSource = com.tisma.scanner.recon.PoseSource()
+    @Volatile private var firstDir: com.tisma.scanner.ins.Vec3? = null
+    @Volatile private var turnedDeg = 0.0
+    /** Generación de la reconstrucción: lo calculado para una anterior (p.ej. la IA) se descarta. */
+    @Volatile private var reconGen = 0
+
+    /**
+     * La INS no daba desplazamiento (todo se triangulaba en la cámara): se rehace la reconstrucción
+     * en vivo con la órbita. Se tira lo que dependía de las posiciones anteriores.
+     */
+    private fun switchToOrbit() {
+        reconGen++
+        live.reset()
+        depthShots.clear(); lastDepthDir = null; aiCache.clear()
+        cards.clear(); lastCardDir = null
+        lastLiveMeshFragments = 0
+        _state.update { it.copy(liveMesh = null) }
+        log("La posición de la INS no se movía al rodear la pieza: la vista previa pasa a modo órbita")
+        com.tisma.scanner.diag.DiagLog.event("recon", "cambio a órbita tras $turnedDeg° de giro")
     }
 
     private fun publishCloud() {
@@ -1525,6 +1557,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cards.clear(); lastCardDir = null
         depthShots.clear(); lastDepthDir = null
         aiCache.clear(); aiCacheScan = s.dir; preDeblurred.set(0); preDeblurQueued.set(0)
+        poseSource.reset(); firstDir = null; turnedDeg = 0.0; reconGen++
         lastLiveMeshMs = 0; lastLiveMeshFragments = 0
         pre.open()
         _state.update { it.copy(liveMesh = null, prepText = "") }
@@ -2126,7 +2159,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val baseExtra = com.tisma.scanner.diag.DiagLog.extra
         com.tisma.scanner.diag.DiagLog.extra = {
             baseExtra() + if (session != null) " · en vivo: ${live.pointCount()} puntos, ${live.fragments().size} trozos, " +
-                "${live.keyframeCount} vistas, ${depthShots.size} vistas IA, distancia %.2f m".format(orbitDist) else ""
+                "${live.keyframeCount} vistas, ${depthShots.size} vistas IA, distancia %.2f m, giro %.0f°, posición ${poseSource.mode}".format(orbitDist, turnedDeg) else ""
         }
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
         viewModelScope.launch(Dispatchers.IO) {

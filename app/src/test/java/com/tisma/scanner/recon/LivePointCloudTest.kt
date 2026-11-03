@@ -273,6 +273,48 @@ class LivePointCloudTest {
         assertTrue(err[err.size / 2] < 0.001)
     }
 
+    /**
+     * La INS cree que el móvil está quieto (ZUPT al rodear despacio): su posición no se mueve.
+     * Con esa posición no se triangula nada; el selector lo detecta y la órbita sí reconstruye.
+     */
+    @Test fun frozenInsPositionFallsBackToOrbit() {
+        fun run(useOrbitWhenAsked: Boolean): Pair<Int, PoseSource.Mode> {
+            val cloud = LivePointCloud(maxCorrectionM = 0.0)
+            cloud.depthRange = 0.1..0.5
+            val sel = PoseSource()
+            var cur = cloud
+            var az = 0.0; var k = 0
+            while (az <= 120.0) {
+                val truth = view(az)
+                val center = if (sel.mode == PoseSource.Mode.ORBIT && useOrbitWhenAsked)
+                    truth.zAxis * -((truth.center - Vec3(0.0, 0.0, 0.02)).norm()) + Vec3(0.0, 0.0, 0.02)   // órbita: −d·eje óptico
+                    else Vec3(0.25, 0.0, 0.12)                                                              // INS "congelada"
+                val v = LivePointCloud.View(truth.xAxis, truth.yAxis, truth.zAxis, center, f, w / 2.0, h / 2.0)
+                cur.addKeyframe(render(truth), v)
+                k++
+                if (sel.update(k, cur.pointCount(), az) && useOrbitWhenAsked) {
+                    cur = LivePointCloud(maxCorrectionM = 0.0).also { it.depthRange = 0.1..0.5 }
+                }
+                az += 3.0
+            }
+            return cur.pointCount() to sel.mode
+        }
+        val (frozenPts, frozenMode) = run(false)
+        val (fixedPts, fixedMode) = run(true)
+        println("INS congelada: $frozenPts puntos · con cambio automático a órbita: $fixedPts puntos ($fixedMode)")
+        assertEquals(0, frozenPts)
+        assertEquals(PoseSource.Mode.ORBIT, fixedMode)
+        assertTrue(fixedPts > 100)
+    }
+
+    @Test fun healthyInsKeepsInsMode() {
+        val sel = PoseSource()
+        var switched = false
+        for (k in 1..30) switched = switched || sel.update(k, k * 10, k * 3.0)
+        assertTrue(!switched)
+        assertEquals(PoseSource.Mode.INS, sel.mode)
+    }
+
     @Test fun noParallaxNoPoints() {
         // Girar en el sitio (sin rodear la pieza) no da profundidad: no debe inventar puntos.
         val cloud = LivePointCloud()
