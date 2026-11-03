@@ -24,6 +24,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy opencv-contrib-python-headless open3d pyinstaller
 
+      - name: Pruebas del pipeline (sin COLMAP)
+        run: python tools/test_reconstruct.py
+
       - name: Compilar TismaServer.exe
         working-directory: server
         run: pyinstaller --noconfirm --clean TismaServer.spec

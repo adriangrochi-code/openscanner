@@ -437,7 +437,77 @@ def camera_params(session, cam_id, width, height):
     return [fx * s, fy * s, cx * s - ox, cy * s - oy, k1, k2, p1, p2]
 
 
-def run_sfm(work, session, records, matcher):
+def _quat_rot(w, x, y, z):
+    return np.array([
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def read_refined(scan: Path):
+    """refined_poses.csv (posición INS corregida por la imagen en el móvil): t_ns -> centro."""
+    p = scan / "refined_poses.csv"
+    out = {}
+    if p.exists():
+        with open(p) as f:
+            for r in csv.DictReader(f):
+                out[int(r["t_ns"])] = np.array([float(r["px"]), float(r["py"]), float(r["pz"])])
+    return out
+
+
+def ins_views(records, refined=None, tol_ns=5_000_000):
+    """(nombre, dirección de visión, centro, t) de cada imagen con pose INS.
+    La cámara trasera mira por −Z del dispositivo; el centro es el de la INS, o el corregido por
+    la imagen si el móvil lo calculó (más fiable)."""
+    refined = refined or {}
+    times = np.array(sorted(refined)) if refined else None
+    out = []
+    for name, fr in records:
+        try:
+            q = [float(fr[k]) for k in ("qw", "qx", "qy", "qz")]
+            c = np.array([float(fr[k]) for k in ("px", "py", "pz")])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if not any(q):
+            continue
+        t = int(fr["t_ns"])
+        if times is not None and len(times):
+            i = int(np.argmin(np.abs(times - t)))
+            if abs(int(times[i]) - t) <= tol_ns:
+                c = refined[int(times[i])]
+        d = _quat_rot(*q) @ np.array([0.0, 0.0, -1.0])
+        out.append((name, d / np.linalg.norm(d), c, t))
+    return out
+
+
+def ins_pairs(views, max_angle=50.0, k=30, temporal=3, max_dist_ratio=1.5):
+    """Pares a emparejar según la pose INS: para cada foto, las `k` con la dirección de visión más
+    parecida (≤ max_angle) y no demasiado lejos, más las `temporal` anteriores y siguientes en el
+    tiempo (por si la INS se equivoca). Devuelve una lista de (nombre_a, nombre_b) sin repetir."""
+    n = len(views)
+    if n < 2:
+        return []
+    D = np.array([v[1] for v in views]); C = np.array([v[2] for v in views])
+    cosang = np.clip(D @ D.T, -1, 1)
+    dist = np.linalg.norm(C[:, None, :] - C[None, :, :], axis=2)
+    # Escala típica: distancia mediana entre fotos consecutivas en el tiempo × 20.
+    order = np.argsort([v[3] for v in views])
+    steps = [dist[order[i], order[i + 1]] for i in range(n - 1)]
+    span = max(np.median(steps) * 20, 1e-3) * max_dist_ratio
+    pairs = set()
+    lim = np.cos(np.radians(max_angle))
+    for i in range(n):
+        cand = [j for j in np.argsort(-cosang[i]) if j != i and cosang[i, j] >= lim and dist[i, j] <= span]
+        for j in cand[:k]:
+            pairs.add((min(i, j), max(i, j)))
+    for a in range(n):
+        for b in range(a + 1, min(n, a + 1 + temporal)):
+            i, j = order[a], order[b]
+            pairs.add((min(i, j), max(i, j)))
+    return [(views[i][0], views[j][0]) for i, j in sorted(pairs)]
+
+
+def run_sfm(work, session, records, matcher, scan=None):
     db = work / "database.db"
     if db.exists():
         db.unlink()
@@ -463,9 +533,22 @@ def run_sfm(work, session, records, matcher):
             args += ["--ImageReader.camera_params", ",".join(f"{p:.6f}" for p in params)]
             print(f"[sfm] cámara {cam} enfoque {fbucket:.2f} D: intrínsecos de fábrica {params[:4]}")
         colmap(*args)
+    if matcher == "ins":
+        views = ins_views(records, read_refined(scan) if scan else None)
+        total = len(records) * (len(records) - 1) // 2
+        if len(views) >= 0.8 * len(records) and len(records) > 40:
+            pairs = ins_pairs(views)
+            lst = work / "pares_ins.txt"
+            lst.write_text("\n".join(f"{a} {b}" for a, b in pairs) + "\n")
+            print(f"[sfm] emparejado guiado por la INS: {len(pairs)} pares de {total} posibles")
+            colmap("matches_importer", "--database_path", db, "--match_list_path", lst, "--match_type", "pairs",
+                   "--SiftMatching.guided_matching", 1)
+        else:
+            print("[sfm] pocas fotos o sin pose INS: emparejado exhaustivo")
+            matcher = "exhaustive"
     if matcher == "sequential":
         colmap("sequential_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
-    else:
+    elif matcher == "exhaustive":
         colmap("exhaustive_matcher", "--database_path", db, "--SiftMatching.guided_matching", 1)
     sparse = work / "sparse"
     sparse.mkdir(exist_ok=True)
@@ -723,7 +806,8 @@ def main(argv=None):
     ap.add_argument("--denoise", type=float, default=-1, help="quitar ruido antes de realzar: -1 automático (según el ruido medido), 0 no, >0 fuerza fija")
     ap.add_argument("--no-color-norm", action="store_true", help="no igualar exposición/color entre fotos")
     ap.add_argument("--superres", type=int, default=2, help="superresolución de las ráfagas (2 = doble; 1 = sólo promediar)")
-    ap.add_argument("--matcher", choices=["exhaustive", "sequential"], default="exhaustive")
+    ap.add_argument("--matcher", choices=["ins", "exhaustive", "sequential"], default="ins",
+                    help="ins = sólo pares de fotos tomadas desde direcciones parecidas según la INS (rápido y con menos falsos)")
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
     ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
@@ -747,7 +831,7 @@ def main(argv=None):
     if not (shutil.which(COLMAP_EXE) or Path(COLMAP_EXE).exists()):
         raise SystemExit(f"No se encuentra COLMAP ({COLMAP_EXE}): https://colmap.github.io/install.html")
 
-    model = run_sfm(a.work, session, records, a.matcher)
+    model = run_sfm(a.work, session, records, a.matcher, scan)
     txt = a.work / "sparse_txt"
     txt.mkdir(exist_ok=True)
     colmap("model_converter", "--input_path", model, "--output_path", txt, "--output_type", "TXT")
