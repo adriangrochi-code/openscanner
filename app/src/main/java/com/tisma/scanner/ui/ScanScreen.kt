@@ -141,6 +141,8 @@ private fun CameraScreen(
         ) {
             val toasts = buildList {
                 if (s.rigWarning.isNotEmpty()) add(Triple("Esta pasada no puede usar su cámara · ver ⚙ Cámaras", true, false))
+                if (s.scanning && s.capturing) add(Triple("Capturando… mantené el móvil quieto", false, false))
+                else if (s.scanning && s.waitingSteady) add(Triple("Quieto un momento…", false, false))
                 if (s.gyroRate > 0.6 && s.scanning) add(Triple("Demasiado rápido: las fotos saldrán movidas", true, false))
                 if (s.scanning && s.analyzed > 0 && s.textureRecent < ScanViewModel.LOW_TEXTURE) {
                     add(Triple("Poca textura (%d %%): usa el tapete o spray mate".format((s.textureRecent * 100).toInt()), true, false))
@@ -159,7 +161,7 @@ private fun CameraScreen(
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 when {
-                    s.scanning -> RoundIcon("◉", "Foto") { vm.captureNow() }
+                    s.scanning -> RoundIcon("■", "Terminar") { vm.stopScan() }
                     s.lastZip != null && !s.busy -> RoundIcon("⇪", "Compartir") { onShare(s.lastZip) }
                     else -> Spacer(Modifier.size(52.dp))
                 }
@@ -201,23 +203,23 @@ private fun PassSwitch(s: UiState, vm: ScanActions) {
     }
 }
 
-/** Disparador grande central: Escanear / Detener. */
+/** Disparador grande central: Escanear y, durante el escaneo, sacar foto. */
 @Composable
 private fun Shutter(s: UiState, vm: ScanActions) {
+    // Escaneando, el botón grande saca la foto (Terminar va a la izquierda).
     val scanning = s.scanning
-    val enabled = !s.busy || scanning
+    val enabled = if (scanning) !s.capturing && !s.waitingSteady else !s.busy
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.size(78.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.9f)).padding(4.dp)
                 .clip(CircleShape).background(Tisma.Bar).padding(4.dp).clip(CircleShape)
-                .background(if (!enabled) Tisma.Field else if (scanning) Tisma.ErrorToast else Tisma.Purple)
-                .clickable(enabled = enabled) { if (scanning) vm.stopScan() else vm.startScan() },
+                .background(if (!enabled) Tisma.Field else Tisma.Purple)
+                .clickable(enabled = enabled) { if (scanning) vm.captureNow() else vm.startScan() },
             contentAlignment = Alignment.Center,
         ) {
-            if (scanning) Box(Modifier.size(22.dp).clip(RoundedCornerShape(4.dp)).background(Color.White))
-            else Box(Modifier.size(22.dp).clip(CircleShape).background(Color.White))
+            Box(Modifier.size(if (scanning) 30.dp else 22.dp).clip(CircleShape).background(Color.White))
         }
-        Text(if (scanning) "Detener" else "Escanear", color = Tisma.Text, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+        Text(if (scanning) (if (s.capturing) "Capturando…" else "Foto") else "Escanear", color = Tisma.Text, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -374,6 +376,8 @@ private fun ScanSettings(s: UiState, vm: ScanActions) {
         }
     }
     SettingSwitch("Disparo automático (INS)", s.autoTrigger, onChange = vm::setAutoTrigger)
+    Hint("Apagado (recomendado): sacás cada foto con el botón grande y la vista previa no se corta. " +
+        "Encendido: dispara solo al girar o desplazarte.")
     SettingSwitch("Medir distancia con el enfoque", s.focusDepth, onChange = vm::setFocusDepth)
     SettingSwitch("Velocímetro de cámara (frena la deriva)", s.cameraVelocity, onChange = vm::setCameraVelocity)
     Hint("Cada ${ScanViewModel.AUTO_SWEEP_EVERY} disparos, quieto, barre el enfoque: mapa de profundidad en mm y escala real sin tapete." +

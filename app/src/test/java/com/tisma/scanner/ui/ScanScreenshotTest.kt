@@ -97,6 +97,8 @@ class ScanScreenshotTest {
 
     @Test fun scanning() = shot("scan_tab", scanning, 0)
 
+    @Test fun capturing() = shot("capturing", scanning.copy(capturing = true), 0)
+
     @Test fun captureSettings() = shot("settings_capture", scanning, 0, settings = true)
 
     @Test fun closePassQualityTab() = shot("quality_tab", scanning.copy(

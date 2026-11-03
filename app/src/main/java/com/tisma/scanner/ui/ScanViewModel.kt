@@ -48,7 +48,8 @@ data class UiState(
     val openedStreams: List<String> = emptyList(),
     val concurrentSupported: Boolean = false,
     val useConcurrent: Boolean = true,
-    val autoTrigger: Boolean = true,
+    /** Disparo automático por la INS. Apagado: las fotos las saca el usuario (la vista previa no se corta). */
+    val autoTrigger: Boolean = false,
     val hdr: Boolean = true,
     val torch: Boolean = false,
     val lock3A: Boolean = true,
@@ -111,6 +112,10 @@ data class UiState(
     val gpsText: String = "GPS: sin fix",
     val posStdM: Double = 0.0,
     val scanning: Boolean = false,
+    /** Hay una toma en curso (ráfaga o cámaras por turnos): la vista previa puede pararse un instante. */
+    val capturing: Boolean = false,
+    /** Esperando a que el móvil se quede quieto para disparar. */
+    val waitingSteady: Boolean = false,
     val images: Int = 0,
     val triggers: Int = 0,
     val position: Triple<Double, Double, Double> = Triple(0.0, 0.0, 0.0),
@@ -212,6 +217,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     /** Evita disparos solapados (ráfagas HDR o secuencias de rotación en curso). */
     @Volatile private var sequenceRunning = false
+        set(v) { field = v; _state.update { it.copy(capturing = v) } }
     private val cameras = MultiCameraController(app, this)
     private var inventory: Map<String, CameraInfo> = emptyMap()
     private var lenses: List<Lens> = emptyList()
@@ -1023,12 +1029,26 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         }
     }
 
+    private var steadyJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Foto a mano: si el móvil se está moviendo, espera un momento (máx. ~1,2 s) a que se quede
+     * quieto, así la foto no sale movida y la toma dura lo mínimo.
+     */
     override fun captureNow() {
-        if (session == null) return
-        fire(ins.latest())
+        if (session == null || sequenceRunning || steadyJob?.isActive == true) return
+        steadyJob = viewModelScope.launch {
+            val deadline = SystemClock.uptimeMillis() + STEADY_WAIT_MS
+            if (imu.gyroRate > STEADY_GYRO) {
+                _state.update { it.copy(waitingSteady = true) }
+                while (imu.gyroRate > STEADY_GYRO && SystemClock.uptimeMillis() < deadline) delay(20)
+                _state.update { it.copy(waitingSteady = false) }
+            }
+            if (session != null) fire(ins.latest(), manual = true)
+        }
     }
 
-    private fun fire(st: InsState?) {
+    private fun fire(st: InsState?, manual: Boolean = false) {
         if (sequenceRunning) return
         st?.let { selector.markTriggered(it) }
         val ui = _state.value
@@ -1057,7 +1077,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             try {
                 val rig = rigPlan
                 shoot(bracketUsed, plan, burst)
-                if (ui.rotateCameras && rig.separate.isNotEmpty()) {
+                // Las cámaras por turnos cierran y reabren la vista previa: en disparo automático
+                // sólo con el móvil quieto (si no, al moverlo la vista quedaba congelada).
+                if (ui.rotateCameras && rig.separate.isNotEmpty() && (manual || st?.stationary == true)) {
                     // La compañera no se puede abrir a la vez: se dispara justo después, desde
                     // la misma pose (quieto), y se vuelve a la vista de la pasada.
                     for (g in rig.separate) {
@@ -1309,6 +1331,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         const val MACRO_FOCUS_M = 0.04
         const val IMU_TEST_SECONDS = 60
         const val ANTI_SHAKE_FRAMES = 4
+        /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
+        const val STEADY_GYRO = 0.25
+        const val STEADY_WAIT_MS = 1200L
         /** Cada cuántos disparos se hace un barrido de enfoque automático para medir distancia. */
         const val AUTO_SWEEP_EVERY = 6
         const val DEFAULT_CLOUD_URL = "https://tismaservidores.net"
