@@ -26,7 +26,10 @@ jobs:
           # El repo usa `addict` sin declararlo; trae su propio OpenCV (y numpy 1.x).
           pip install addict onnx onnxruntime
       - name: Exportar y comprobar
-        run: python tools/export_da3_onnx.py --out modelos/da3_small.onnx
+        # Sin el volcado del grafo (miles de líneas "%n : ...") para que se vea el error real.
+        run: |
+          set -o pipefail
+          python tools/export_da3_onnx.py --out modelos/da3_small.onnx 2>&1 | grep -v -E '^\s+%[0-9]+ :|^\s+return \(%' | tail -120
       - uses: actions/upload-artifact@v4
         with:
           name: da3_small-onnx
