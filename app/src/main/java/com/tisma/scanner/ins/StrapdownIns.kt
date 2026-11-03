@@ -145,7 +145,17 @@ class StrapdownIns(
         if (!filter.isInitialized) filter.initialize(a - kf.b)
     }
 
-    @Synchronized fun onMag(tNs: Long, m: Vec3) { lastMag = m }
+    @Synchronized fun onMag(tNs: Long, m: Vec3) {
+        lastMag = m
+        // Primer campo válido: rumbo inicial de la brújula, sin convergencia lenta.
+        if (filter.isInitialized && !filter.yawAligned) filter.alignYaw(m)
+    }
+
+    /** Campo magnético esperado en el lugar (µT, inclinación en grados), del modelo mundial. */
+    fun setExpectedMagneticField(fieldUt: Double, inclinationDeg: Double) {
+        filter.expectedFieldUt = fieldUt
+        filter.expectedInclinationDeg = inclinationDeg
+    }
 
     /** El giróscopo marca el ritmo de propagación. */
     @Synchronized fun onGyro(tNs: Long, w: Vec3) {

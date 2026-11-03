@@ -158,11 +158,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         if (fromChip) lastGpsChipNs = tNs
         else if (tNs - lastGpsChipNs < 3_000_000_000L) return@GpsRecorder   // ya hay GPS: ignorar el fused
         if (ins.geo == null) {
-            // Declinación magnética del lugar (modelo magnético mundial de Android).
-            ins.declinationDeg = android.hardware.GeomagneticField(
-                loc.latitude.toFloat(), loc.longitude.toFloat(), loc.altitude.toFloat(), System.currentTimeMillis()
-            ).declination.toDouble()
-            log("Declinación magnética: %.1f°".format(ins.declinationDeg))
+            // Campo magnético del lugar (modelo magnético mundial de Android): declinación para
+            // pasar a norte verdadero, e intensidad/inclinación para reconocer el campo
+            // distorsionado de interiores (entonces el rumbo sale sólo del giróscopo).
+            val field = android.hardware.GeomagneticField(
+                loc.latitude.toFloat(), loc.longitude.toFloat(), loc.altitude.toFloat(), System.currentTimeMillis())
+            ins.declinationDeg = field.declination.toDouble()
+            ins.setExpectedMagneticField(field.fieldStrength / 1000.0, field.inclination.toDouble())
+            log("Campo magnético esperado: %.1f µT, inclinación %.1f°, declinación %.1f°".format(
+                field.fieldStrength / 1000.0, field.inclination, field.declination))
         }
         ins.onGnss(
             loc.latitude, loc.longitude, loc.altitude, loc.accuracy.toDouble(),
@@ -568,6 +572,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             val csvFile = File(calDir(), "deriva_$stamp.csv")
             val rows = ArrayList<com.tisma.scanner.ins.DriftRow>()
             ins.reset()
+            ins.filter.resetMagStats()
             imu.startStillCapture()
             val csv = csvFile.bufferedWriter()
             csv.write(com.tisma.scanner.ins.DriftRow.CSV_HEADER + "\n")
@@ -617,7 +622,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     val report = kotlinx.coroutines.withContext(Dispatchers.Default + kotlinx.coroutines.NonCancellable) {
                         com.tisma.scanner.ins.ImuStillTest.analyze(acc, gyr, listOf(1.0, 2.0, 5.0, 10.0, 30.0, 60.0))
                     }
-                    val lines = com.tisma.scanner.ins.DriftLog.lines(rows) + (report?.lines() ?: emptyList())
+                    val acc = ins.filter.magAccepted; val rej = ins.filter.magRejected
+                    val compass = if (acc + rej == 0L) "Brújula: sin lecturas" else
+                        "Brújula: %d %% de lecturas válidas%s".format(100 * acc / (acc + rej),
+                            if (ins.filter.expectedFieldUt != null) " (comparadas con el campo esperado del lugar)" else " (aún sin GPS: sin modelo de campo)") +
+                            if (acc * 2 < acc + rej) " → el rumbo lo lleva el giróscopo" else ""
+                    val lines = com.tisma.scanner.ins.DriftLog.lines(rows) + compass + (report?.lines() ?: emptyList())
                     val applied = report != null && !report.moved
                     if (applied) applyCalibration(report!!)
                     val summary = lines + (if (applied) "✓ Calibración guardada y aplicada" else "Calibración NO guardada (el móvil se movió)")
