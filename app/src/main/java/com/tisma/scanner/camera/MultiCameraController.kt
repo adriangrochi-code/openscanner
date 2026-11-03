@@ -51,7 +51,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
          * Modo vídeo: fotograma clave reducido para la reconstrucción en vivo — grises
          * [KF_W]×[KF_H] y miniatura en color [THUMB_W]×[THUMB_H], en la orientación del sensor.
          */
-        fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray) {}
+        fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray, color: IntArray) {}
     }
 
     /** Lo que finalmente se ha conseguido abrir. */
@@ -551,7 +551,7 @@ class MultiCameraController(context: Context, private val listener: Listener) {
             try {
                 // Primero lo pequeño (la nube en vivo no espera al JPEG).
                 listener.onVideoKeyframe(id, ts, VideoFrames.grayFromNv21(data, w, h, KF_W, KF_H),
-                    VideoFrames.rgbFromNv21(data, w, h, THUMB_W, THUMB_H))
+                    VideoFrames.rgbFromNv21(data, w, h, THUMB_W, THUMB_H), VideoFrames.rgbFromNv21(data, w, h, DEPTH_W, DEPTH_H))
                 val t0 = System.nanoTime()
                 val bos = java.io.ByteArrayOutputStream(w * h / 4)
                 android.graphics.YuvImage(data, ImageFormat.NV21, w, h, null)
@@ -694,6 +694,9 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         /** ~0,7 s a 30 fps: suficiente para que AE/AF/AWB converjan tras abrir. */
         private const val SETTLE_FRAMES = 20
         /** Tamaño de la imagen del velocímetro óptico. */
+        /** Imagen para la IA de profundidad (múltiplos de 14, 4:3). */
+        const val DEPTH_W = 504
+        const val DEPTH_H = 378
         const val KF_W = 320
         const val KF_H = 240
         const val THUMB_W = 160

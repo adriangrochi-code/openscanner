@@ -74,6 +74,17 @@ curl https://tismaservidores.net/api/health
    posición INS de cada foto → puntos y emparejado (IA o SIFT) → COLMAP → descarte de fotos
    mal registradas con la INS → escala (ArUco > enfoque > INS) → nube densa → postprocesado.
 
+### Modelo de IA para el móvil (Depth Anything 3 Small)
+
+La app puede descargar de tu servidor el modelo de profundidad que usa para crear el modelo 3D
+en el propio móvil (Ajustes → Nube → IA de profundidad). Deja el archivo ONNX en la carpeta
+`modelos` (junto a `tisma_server.json`, o la que indique `models_dir`) con el nombre
+`da3_small.onnx`; se sirve en `GET /models/da3_small.onnx` con la misma clave de API.
+
+Licencia: DA3-SMALL y DA3-BASE son Apache-2.0 (uso comercial permitido); NO usar Large/Giant
+(CC BY-NC, sólo no comercial). El ONNX se obtiene exportando el modelo oficial
+(github.com/ByteDance-Seed/Depth-Anything-3) o de una exportación ONNX de esos pesos.
+
 ### GLOMAP (reconstrucción global), opcional
 
 Del mismo grupo que COLMAP (ETH Zúrich), usa su misma base de datos y suele ser igual o más

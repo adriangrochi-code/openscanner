@@ -72,6 +72,7 @@ class LocalModel(val xyz: FloatArray, val tris: IntArray, val colors: IntArray) 
          * @param depthW, depthH resolución de los mapas de profundidad
          */
         fun build(fragments: List<LivePointCloud.Fragment>, resolution: Int = 128, depthW: Int = 160, depthH: Int = 120,
+                  dense: List<DepthPrior.DepthView> = emptyList(),
                   progress: (Float) -> Unit = {}): LocalModel? {
             val frs = fragments.filter { it.view != null && it.tris.size >= 9 && it.gw > 0 }
             if (frs.size < 2) return null
@@ -90,26 +91,35 @@ class LocalModel(val xyz: FloatArray, val tris: IntArray, val colors: IntArray) 
             val tsdf = FloatArray(nx * ny * nz) { 1f }
             val wsum = FloatArray(nx * ny * nz)
 
-            // 1+2: mapa de profundidad de cada trozo y fusión.
-            for ((fi, f) in frs.withIndex()) {
-                val v = f.view!!
-                val sx = depthW.toDouble() / f.gw; val sy = depthH.toDouble() / f.gh
-                val depth = median3(rasterize(f, v, depthW, depthH, sx, sy), depthW, depthH)
+            // 1+2: mapa de profundidad de cada trozo (y los densos de la IA) y fusión.
+            fun integrate(v: LivePointCloud.View, depth: DoubleArray, dw: Int, dh: Int, sx: Double, sy: Double, weight: Float) {
                 for (k in 0 until nz) for (j in 0 until ny) for (i in 0 until nx) {
                     val x = Vec3((lo[0] + (i + 0.5f) * vox).toDouble(), (lo[1] + (j + 0.5f) * vox).toDouble(), (lo[2] + (k + 0.5f) * vox).toDouble())
                     val q = v.project(x) ?: continue
                     val u = (q[0] * sx).toInt(); val w = (q[1] * sy).toInt()
-                    if (u !in 0 until depthW || w !in 0 until depthH) continue
-                    val d = depth[w * depthW + u]
+                    if (u !in 0 until dw || w !in 0 until dh) continue
+                    val d = depth[w * dw + u]
                     if (d.isNaN()) continue
                     val sdf = (d - v.depth(x)).toFloat()
                     if (sdf < -trunc) continue                 // detrás de la superficie: no se sabe
                     val t = min(1f, sdf / trunc)
                     val idx = (k * ny + j) * nx + i
                     val wo = wsum[idx]
-                    tsdf[idx] = (tsdf[idx] * wo + t) / (wo + 1); wsum[idx] = wo + 1
+                    tsdf[idx] = (tsdf[idx] * wo + t * weight) / (wo + weight); wsum[idx] = wo + weight
                 }
-                progress(0.8f * (fi + 1) / frs.size)
+            }
+            val total = frs.size + dense.size
+            for ((fi, f) in frs.withIndex()) {
+                val v = f.view!!
+                val sx = depthW.toDouble() / f.gw; val sy = depthH.toDouble() / f.gh
+                integrate(v, median3(rasterize(f, v, depthW, depthH, sx, sy), depthW, depthH), depthW, depthH, sx, sy, 1f)
+                progress(0.8f * (fi + 1) / total)
+            }
+            // Profundidad densa de la IA ya en metros: rellena entre los puntos medidos.
+            for ((di, d) in dense.withIndex()) {
+                integrate(d.view, DoubleArray(d.depth.size) { d.depth[it].toDouble() }, d.w, d.h,
+                    d.w.toDouble() / d.gw, d.h.toDouble() / d.gh, DENSE_WEIGHT)
+                progress(0.8f * (frs.size + di + 1) / total)
             }
 
             // 3: surface nets.
@@ -191,6 +201,9 @@ class LocalModel(val xyz: FloatArray, val tris: IntArray, val colors: IntArray) 
             progress(1f)
             return LocalModel(xyz, tris.toIntArray(), colors)
         }
+
+        /** Peso de cada mapa denso de la IA frente a una superficie medida (1). */
+        const val DENSE_WEIGHT = 1f
 
         private val EDGES = listOf(0 to 1, 2 to 3, 4 to 5, 6 to 7, 0 to 2, 1 to 3, 4 to 6, 5 to 7, 0 to 4, 1 to 5, 2 to 6, 3 to 7)
 

@@ -202,6 +202,70 @@ class LivePointCloudTest {
         assertTrue(err[err.size * 9 / 10] < 0.002)
     }
 
+    /** Rayo-caja (la pieza): profundidad en la vista, o null si no la toca. */
+    private fun castBox(v: LivePointCloud.View, u: Double, vv: Double): Double? {
+        val d = v.ray(u, vv); val o = v.center
+        val lo = doubleArrayOf(-0.03, -0.03, 0.0); val hi = doubleArrayOf(0.03, 0.03, 0.04)
+        val oo = doubleArrayOf(o.x, o.y, o.z); val dd = doubleArrayOf(d.x, d.y, d.z)
+        var t0 = 0.0; var t1 = 1e9
+        for (k in 0..2) {
+            if (kotlin.math.abs(dd[k]) < 1e-12) { if (oo[k] < lo[k] || oo[k] > hi[k]) return null; continue }
+            var a = (lo[k] - oo[k]) / dd[k]; var b = (hi[k] - oo[k]) / dd[k]
+            if (a > b) { val t = a; a = b; b = t }
+            t0 = maxOf(t0, a); t1 = minOf(t1, b)
+            if (t0 > t1) return null
+        }
+        return t0 * (d dot v.zAxis)
+    }
+
+    /**
+     * Tapa lisa sin textura (sin puntos medidos): sin IA el modelo queda sin tapa; con la
+     * profundidad densa (relativa, alineada con los puntos de los costados) la tapa aparece.
+     */
+    @Test fun depthAiFillsTheTexturelessTop() {
+        val r = Random(8)
+        val frs = ArrayList<LivePointCloud.Fragment>()
+        val dense = ArrayList<DepthPrior.DepthView>()
+        var fitErr = 0.0
+        for (el in listOf(25.0, 55.0)) for (az in 0 until 360 step 15) {
+            val v = view(az.toDouble(), el, dist = 0.14)
+            // Puntos medidos sólo en los costados (la tapa no tiene textura).
+            val vis = surface.indices.filter { faceOf[it] != 4 && (normals[faceOf[it]] dot (v.center - surface[it].first)) > 0 }
+            val uv = vis.map { v.project(surface[it].first)!! }
+            val tri = Delaunay.triangulate(DoubleArray(vis.size) { uv[it][0] }, DoubleArray(vis.size) { uv[it][1] })
+                .filter { t -> (0..2).all { e -> faceOf[vis[t[e]]] == faceOf[vis[t[(e + 1) % 3]]] } }
+            val xyz = FloatArray(vis.size * 3)
+            for ((i, k) in vis.withIndex()) { val p = surface[k].first; xyz[3 * i] = p.x.toFloat(); xyz[3 * i + 1] = p.y.toFloat(); xyz[3 * i + 2] = p.z.toFloat() }
+            frs += LivePointCloud.Fragment(frs.size, xyz, FloatArray(vis.size * 2), tri.flatMap { it.toList() }.toIntArray(), null, 0, 0, v.zAxis, v, w, h)
+            // "Red": profundidad inversa con escala/desplazamiento desconocidos y 1 % de ruido.
+            val dw = 160; val dh = 120
+            val pred = FloatArray(dw * dh) { i ->
+                val d = castBox(v, (i % dw + 0.5) * w / dw, (i / dw + 0.5) * h / dh)
+                if (d == null) 0.3f else (2.0 / d * (1 + r.nextDouble(-0.01, 0.01)) + 0.7).toFloat()
+            }
+            val samples = vis.indices.map { i -> Triple(uv[i][0] * dw / w, uv[i][1] * dh / h, v.depth(surface[vis[i]].first)) }
+            val fit = DepthPrior.fit(pred, dw, dh, samples)!!
+            fitErr += fit.relRms
+            val ds = samples.map { it.third }
+            dense += DepthPrior.DepthView(v, dw, dh, DepthPrior.toMetric(pred, fit, ds.min() * 0.7, ds.max() * 1.3, dw, dh), w, h)
+        }
+        fun topCoverage(m: LocalModel): Double {
+            val grid = (0 until 400).map { Vec3(-0.027 + 0.054 * (it % 20) / 19, -0.027 + 0.054 * (it / 20) / 19, 0.04) }
+            return grid.count { g -> (0 until m.vertexCount).any { i ->
+                val dx = m.xyz[3 * i] - g.x; val dy = m.xyz[3 * i + 1] - g.y; val dz = m.xyz[3 * i + 2] - g.z
+                dx * dx + dy * dy + dz * dz < 0.0015 * 0.0015 } }.toDouble() / grid.size
+        }
+        val plain = LocalModel.build(frs, resolution = 96)!!
+        val withAi = LocalModel.build(frs, resolution = 96, dense = dense)!!
+        val err = (0 until withAi.vertexCount).map { i ->
+            boxDistance(Vec3(withAi.xyz[3 * i].toDouble(), withAi.xyz[3 * i + 1].toDouble(), withAi.xyz[3 * i + 2].toDouble())) }.sorted()
+        println("tapa sin textura: cubierta sin IA %.0f %% · con IA %.0f %% · ajuste de escala ±%.2f %% · error mediano con IA %.2f mm".format(
+            topCoverage(plain) * 100, topCoverage(withAi) * 100, fitErr / dense.size * 100, err[err.size / 2] * 1000))
+        assertTrue(topCoverage(withAi) > 0.9)
+        assertTrue(topCoverage(withAi) > topCoverage(plain) + 0.3)
+        assertTrue(err[err.size / 2] < 0.001)
+    }
+
     @Test fun noParallaxNoPoints() {
         // Girar en el sitio (sin rodear la pieza) no da profundidad: no debe inventar puntos.
         val cloud = LivePointCloud()

@@ -186,6 +186,10 @@ class LivePointCloud(
             }
         }
         prevImage = gray
+        // Puntos medidos que se ven en esta vista: (u, v, profundidad) para escalar la IA.
+        lastObservedDepths = tracks.filter { it.point >= 0 && it.obs.last().kf == k }
+            .map { t -> val o = t.obs.last(); Triple(o.u, o.v, v.depth(px[t.point])) }
+            .filter { it.third in depthRange }
         buildFragment(k)
         return fixed
     }
@@ -196,6 +200,8 @@ class LivePointCloud(
      * la corrección es razonable frente a la INS.
      */
     private var lastInsCenter: Vec3? = null
+    /** Puntos triangulados vistos en la última vista añadida: (u, v, profundidad en m). */
+    @Volatile var lastObservedDepths: List<Triple<Double, Double, Double>> = emptyList(); private set
     /** Corrección actual de la posición INS (centro corregido − centro INS) para la AR. */
     @Volatile var insOffset: Vec3 = Vec3.ZERO; private set
 

@@ -50,6 +50,10 @@ interface ScanActions {
     fun setDeblurMotion(v: Boolean)
     /** Crear el modelo 3D en el móvil (sin servidor) con lo reconstruido en vivo. */
     fun buildLocalModel()
+    /** IA de profundidad (Depth Anything 3 Small) para el modelo del móvil. */
+    fun setUseDepthAi(v: Boolean)
+    fun setDepthModelUrl(v: String)
+    fun downloadDepthModel()
     /** Pose de la cámara en tiempo real para la guía en realidad aumentada (modo vídeo). */
     val arPose: kotlinx.coroutines.flow.StateFlow<ArPose?>
     /** Transformación de estabilización para un fotograma de la vista previa (o null). */

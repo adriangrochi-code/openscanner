@@ -26,6 +26,9 @@ import org.robolectric.annotation.GraphicsMode
 class ScanScreenshotTest {
 
     private object NoActions : ScanActions {
+        override fun setUseDepthAi(v: Boolean) {}
+        override fun setDepthModelUrl(v: String) {}
+        override fun downloadDepthModel() {}
         override fun buildLocalModel() {}
         override fun setDeblurMotion(v: Boolean) {}
         override val arPose = kotlinx.coroutines.flow.MutableStateFlow<ArPose?>(demoPose())

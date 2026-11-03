@@ -138,6 +138,11 @@ data class UiState(
     val localModel: com.tisma.scanner.recon.LivePointCloud.Fragment? = null,
     val localStl: File? = null,
     val localBusy: Boolean = false,
+    /** IA de profundidad (Depth Anything 3 Small) para el modelo del móvil. */
+    val useDepthAi: Boolean = true,
+    val depthModelReady: Boolean = false,
+    val depthModelText: String = "No descargado",
+    val depthModelUrl: String = "",
     /** Quitar el desenfoque de movimiento de las fotos en el móvil (con el giro medido por la INS). */
     val deblurMotion: Boolean = true,
     /** Trabajo largo en curso (p.ej. "Mejorando nitidez 12/40"). */
@@ -338,6 +343,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         imu.accelTap = { t, a -> if (autoCal.feed(t, a)) viewModelScope.launch(Dispatchers.Default) { onNewPose() } }
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
+        _state.update { it.copy(depthModelUrl = prefs.getString("depth_model_url", "") ?: "") }
+        refreshDepthModelState()
         cameras.videoMode = _state.value.videoMode
         com.tisma.scanner.diag.DiagLog.extra = {
             "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
@@ -854,6 +861,86 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     override fun setDeblurMotion(v: Boolean) = _state.update { it.copy(deblurMotion = v) }
 
+    // ------------------------------------------------------------------ IA de profundidad (DA3 Small)
+
+    private val depthModelFile get() = File(getApplication<Application>().filesDir, "models/da3_small.onnx")
+
+    private fun refreshDepthModelState() {
+        val f = depthModelFile
+        _state.update { it.copy(depthModelReady = f.exists(), depthModelText =
+            if (f.exists()) "Instalado · %.0f MB".format(f.length() / 1e6) else "No descargado") }
+    }
+
+    override fun setUseDepthAi(v: Boolean) = _state.update { it.copy(useDepthAi = v) }
+    override fun setDepthModelUrl(v: String) {
+        _state.update { it.copy(depthModelUrl = v.trim()) }
+        prefs.edit().putString("depth_model_url", v.trim()).apply()
+    }
+
+    /** Descarga el modelo (una vez) desde la URL configurada (por defecto, el propio Tisma Server). */
+    override fun downloadDepthModel() {
+        val url = _state.value.depthModelUrl.ifBlank { _state.value.cloudUrl.trimEnd('/') + "/models/da3_small.onnx" }
+        _state.update { it.copy(depthModelText = "Descargando…") }
+        viewModelScope.launch(Dispatchers.IO) {
+            val dst = depthModelFile; dst.parentFile?.mkdirs()
+            val part = File(dst.parentFile, dst.name + ".part")
+            try {
+                val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                _state.value.cloudKey.takeIf { it.isNotBlank() }?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                c.connectTimeout = 15000; c.readTimeout = 60000
+                if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
+                val total = c.contentLengthLong
+                c.inputStream.use { ins -> part.outputStream().use { out ->
+                    val buf = ByteArray(1 shl 16); var n: Int; var got = 0L; var lastUi = 0L
+                    while (ins.read(buf).also { n = it } >= 0) {
+                        out.write(buf, 0, n); got += n
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastUi > 300) { lastUi = now
+                            _state.update { it.copy(depthModelText = if (total > 0) "Descargando %d %%".format(got * 100 / total) else "Descargando %.0f MB".format(got / 1e6)) } }
+                    }
+                } }
+                // Comprobar que ONNX Runtime lo abre antes de darlo por bueno.
+                val ok = com.tisma.scanner.recon.DepthModel.load(part)?.use { m -> log("IA de profundidad: entrada ${m.inW}×${m.inH}"); true } ?: false
+                if (!ok) throw java.io.IOException("el archivo no es un modelo ONNX válido")
+                part.renameTo(dst)
+                refreshDepthModelState()
+            } catch (e: Exception) {
+                part.delete()
+                _state.update { it.copy(depthModelText = "✗ No se pudo descargar: ${e.message}") }
+            }
+        }
+    }
+
+    /**
+     * Profundidad densa con IA para cada vista guardada, ya en metros (alineada con los puntos
+     * medidos). Si no hay modelo o una vista no se puede alinear, se salta.
+     */
+    private fun aiDepthViews(): List<com.tisma.scanner.recon.DepthPrior.DepthView> {
+        val f = depthModelFile
+        if (!f.exists() || depthShots.isEmpty()) return emptyList()
+        val model = com.tisma.scanner.recon.DepthModel.load(f) ?: run { log("IA de profundidad: no se pudo cargar el modelo"); return emptyList() }
+        val out = ArrayList<com.tisma.scanner.recon.DepthPrior.DepthView>()
+        val shots = depthShots.toList()
+        val gw = MultiCameraController.KF_W; val gh = MultiCameraController.KF_H
+        model.use { m ->
+            for ((i, s) in shots.withIndex()) {
+                _state.update { it.copy(progressText = "Profundidad con IA ${i + 1}/${shots.size}") }
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(s.jpeg, 0, s.jpeg.size) ?: continue
+                val pred = runCatching { m.predict(bmp) }.getOrNull(); bmp.recycle()
+                if (pred == null) continue
+                // Puntos medidos (px de la imagen de seguimiento) a la rejilla de la predicción.
+                val samples = s.samples.map { (u, v, d) -> Triple(u * pred.w / gw, v * pred.h / gh, d) }
+                val fit = com.tisma.scanner.recon.DepthPrior.fit(pred.depth, pred.w, pred.h, samples) ?: continue
+                if (fit.relRms > 0.05) continue          // la IA no cuadra con lo medido en esta vista
+                val ds = s.samples.map { it.third }
+                out += com.tisma.scanner.recon.DepthPrior.DepthView(s.view, pred.w, pred.h,
+                    com.tisma.scanner.recon.DepthPrior.toMetric(pred.depth, fit, ds.min() * 0.7, ds.max() * 1.3, pred.w, pred.h), gw, gh)
+            }
+        }
+        log("IA de profundidad: ${out.size}/${shots.size} vistas alineadas con lo medido")
+        return out
+    }
+
     /** Carpeta del último escaneo (para guardar el modelo local junto a él). */
     @Volatile private var lastScanDir: File? = null
 
@@ -863,7 +950,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         reconExec.execute {
             try {
                 val t0 = SystemClock.uptimeMillis()
-                val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = 128) { p ->
+                val dense = if (_state.value.useDepthAi) aiDepthViews() else emptyList()
+                val model = com.tisma.scanner.recon.LocalModel.build(live.fragments(), resolution = 128, dense = dense) { p ->
                     _state.update { it.copy(progressText = "Creando modelo en el móvil %d %%".format((p * 100).toInt())) }
                 }
                 if (model == null) {
@@ -935,7 +1023,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         return Triple(out, w, h)
     }
 
-    override fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray) {
+    /** Vista guardada para la IA de profundidad: pose corregida, foto pequeña (JPEG) y puntos medidos. */
+    private class DepthShot(val view: com.tisma.scanner.recon.LivePointCloud.View, val jpeg: ByteArray,
+                            val samples: List<Triple<Double, Double, Double>>)
+    private val depthShots = java.util.concurrent.CopyOnWriteArrayList<DepthShot>()
+    @Volatile private var lastDepthDir: com.tisma.scanner.ins.Vec3? = null
+
+    override fun onVideoKeyframe(cameraId: String, timestampNs: Long, gray: FloatArray, thumb: IntArray, color: IntArray) {
         if (session == null) return
         // Si el móvil no da abasto, se salta (es sólo la vista previa).
         if (reconPending.get() >= 2) { com.tisma.scanner.diag.DiagLog.count("recon_saltado"); return }
@@ -965,6 +1059,18 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 val c = ins.onVisualKeyframe(t, xw, yw, zw, obs, fpx, w / 2.0, h / 2.0) ?: st.position
                 val view = com.tisma.scanner.recon.LivePointCloud.View(xw, yw, zw, c, fpx, w / 2.0, h / 2.0)
                 live.commit(view, thumb, MultiCameraController.THUMB_W, MultiCameraController.THUMB_H)
+                // Una vista para la IA de profundidad cada ~8° (como mucho 72): foto pequeña + puntos medidos.
+                val pd = lastDepthDir
+                val samples = live.lastObservedDepths
+                if (samples.size >= 12 && depthShots.size < 72 &&
+                    (pd == null || Math.toDegrees(kotlin.math.acos((pd dot view.zAxis).coerceIn(-1.0, 1.0))) >= 8.0)) {
+                    lastDepthDir = view.zAxis
+                    val bmp = android.graphics.Bitmap.createBitmap(color, MultiCameraController.DEPTH_W, MultiCameraController.DEPTH_H,
+                        android.graphics.Bitmap.Config.ARGB_8888)
+                    val bos = java.io.ByteArrayOutputStream()
+                    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, bos); bmp.recycle()
+                    depthShots += DepthShot(view, bos.toByteArray(), samples)
+                }
                 // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
                 session?.addRefinedPose(t, c, q)
                 com.tisma.scanner.diag.DiagLog.max("vis_corr_mm", ((c - st.position).norm() * 1000).toLong())
@@ -1258,6 +1364,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         lastVideoState = null; lastVideoSaveMs = 0; videoKept.set(0); videoFast.set(0)
         orbitDist = 0.0
         cards.clear(); lastCardDir = null
+        depthShots.clear(); lastDepthDir = null
         reconExec.execute { live.reset(); publishCloud() }
         _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null, localModel = null, localStl = null) }
         lastScanDir = s.dir

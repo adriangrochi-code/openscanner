@@ -69,6 +69,7 @@ DEFAULT_CONFIG = {
     "tls_cert": "",               # PEM; vacío = HTTP (poner detrás de IIS/Caddy con HTTPS)
     "tls_key": "",
     "allow_without_colmap": False,  # sólo pruebas: procesa imágenes aunque no haya COLMAP
+    "models_dir": "modelos",      # modelos de IA para la app (p.ej. da3_small.onnx), GET /models/<archivo>
 }
 
 
@@ -90,6 +91,8 @@ def load_config(path: Path) -> dict:
         raise SystemExit("La configuración no tiene ninguna clave en api_keys")
     data = Path(cfg["data_dir"])
     cfg["data_dir"] = str(data if data.is_absolute() else path.parent / data)
+    models = Path(cfg["models_dir"])
+    cfg["models_dir"] = str(models if models.is_absolute() else path.parent / models)
     return cfg
 
 
@@ -397,6 +400,19 @@ def make_handler(jobs: Jobs, cfg):
                     return
                 if parts == ["api", "scans"]:
                     return self._json(200, {"scans": jobs.list()})
+                # Modelos de IA para el móvil (Depth Anything 3 Small, Apache-2.0): sólo .onnx de la carpeta.
+                if len(parts) == 2 and parts[0] == "models":
+                    name = parts[1]
+                    f = Path(cfg["models_dir"]) / name
+                    if not re.fullmatch(r"[A-Za-z0-9._-]+\.onnx", name) or not f.is_file():
+                        return self._json(404, {"error": "modelo no disponible"})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(f.stat().st_size))
+                    self.end_headers()
+                    with open(f, "rb") as fh:
+                        shutil.copyfileobj(fh, self.wfile)
+                    return
                 if len(parts) == 3 and parts[:2] == ["api", "scans"]:
                     return self._json(200, jobs.status(parts[2]))
                 if len(parts) == 5 and parts[:2] == ["api", "scans"] and parts[3] == "files":
@@ -512,7 +528,10 @@ def selftest():
     scan_zip = make_demo_scan(tmp)
     key = "clave-de-prueba"
     cfg = {**DEFAULT_CONFIG, "host": "127.0.0.1", "port": 0, "api_keys": [key],
-           "data_dir": str(tmp / "datos"), "chunk_mb": 1, "allow_without_colmap": True, "colmap": "no-existe"}
+           "data_dir": str(tmp / "datos"), "chunk_mb": 1, "allow_without_colmap": True, "colmap": "no-existe",
+           "models_dir": str(tmp / "modelos")}
+    (tmp / "modelos").mkdir()
+    (tmp / "modelos" / "prueba.onnx").write_bytes(b"\x08\x01" * 1000)
     ready = threading.Event()
     threading.Thread(target=serve, args=(cfg, ready), daemon=True).start()
     ready.wait(10)
@@ -530,6 +549,13 @@ def selftest():
             return e.code, json.loads(e.read())
 
     assert call("GET", "/api/health", auth=False)[0] == 200
+    # Modelos para el móvil: con clave se descargan; sin clave, o con nombres raros, no.
+    req = urllib.request.Request(base + "/models/prueba.onnx")
+    req.add_header("Authorization", f"Bearer {key}")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        assert r.read() == b"\x08\x01" * 1000
+    assert call("GET", "/models/prueba.onnx", auth=False)[0] == 401
+    assert call("GET", "/models/..%2Fconfig.onnx")[0] == 404
     assert call("GET", "/api/scans", auth=False)[0] == 401, "sin clave debe rechazar"
     data = scan_zip.read_bytes()
     code, r = call("POST", "/api/scans", {"size": len(data), "name": "autoprueba"})
