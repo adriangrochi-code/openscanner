@@ -516,13 +516,13 @@ private fun CloudTab(s: UiState, vm: ScanActions) {
     }
     Hint("La subida se reanuda sola si se corta la conexión. Mejor por Wi-Fi: un escaneo ocupa 0,5-2 GB.")
     Section("IA de profundidad en el móvil")
-    Hint("Depth Anything 3 Small (Apache-2.0, uso comercial permitido). Rellena con profundidad densa " +
-        "las zonas lisas sin textura del modelo hecho en el móvil; la escala la ponen los puntos medidos, " +
-        "así que no inventa medidas.")
+    Hint("Depth Anything 3 Small (Apache-2.0, uso comercial permitido), incluido en la app. Rellena con " +
+        "profundidad densa las zonas lisas sin textura del modelo hecho en el móvil; la escala la ponen los " +
+        "puntos medidos, así que no inventa medidas. La descarga sólo hace falta para actualizarlo.")
     Mono(s.depthModelText, if (s.depthModelReady) Tisma.Ok else Tisma.TextDim)
     SettingSwitch("Usarla al crear el modelo en el móvil", s.useDepthAi, enabled = s.depthModelReady, onChange = vm::setUseDepthAi)
     TextSetting("Descargar de", s.depthModelUrl, "${s.cloudUrl.trimEnd('/')}/models/da3_small.onnx", secret = false, onChange = vm::setDepthModelUrl)
-    SecondaryButton(if (s.depthModelReady) "Volver a descargar" else "Descargar modelo (~100 MB)",
+    SecondaryButton(if (s.depthModelReady) "Actualizar desde el servidor" else "Descargar modelo",
         Modifier.fillMaxWidth().padding(top = 6.dp), enabled = !s.depthModelText.startsWith("Descargando")) { vm.downloadDepthModel() }
 }
 

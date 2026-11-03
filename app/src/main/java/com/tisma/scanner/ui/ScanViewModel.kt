@@ -345,6 +345,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.lockFocus = prefs.getBoolean("lock_focus_ok", true)
         _state.update { it.copy(depthModelUrl = prefs.getString("depth_model_url", "") ?: "") }
         refreshDepthModelState()
+        viewModelScope.launch(Dispatchers.IO) { installBundledDepthModel(); refreshDepthModelState() }
         cameras.videoMode = _state.value.videoMode
         com.tisma.scanner.diag.DiagLog.extra = {
             "escaneo=${if (session != null) "sí" else "no"} · capturando=${if (sequenceRunning) "sí" else "no"} · " +
@@ -864,6 +865,31 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     // ------------------------------------------------------------------ IA de profundidad (DA3 Small)
 
     private val depthModelFile get() = File(getApplication<Application>().filesDir, "models/da3_small.onnx")
+
+    /**
+     * Modelo incluido en el APK (assets/models): se copia una vez a la memoria de la app (ONNX
+     * Runtime necesita un archivo). Si viene partido en trozos (.part00, .part01…) se une.
+     * Se vuelve a copiar si cambia la versión incluida (otro da3_small.json).
+     */
+    private fun installBundledDepthModel() {
+        val am = getApplication<Application>().assets
+        val names = runCatching { am.list("models")?.toList() }.getOrNull().orEmpty()
+        val parts = if ("da3_small.onnx" in names) listOf("da3_small.onnx")
+            else names.filter { it.startsWith("da3_small.onnx.part") }.sorted()
+        if (parts.isEmpty()) return
+        val sig = runCatching { am.open("models/da3_small.json").use { it.readBytes().contentHashCode().toString() } }.getOrDefault(parts.joinToString())
+        val dst = depthModelFile
+        if (dst.exists() && prefs.getString("bundled_model_sig", "") == sig) return
+        _state.update { it.copy(depthModelText = "Preparando el modelo incluido…") }
+        dst.parentFile?.mkdirs()
+        val tmp = File(dst.parentFile, dst.name + ".part")
+        runCatching {
+            tmp.outputStream().use { out -> for (p in parts) am.open("models/$p").use { it.copyTo(out, 1 shl 16) } }
+            tmp.renameTo(dst)
+            prefs.edit().putString("bundled_model_sig", sig).apply()
+            log("IA de profundidad: modelo incluido en la app listo (%.0f MB)".format(dst.length() / 1e6))
+        }.onFailure { tmp.delete(); log("IA de profundidad: no se pudo preparar el modelo incluido: ${it.message}") }
+    }
 
     private fun refreshDepthModelState() {
         val f = depthModelFile

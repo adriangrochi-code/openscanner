@@ -9,6 +9,9 @@ on:
       - "tools/export_da3_onnx.py"
       - ".github/workflows/da3-onnx.yml"
 
+permissions:
+  contents: write     # para dejar el modelo dentro de la app (app/src/main/assets)
+
 jobs:
   export:
     runs-on: ubuntu-latest
@@ -29,10 +32,32 @@ jobs:
         # Sin el volcado del grafo (miles de líneas "%n : ...") para que se vea el error real.
         run: |
           set -o pipefail
-          python tools/export_da3_onnx.py --out modelos/da3_small.onnx 2>&1 | grep -v -E '^\s+%[0-9]+ :|^\s+return \(%' | tail -120
+          python tools/export_da3_onnx.py --out modelos/da3_small.onnx --quantized modelos/da3_small_int8.onnx 2>&1 \
+            | grep -v -E '^\s+%[0-9]+ :|^\s+return \(%' | tail -120
       - uses: actions/upload-artifact@v4
         with:
           name: da3_small-onnx
           path: |
             modelos/da3_small.onnx
+            modelos/da3_small_int8.onnx
             modelos/da3_small.json
+      # El modelo va DENTRO del APK (app/src/main/assets): la app se instala y funciona sin descargas.
+      # int8 si pasó la comprobación; si no, el completo partido en trozos (< 100 MB por archivo en GitHub).
+      - name: Meter el modelo en la app
+        run: |
+          mkdir -p app/src/main/assets/models
+          rm -f app/src/main/assets/models/da3_small*
+          if [ -f modelos/da3_small_int8.onnx ]; then
+            cp modelos/da3_small_int8.onnx app/src/main/assets/models/da3_small.onnx
+          else
+            split -b 90m -d modelos/da3_small.onnx app/src/main/assets/models/da3_small.onnx.part
+          fi
+          cp modelos/da3_small.json app/src/main/assets/models/da3_small.json
+          ls -la app/src/main/assets/models
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/models
+          if git diff --cached --quiet; then echo "sin cambios"; exit 0; fi
+          git commit -m "Modelo DA3-Small (Apache-2.0) dentro de la app, generado y comprobado por el workflow"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

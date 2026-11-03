@@ -89,6 +89,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="depth-anything/DA3-SMALL")
     ap.add_argument("--out", type=Path, default=Path("modelos/da3_small.onnx"))
+    ap.add_argument("--quantized", type=Path, help="también una versión int8 (si coincide con la oficial)")
     a = ap.parse_args()
     if not any(s in a.model.upper() for s in ("DA3-SMALL", "DA3-BASE")):
         raise SystemExit("Sólo DA3-SMALL o DA3-BASE (Apache-2.0); el resto es no comercial.")
@@ -131,6 +132,20 @@ def main():
     assert corr > 0.98, "el preprocesado no coincide con el oficial"
     meta = {"model": a.model, "license": "Apache-2.0", "input": [1, 1, 3, H, W], "normalization": "ImageNet",
             "outputs": names, "depth_kind": "relative (DA3 'depth')", "check_onnx_vs_torch": rel, "check_vs_official": corr}
+
+    # 3) Versión cuantizada a 8 bits (pesos int8): ~4 veces más pequeña y más rápida en el móvil.
+    #    Sólo se acepta si sigue reproduciendo la profundidad oficial.
+    if a.quantized:
+        from onnxruntime.quantization import QuantType, quantize_dynamic
+        quantize_dynamic(str(a.out), str(a.quantized), weight_type=QuantType.QInt8)
+        q = ort.InferenceSession(str(a.quantized), providers=["CPUExecutionProvider"]).run(None, {"image": x.numpy()})[0][0]
+        corr_q = float(np.corrcoef(d_api.ravel(), q.ravel())[0, 1])
+        print(f"[export] int8: {a.quantized.stat().st_size / 1e6:.1f} MB · correlación con la oficial {corr_q:.4f}")
+        meta["int8"] = {"file": a.quantized.name, "mb": a.quantized.stat().st_size / 1e6, "check_vs_official": corr_q,
+                        "accepted": corr_q >= 0.99}
+        if corr_q < 0.99:
+            a.quantized.unlink()
+            print("[export] int8 descartado: se aleja demasiado del modelo oficial")
     a.out.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print("[export] OK", json.dumps(meta))
 
