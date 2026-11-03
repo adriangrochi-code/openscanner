@@ -138,6 +138,10 @@ data class UiState(
     val localModel: com.tisma.scanner.recon.LivePointCloud.Fragment? = null,
     val localStl: File? = null,
     val localBusy: Boolean = false,
+    /** Malla cerrada que se va formando mientras se graba (preproceso). */
+    val liveMesh: com.tisma.scanner.recon.LivePointCloud.Fragment? = null,
+    /** Qué se está adelantando mientras se graba ("adelantando: IA 5/12 · nitidez 3/8"). */
+    val prepText: String = "",
     /** El modelo del móvil ya incluye la IA de profundidad (si no, es la malla rápida). */
     val localAi: Boolean = false,
     /** IA de profundidad (Depth Anything 3 Small) para el modelo del móvil. */
@@ -974,29 +978,106 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * Profundidad densa con IA para cada vista guardada, ya en metros (alineada con los puntos
      * medidos). Si no hay modelo o una vista no se puede alinear, se salta.
      */
+    /** Profundidad de la IA de una vista, ya en metros (alineada con los puntos medidos) o null. */
+    private fun aiViewFor(m: com.tisma.scanner.recon.DepthModel, s: com.tisma.scanner.recon.DepthShot): com.tisma.scanner.recon.DepthPrior.DepthView? {
+        val gw = MultiCameraController.KF_W; val gh = MultiCameraController.KF_H
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(s.jpeg, 0, s.jpeg.size) ?: return null
+        val pred = runCatching { m.predict(bmp) }.getOrNull(); bmp.recycle()
+        if (pred == null) return null
+        // Puntos medidos (px de la imagen de seguimiento) a la rejilla de la predicción.
+        val samples = s.samples.map { (u, v, d) -> Triple(u * pred.w / gw, v * pred.h / gh, d) }
+        val fit = com.tisma.scanner.recon.DepthPrior.fit(pred.depth, pred.w, pred.h, samples) ?: return null
+        if (fit.relRms > 0.05) return null          // la IA no cuadra con lo medido en esta vista
+        val ds = s.samples.map { it.third }
+        return com.tisma.scanner.recon.DepthPrior.DepthView(s.view, pred.w, pred.h,
+            com.tisma.scanner.recon.DepthPrior.toMetric(pred.depth, fit, ds.min() * 0.7, ds.max() * 1.3, pred.w, pred.h), gw, gh)
+    }
+
+    /**
+     * Profundidad con IA de todas las vistas: las que ya se calcularon mientras se grababa
+     * (`aiCache`) no se repiten; sólo las que falten.
+     */
     private fun aiDepthViews(shots: List<com.tisma.scanner.recon.DepthShot>): List<com.tisma.scanner.recon.DepthPrior.DepthView> {
         val f = depthModelFile
         if (!f.exists() || shots.isEmpty()) return emptyList()
-        val model = com.tisma.scanner.recon.DepthModel.load(f) ?: run { log("IA de profundidad: no se pudo cargar el modelo"); return emptyList() }
         val out = ArrayList<com.tisma.scanner.recon.DepthPrior.DepthView>()
-        val gw = MultiCameraController.KF_W; val gh = MultiCameraController.KF_H
-        model.use { m ->
-            for ((i, s) in shots.withIndex()) {
-                progress("Profundidad con IA ${i + 1}/${shots.size}", (i + 1) * 100 / shots.size)
-                val bmp = android.graphics.BitmapFactory.decodeByteArray(s.jpeg, 0, s.jpeg.size) ?: continue
-                val pred = runCatching { m.predict(bmp) }.getOrNull(); bmp.recycle()
-                if (pred == null) continue
-                // Puntos medidos (px de la imagen de seguimiento) a la rejilla de la predicción.
-                val samples = s.samples.map { (u, v, d) -> Triple(u * pred.w / gw, v * pred.h / gh, d) }
-                val fit = com.tisma.scanner.recon.DepthPrior.fit(pred.depth, pred.w, pred.h, samples) ?: continue
-                if (fit.relRms > 0.05) continue          // la IA no cuadra con lo medido en esta vista
-                val ds = s.samples.map { it.third }
-                out += com.tisma.scanner.recon.DepthPrior.DepthView(s.view, pred.w, pred.h,
-                    com.tisma.scanner.recon.DepthPrior.toMetric(pred.depth, fit, ds.min() * 0.7, ds.max() * 1.3, pred.w, pred.h), gw, gh)
+        val missing = ArrayList<Int>()
+        for ((i, s) in shots.withIndex()) {
+            if (aiCache.containsKey(i) && aiCacheScan == lastScanDir) aiCache[i]?.let { out += it } else missing += i
+        }
+        if (missing.isNotEmpty()) {
+            val model = com.tisma.scanner.recon.DepthModel.load(f) ?: run { log("IA de profundidad: no se pudo cargar el modelo"); return out }
+            model.use { m ->
+                for ((n, i) in missing.withIndex()) {
+                    progress("Profundidad con IA ${n + 1}/${missing.size}", (n + 1) * 100 / missing.size)
+                    aiViewFor(m, shots[i])?.let { out += it }
+                }
             }
         }
-        log("IA de profundidad: ${out.size}/${shots.size} vistas alineadas con lo medido")
+        log("IA de profundidad: ${out.size}/${shots.size} vistas alineadas con lo medido (${shots.size - missing.size} ya hechas mientras se grababa)")
         return out
+    }
+
+    // ------------------------------------------------------------------ preproceso mientras se graba
+
+    /** Trabajo adelantado con la potencia que sobra al grabar (prioridad baja, pocos núcleos). */
+    private val pre = com.tisma.scanner.session.IdleWorker()
+    /** IA de profundidad ya calculada, por índice de vista (null = no se pudo alinear). */
+    private val aiCache = java.util.concurrent.ConcurrentHashMap<Int, com.tisma.scanner.recon.DepthPrior.DepthView?>()
+    @Volatile private var aiCacheScan: File? = null
+    @Volatile private var captureModel: com.tisma.scanner.recon.DepthModel? = null
+    private val preDeblurred = java.util.concurrent.atomic.AtomicInteger()
+    private val preDeblurQueued = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile private var lastLiveMeshMs = 0L
+    @Volatile private var lastLiveMeshFragments = 0
+
+    private fun prepText() {
+        val parts = buildList {
+            if (aiCache.isNotEmpty() || depthShots.isNotEmpty()) if (_state.value.useDepthAi && _state.value.depthModelReady)
+                add("IA ${aiCache.size}/${depthShots.size}")
+            if (preDeblurQueued.get() > 0) add("nitidez ${preDeblurred.get()}/${preDeblurQueued.get()}")
+        }
+        _state.update { it.copy(prepText = if (parts.isEmpty()) "" else "adelantando: " + parts.joinToString(" · ")) }
+    }
+
+    /** Vista nueva para la IA: se calcula ya (2 núcleos), y la malla final no tendrá que esperarla. */
+    private fun preAiDepth(index: Int, shot: com.tisma.scanner.recon.DepthShot) {
+        if (!_state.value.useDepthAi || !_state.value.depthModelReady) return
+        pre.submit(com.tisma.scanner.session.IdleWorker.Priority.HIGH) {
+            val m = captureModel ?: com.tisma.scanner.recon.DepthModel.load(depthModelFile, threads = 2)?.also { captureModel = it } ?: return@submit
+            aiCache[index] = aiViewFor(m, shot)
+            prepText()
+        }
+    }
+
+    /** Malla cerrada en vivo cada ~8 s (rápida, con la IA ya calculada): se ve la pieza formándose. */
+    private fun preLiveMesh(now: Long) {
+        if (now - lastLiveMeshMs < 8000) return
+        val n = live.fragments().size
+        if (n < 3 || n == lastLiveMeshFragments) return
+        lastLiveMeshMs = now
+        pre.submit(com.tisma.scanner.session.IdleWorker.Priority.NORMAL) {
+            val frs = live.fragments(); lastLiveMeshFragments = frs.size
+            val dense = aiCache.values.filterNotNull()
+            val t0 = SystemClock.uptimeMillis()
+            val m = com.tisma.scanner.recon.LocalModel.build(frs, resolution = 64, dense = dense) ?: return@submit
+            _state.update { it.copy(liveMesh = m.asFragment(maxTris = 15_000)) }
+            com.tisma.scanner.diag.DiagLog.max("malla_vivo_ms", SystemClock.uptimeMillis() - t0)
+        }
+    }
+
+    /** Foto movida guardada: se corrige ya (2 núcleos) y se anota, para no repetirla al final. */
+    private fun preDeblur(dir: File, f: File, dx: Double, dy: Double) {
+        preDeblurQueued.incrementAndGet(); prepText()
+        pre.submit(com.tisma.scanner.session.IdleWorker.Priority.LOW) {
+            val r = runCatching { com.tisma.scanner.quality.JpegDeblur.apply(f, dx, dy, threads = 2) }.getOrDefault(false)
+            val log = File(dir, "deblurred.csv")
+            synchronized(this) {
+                if (!log.exists()) log.writeText("file,blur_dx_px,blur_dy_px,applied\n")
+                log.appendText("${f.relativeTo(dir).invariantSeparatorsPath},%.2f,%.2f,%d\n".format(java.util.Locale.US, dx, dy, if (r) 1 else 0))
+            }
+            preDeblurred.incrementAndGet(); prepText()
+        }
     }
 
     /** Progreso de un trabajo largo: en la app y en la notificación del procesado en segundo plano. */
@@ -1141,7 +1222,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                         android.graphics.Bitmap.Config.ARGB_8888)
                     val bos = java.io.ByteArrayOutputStream()
                     bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, bos); bmp.recycle()
-                    depthShots += com.tisma.scanner.recon.DepthShot(view, bos.toByteArray(), samples)
+                    val shot = com.tisma.scanner.recon.DepthShot(view, bos.toByteArray(), samples)
+                    depthShots += shot
+                    preAiDepth(depthShots.size - 1, shot)
                 }
                 // Pose corregida de este fotograma: va a la sesión para la reconstrucción final.
                 session?.addRefinedPose(t, c, q)
@@ -1438,6 +1521,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         orbitDist = 0.0
         cards.clear(); lastCardDir = null
         depthShots.clear(); lastDepthDir = null
+        aiCache.clear(); aiCacheScan = s.dir; preDeblurred.set(0); preDeblurQueued.set(0)
+        lastLiveMeshMs = 0; lastLiveMeshFragments = 0
+        pre.open()
+        _state.update { it.copy(liveMesh = null, prepText = "") }
         reconExec.execute { live.reset(); publishCloud() }
         _state.update { it.copy(cloudPly = null, surfaceObj = null, instruction = null, localModel = null, localStl = null, localAi = false) }
         lastScanDir = s.dir
@@ -1503,6 +1590,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         stopping = null
         log("Escaneo guardado: ${s.imageCount.get()} imágenes en ${s.dir.absolutePath}")
         reconSaved.await()
+        // Lo adelantado mientras se grababa: se espera a lo que esté en marcha y se cierra la cola.
+        pre.closeAndDrain()
+        captureModel?.close(); captureModel = null
+        _state.update { it.copy(prepText = "") }
         // Lo que falta, en disco: así se puede retomar si la app se cierra.
         val jobs = if (_state.value.deblurMotion) generateSequence { deblurJobs.poll() }.toList() else { deblurJobs.clear(); emptyList() }
         deblurTimes.clear()
@@ -1640,6 +1731,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             val now = SystemClock.uptimeMillis()
             previewWatchdog(now)
             updateArPose(now)
+            if (s != null && _state.value.videoMode) preLiveMesh(now)
             if (now - lastSensorUi > 1000) {
                 lastSensorUi = now
                 val status = imu.status()
@@ -1712,6 +1804,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 if (vec != null && _state.value.deblurMotion && blurPx >= com.tisma.scanner.quality.MotionDeblur.minPx(width) &&
                     blurPx <= com.tisma.scanner.quality.MotionDeblur.MAX_PX) {
                     deblurJobs += Triple(File(s.dir, "images/$cameraId/$t.jpg"), vec.first, vec.second)
+                    preDeblur(s.dir, File(s.dir, "images/$cameraId/$t.jpg"), vec.first, vec.second)
                     deblurTimes += t
                 }
                 // Análisis en segundo plano; si se acumula (ráfagas), se salta para no agotar memoria.
@@ -1876,6 +1969,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             if (resumed && frs.isNotEmpty()) _state.update { it.copy(surface = frs) }
             fun done(step: String) { steps.remove(step); savePending(dir, steps) }
             if ("malla_rapida" in steps) {
+                // La malla en vivo (hecha mientras se grababa) se enseña YA; la rápida la sustituye en segundos.
+                if (!resumed) _state.value.liveMesh?.let { lm -> _state.update { it.copy(localModel = lm, localAi = false) } }
                 kotlinx.coroutines.withContext(Dispatchers.Default) { if (frs.size >= 2) buildModel(frs, shots, false, 80, "Malla rápida") }
                 done("malla_rapida")
             }
@@ -1992,6 +2087,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cameras.release()
         analysis.shutdown()
         reconExec.shutdown()
+        pre.shutdown()
         writer.shutdown()
     }
 

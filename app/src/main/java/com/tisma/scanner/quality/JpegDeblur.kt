@@ -10,7 +10,9 @@ import java.io.File
  * Sobrescribe el archivo. Devuelve false si no se pudo.
  */
 object JpegDeblur {
-    fun apply(file: File, dx: Double, dy: Double, quality: Int = 95): Boolean {
+    /** @param threads núcleos a usar (pocos mientras se graba, para no quitárselos a la cámara). */
+    fun apply(file: File, dx: Double, dy: Double, quality: Int = 95,
+              threads: Int = Runtime.getRuntime().availableProcessors()): Boolean {
         val len = kotlin.math.hypot(dx, dy)
         if (len > MotionDeblur.MAX_PX) return false
         val opts = BitmapFactory.Options().apply { inMutable = true; inPreferredConfig = Bitmap.Config.ARGB_8888 }
@@ -20,7 +22,7 @@ object JpegDeblur {
             // Todos los píxeles a memoria, corrección en paralelo (todos los núcleos), de vuelta al bitmap.
             val px = IntArray(w * h)
             bmp.getPixels(px, 0, w, 0, 0, w, h)
-            val out = MotionDeblur.deblurArgb(px, w, h, MotionDeblur.lineKernel(dx, dy))
+            val out = MotionDeblur.deblurArgb(px, w, h, MotionDeblur.lineKernel(dx, dy), threads = threads)
             bmp.setPixels(out, 0, w, 0, 0, w, h)
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, quality, it) }

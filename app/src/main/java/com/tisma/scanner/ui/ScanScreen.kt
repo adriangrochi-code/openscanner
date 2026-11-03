@@ -33,6 +33,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -743,9 +744,11 @@ private fun VideoCaptureScreen(
             if (!s.scanning) FramingGuide(toneColor, Modifier.fillMaxSize())
             if (s.scanning) Box(Modifier.fillMaxSize().border(3.dp, toneColor.copy(alpha = 0.85f)))
             // La pieza en vivo, en pequeño, si se pide.
-            if (showPiece && s.surface.isNotEmpty()) {
+            // La pieza que se va formando: malla cerrada si ya hay (preproceso), si no los trozos en vivo.
+            val piece = s.liveMesh?.let { listOf(it) } ?: s.surface
+            if (showPiece && piece.isNotEmpty()) {
                 Box(Modifier.align(Alignment.TopEnd).padding(10.dp).size(110.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xCC1E1E22))) {
-                    PieceView(s.surface, textured = !s.scanning, modifier = Modifier.fillMaxSize())
+                    PieceView(piece, textured = !s.scanning, modifier = Modifier.fillMaxSize())
                 }
             }
         }
@@ -807,7 +810,8 @@ private fun VideoCaptureScreen(
                     BandBar(s)
                 }
                 Spacer(Modifier.height(6.dp))
-                if (s.scanning) Text("${s.videoFrames} fotogramas · ${(s.coveragePct * 100).toInt()} % cubierto", color = Tisma.TextDim, fontSize = 12.sp)
+                if (s.scanning) Text("${s.videoFrames} fotogramas · ${(s.coveragePct * 100).toInt()} % cubierto" +
+                    (if (s.prepText.isNotEmpty()) " · ${s.prepText}" else ""), color = Tisma.TextDim, fontSize = 12.sp, textAlign = TextAlign.Center)
                 else StatusLine(s)
             }
         }
@@ -952,7 +956,7 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
     BackHandler { onClose() }
     var textured by remember { mutableStateOf(true) }
     Box(Modifier.fillMaxSize().background(Tisma.Bg)) {
-        val shown = s.localModel?.let { listOf(it) } ?: s.surface
+        val shown = (s.localModel ?: s.liveMesh)?.let { listOf(it) } ?: s.surface
         if (shown.isNotEmpty()) {
             PieceView(shown, textured = textured, modifier = Modifier.fillMaxSize().padding(top = 90.dp, bottom = 280.dp), interactive = true)
         } else Text(if (s.busy) "Guardando…" else "No se pudo armar la vista previa (poca textura o sin girar alrededor).",

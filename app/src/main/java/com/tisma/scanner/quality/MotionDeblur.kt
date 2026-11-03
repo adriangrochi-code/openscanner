@@ -143,7 +143,11 @@ object MotionDeblur {
         val reach = kernel.maxOf { kotlin.math.abs(it[1]) }
         val margin = reach * iterations * 2 + 4
         val bands = (0 until h step bandRows).toList()
-        val pool = java.util.concurrent.Executors.newFixedThreadPool(maxOf(1, threads))
+        // Con pocos núcleos (mientras se graba) los hilos van a prioridad baja: la cámara primero.
+        val low = threads < Runtime.getRuntime().availableProcessors()
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(maxOf(1, threads)) { r ->
+            Thread(r, "nitidez").apply { isDaemon = true; if (low) priority = Thread.MIN_PRIORITY }
+        }
         try {
             val futures = bands.map { y0 ->
                 pool.submit {

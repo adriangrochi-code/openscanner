@@ -66,9 +66,10 @@ class DepthModel private constructor(private val env: OrtEnvironment, private va
         private val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
         private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 
-        fun load(file: File): DepthModel? = runCatching {
+        /** @param threads núcleos para la red (pocos mientras se graba, todos después). */
+        fun load(file: File, threads: Int = 4): DepthModel? = runCatching {
             val env = OrtEnvironment.getEnvironment()
-            val opts = OrtSession.SessionOptions().apply { setIntraOpNumThreads(4) }
+            val opts = OrtSession.SessionOptions().apply { setIntraOpNumThreads(threads) }
             DepthModel(env, env.createSession(file.absolutePath, opts))
         }.getOrNull()
     }
