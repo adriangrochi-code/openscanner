@@ -140,7 +140,14 @@ class StrapdownIns(
 
     private var originOffset = Vec3.ZERO
 
-    @Synchronized fun onAccel(tNs: Long, a: Vec3) {
+    /**
+     * Calibración de 6 caras del acelerómetro (sesgo + escala por eje). Se aplica a cada muestra
+     * antes de todo lo demás; el Kalman sigue estimando el pequeño error que quede.
+     */
+    @Volatile var accelCalibration: AccelCalibration.Result? = null
+
+    @Synchronized fun onAccel(tNs: Long, raw: Vec3) {
+        val a = accelCalibration?.apply(raw) ?: raw
         lastAccel = a
         if (!filter.isInitialized) filter.initialize(a - kf.b)
     }

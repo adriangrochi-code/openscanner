@@ -52,6 +52,7 @@ class ScanScreenshotTest {
         override fun runDriftTest() {}
         override fun cancelDriftTest() {}
         override fun setDriftMinutes(m: Int) {}
+        override fun resetAutoCalibration() {}
         override fun setCloudUrl(v: String) {}
         override fun setCloudKey(v: String) {}
         override fun sendToCloud() {}
@@ -134,6 +135,11 @@ class ScanScreenshotTest {
             "✓ Calibración guardada y aplicada"),
         driftFiles = listOf(File("deriva_20261102_184000.csv"), File("deriva_20261102_184000.txt")),
     ), 4, settings = true)
+
+    @Test fun precisionBadge() = shot("precision_badge", UiState(
+        precisionBadge = "✓ Precisión mejorada · 4 posturas · sesgo", stationary = true,
+        cameras = listOf("#0 back 72°"), openedStreams = listOf("#0 back 72° → 4000x3000"),
+    ), 0)
 
     @Test fun idle() = shot("idle", UiState(cameras = scanning.cameras, openedStreams = scanning.openedStreams), 0)
 

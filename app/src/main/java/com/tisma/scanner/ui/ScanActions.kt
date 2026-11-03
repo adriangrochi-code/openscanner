@@ -37,6 +37,8 @@ interface ScanActions {
     fun runDriftTest()
     fun cancelDriftTest()
     fun setDriftMinutes(m: Int)
+    /** Borra la calibración automática del acelerómetro y sus posturas guardadas. */
+    fun resetAutoCalibration()
     fun setCloudUrl(v: String)
     fun setCloudKey(v: String)
     /** Enviar el último escaneo a Tisma Server y traer la pieza. */

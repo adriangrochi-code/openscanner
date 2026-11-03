@@ -115,6 +115,8 @@ private fun CameraScreen(
             if (s.busy) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp), color = Tisma.Purple)
             Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Zona de mejora de precisión: sólo aparece de tanto en tanto, unos segundos.
+                    if (s.precisionBadge.isNotEmpty()) Chip(s.precisionBadge, if (s.precisionBadge.startsWith("✓")) Tisma.Ok else Tisma.PurpleText)
                     if (s.rigText.isNotEmpty()) Chip(s.rigText.substringBefore(" — "), Tisma.PurpleText)
                     s.opticsText.split(" · ").filter { it.isNotBlank() }.chunked(2).forEach { Chip(it.joinToString(" · ")) }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -492,6 +494,13 @@ private fun TextSetting(label: String, value: String, placeholder: String, secre
 
 @Composable
 private fun LogTab(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
+    Section("Calibración automática")
+    Hint("Se hace sola: cada vez que dejas el móvil quieto unos segundos en una postura distinta " +
+        "(boca arriba, de pie, de costado…) mejora la corrección del acelerómetro.")
+    Mono(s.autoCalText, if (s.accelCalibrated) Tisma.Ok else Tisma.TextDim)
+    SecondaryButton("Reiniciar calibración", Modifier.fillMaxWidth().padding(vertical = 4.dp), enabled = !s.scanning) {
+        vm.resetAutoCalibration()
+    }
     Section("Calibración base")
     Hint("Mide la deriva real de la INS durante un tiempo y deja un registro (CSV + resumen). " +
         "Quieto sobre una mesa: deriva de base y calibración. Caminando: comparación con el GPS.")

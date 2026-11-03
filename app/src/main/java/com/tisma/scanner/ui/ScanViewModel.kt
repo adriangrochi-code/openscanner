@@ -92,6 +92,12 @@ data class UiState(
     val driftFiles: List<File> = emptyList(),
     /** Calibración en uso: "02/11 18:40 · giro 0,004 °/s · acel 0,045 m/s²" o "". */
     val calibrationText: String = "",
+    // --- Calibración automática (en segundo plano) ---
+    /** Aviso breve "✓ Precisión mejorada…" que aparece de tanto en tanto ("" = oculto). */
+    val precisionBadge: String = "",
+    /** Estado de la calibración automática para Registro. */
+    val autoCalText: String = "",
+    val accelCalibrated: Boolean = false,
     // --- Precisión de la INS ---
     /** Segundos restantes de la prueba de quietud (0 = no está en marcha). */
     val imuTestRemaining: Int = 0,
@@ -228,6 +234,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private val prefs = app.getSharedPreferences("tisma", Context.MODE_PRIVATE)
     private var cloudJob: Job? = null
     private var driftJob: Job? = null
+    private val autoCal = com.tisma.scanner.ins.AccelCalibration()
+    private var badgeJob: Job? = null
+    /** Calibración nueva calculada durante un escaneo: se aplica al terminarlo. */
+    @Volatile private var pendingCal: com.tisma.scanner.ins.AccelCalibration.Result? = null
     // Velocímetro óptico: fotograma anterior y estadísticas.
     private var prevFlow: Triple<Long, FloatArray, String>? = null
     private val flowAccepted = java.util.concurrent.atomic.AtomicInteger(0)
@@ -270,8 +280,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val hidden = inventory.values.filter { it.probed }.map { it.id }
         if (hidden.isNotEmpty()) log("Cámaras ocultas encontradas por número: ${hidden.joinToString()}")
         log("Objetivos: ${roles.describe()}")
+        loadAccelCalibration()
         loadCalibration()
         refreshDriftFiles()
+        // Calibración automática: escucha el acelerómetro siempre; cada reposo en una postura
+        // nueva puede mejorarla, sin pedir nada al usuario.
+        imu.accelTap = { t, a -> if (autoCal.feed(t, a)) viewModelScope.launch(Dispatchers.Default) { onNewPose() } }
         log("Conjuntos concurrentes: " + concurrentSets.joinToString { s -> s.joinToString("+", "{", "}") })
         loop = viewModelScope.launch(Dispatchers.Default) { insLoop() }
     }
@@ -498,7 +512,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 _state.update { it.copy(imuTestRemaining = s, imuReport = listOf("Midiendo… no toques el móvil ($s s)")) }
                 delay(1000)
             }
-            val (acc, gyr) = imu.stopStillCapture()
+            val (accRaw, gyr) = imu.stopStillCapture()
+            val acc = calibrated(accRaw)
             _state.update { it.copy(imuTestRemaining = 0, imuReport = listOf("Analizando…")) }
             val report = kotlinx.coroutines.withContext(Dispatchers.Default) {
                 com.tisma.scanner.ins.ImuStillTest.analyze(acc, gyr)
@@ -532,7 +547,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     /** Aplica los sesgos medidos, los guarda (se recuperan al abrir la app) y reinicia la INS. */
     private fun applyCalibration(report: com.tisma.scanner.ins.StillReport) {
         val gb = report.gyroBiasDegS * Math.toRadians(1.0)
-        val ab = report.accelBias
+        // Con la calibración de 6 caras, el sesgo del acelerómetro ya está corregido en todos los
+        // ejes: lo que quede lo afina el Kalman (no se apila otra corrección encima).
+        val ab = if (ins.accelCalibration != null) com.tisma.scanner.ins.Vec3.ZERO else report.accelBias
         ins.gyroBiasPrior = gb
         ins.accelBiasPrior = ab
         ins.reset()
@@ -553,6 +570,90 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             it.copy(calibrationText = "$date · giróscopo %.3f °/s · acelerómetro %.3f m/s²".format(
                 Math.toDegrees(ins.gyroBiasPrior.norm()), ins.accelBiasPrior.norm()))
         }
+    }
+
+    /** Muestras crudas del acelerómetro con la calibración de 6 caras aplicada. */
+    private fun calibrated(raw: List<com.tisma.scanner.ins.ImuSample>): List<com.tisma.scanner.ins.ImuSample> {
+        val c = ins.accelCalibration ?: return raw
+        return raw.map { it.copy(v = c.apply(it.v)) }
+    }
+
+    // ------------------------------------------------------------------ calibración de 6 caras
+
+    private fun loadAccelCalibration() {
+        prefs.getString("acal_poses", null)?.split(";")?.mapNotNull { p ->
+            p.split(",").mapNotNull { it.toDoubleOrNull() }.takeIf { it.size == 3 }?.let { com.tisma.scanner.ins.Vec3(it[0], it[1], it[2]) }
+        }?.let { autoCal.restore(it) }
+        val v = prefs.getString("acal", null)?.split(",")?.mapNotNull { it.toDoubleOrNull() }
+        if (v != null && v.size >= 6) {
+            val mode = if (prefs.getString("acal_mode", "BIAS_SCALE") == "BIAS") com.tisma.scanner.ins.AccelCalibration.Mode.BIAS
+                else com.tisma.scanner.ins.AccelCalibration.Mode.BIAS_SCALE
+            ins.accelCalibration = com.tisma.scanner.ins.AccelCalibration.Result(
+                com.tisma.scanner.ins.Vec3(v[0], v[1], v[2]), com.tisma.scanner.ins.Vec3(v[3], v[4], v[5]),
+                v.getOrElse(6) { 0.0 }, mode, autoCal.poseCount)
+            _state.update { it.copy(accelCalibrated = true) }
+        }
+        updateAutoCalText()
+    }
+
+    private fun updateAutoCalText() {
+        val c = ins.accelCalibration
+        val n = autoCal.poseCount
+        val text = when {
+            c != null -> "✓ ${c.mode.label} · $n posturas · residuo %.1f mg".format(c.rmsResidual / 9.80665 * 1000) +
+                if (c.mode == com.tisma.scanner.ins.AccelCalibration.Mode.BIAS) " (con el móvil boca abajo y cabeza abajo alguna vez, también la escala)" else ""
+            n == 0 -> "Esperando: deja el móvil quieto unos segundos en distintas posturas (boca arriba, de pie, de costado)"
+            else -> "$n postura(s) guardada(s): faltan direcciones distintas para calibrar"
+        }
+        _state.update { it.copy(autoCalText = text) }
+    }
+
+    /** Se guardó una postura nueva: recalcular y, si mejora, aplicar y avisar brevemente. */
+    private fun onNewPose() {
+        prefs.edit().putString("acal_poses", autoCal.poses().joinToString(";") { "${it.x},${it.y},${it.z}" }).apply()
+        val r = autoCal.solve()
+        val cur = ins.accelCalibration
+        val better = r != null && r.plausible && (cur == null ||
+            (r.mode == com.tisma.scanner.ins.AccelCalibration.Mode.BIAS_SCALE && cur.mode == com.tisma.scanner.ins.AccelCalibration.Mode.BIAS) ||
+            r.mode == cur.mode)
+        if (better && r != null) {
+            if (session != null) pendingCal = r else applyAutoCalibration(r)
+            showBadge("✓ Precisión mejorada · ${r.poses} posturas · ${r.mode.label}")
+        } else {
+            showBadge("◐ Postura nueva guardada (${autoCal.poseCount})")
+        }
+        updateAutoCalText()
+    }
+
+    private fun applyAutoCalibration(r: com.tisma.scanner.ins.AccelCalibration.Result) {
+        ins.accelCalibration = r
+        ins.accelBiasPrior = com.tisma.scanner.ins.Vec3.ZERO      // el resto lo afina el Kalman
+        prefs.edit()
+            .putString("acal", listOf(r.bias.x, r.bias.y, r.bias.z, r.scale.x, r.scale.y, r.scale.z, r.rmsResidual).joinToString(","))
+            .putString("acal_mode", r.mode.name).apply()
+        log("Calibración automática (${r.mode.label}, ${r.poses} posturas): sesgo %.1f mg · escala %+.2f %%".format(
+            r.bias.norm() / 9.80665 * 1000, (listOf(r.scale.x, r.scale.y, r.scale.z).maxBy { kotlin.math.abs(it - 1) } - 1) * 100))
+        _state.update { it.copy(accelCalibrated = true) }
+        updateAutoCalText()
+    }
+
+    /** Muestra el aviso unos segundos y lo oculta. */
+    private fun showBadge(text: String) {
+        badgeJob?.cancel()
+        badgeJob = viewModelScope.launch {
+            _state.update { it.copy(precisionBadge = text) }
+            delay(5000)
+            _state.update { it.copy(precisionBadge = "") }
+        }
+    }
+
+    override fun resetAutoCalibration() {
+        autoCal.reset()
+        ins.accelCalibration = null
+        prefs.edit().remove("acal").remove("acal_poses").remove("acal_mode").apply()
+        _state.update { it.copy(accelCalibrated = false) }
+        if (session == null) ins.reset()
+        updateAutoCalText()
     }
 
     override fun setDriftMinutes(m: Int) = _state.update { it.copy(driftMinutes = m.coerceIn(1, 30)) }
@@ -613,7 +714,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 finished = true
             } finally {
                 runCatching { csv.close() }
-                val (acc, gyr) = imu.stopStillCapture()
+                val (accRaw, gyr) = imu.stopStillCapture()
+                val acc = calibrated(accRaw)
                 if (!finished) {
                     _state.update { it.copy(driftRunning = false, driftProgress = "Cancelada (CSV parcial guardado)") }
                     refreshDriftFiles()
@@ -882,6 +984,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         imu.stopLogging()
         gps.stopLogging()
         cameras.lock3A = false; cameras.refreshRepeating()
+        pendingCal?.let { applyAutoCalibration(it); pendingCal = null }
         _state.update { it.copy(scanning = false, busy = true) }
         viewModelScope.launch(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { finish(s) }
     }

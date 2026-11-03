@@ -29,6 +29,9 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
     @Volatile var gyroRate: Double = 0.0; private set
     @Volatile var sampleCount: Long = 0; private set
 
+    /** Escucha extra del acelerómetro (la ventana de calibración de 6 caras). */
+    @Volatile var accelTap: ((Long, Vec3) -> Unit)? = null
+
     /** Captura de muestras crudas para la prueba de quietud (null = inactiva). */
     private var stillAccel: MutableList<com.tisma.scanner.ins.ImuSample>? = null
     private var stillGyro: MutableList<com.tisma.scanner.ins.ImuSample>? = null
@@ -131,7 +134,11 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
         val t = e.timestamp
         counts.getOrPut(e.sensor.type) { java.util.concurrent.atomic.AtomicLong() }.incrementAndGet()
         when (e.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> ins.onAccel(t, Vec3.of(e.values))
+            Sensor.TYPE_ACCELEROMETER -> {
+                val a = Vec3.of(e.values)
+                ins.onAccel(t, a)
+                accelTap?.invoke(t, a)
+            }
             Sensor.TYPE_MAGNETIC_FIELD -> ins.onMag(t, Vec3.of(e.values))
             Sensor.TYPE_GYROSCOPE -> {
                 val v = e.values
