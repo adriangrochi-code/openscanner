@@ -52,6 +52,28 @@ SUMMARY_KEYS = ("dimensions_mm_xyz", "oriented_box_mm", "volume_mm3", "area_mm2"
 RESULTS = ("pieza.stl", "pieza.ply", "pieza_informe.json")
 
 
+def colmap_has_cuda(colmap: str) -> bool:
+    """COLMAP says in its help whether it was built with CUDA ("... with CUDA" / "... without CUDA")."""
+    import subprocess
+
+    try:
+        text = subprocess.run([colmap, "help"], capture_output=True, text=True, errors="replace", timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "with CUDA" in text and "without CUDA" not in text
+
+
+def dense_method(reconstruct) -> str | None:
+    """How the dense cloud is made here: TISMA_SCAN_DENSE, else OpenMVS when set, else COLMAP's, which needs CUDA.
+    None: it cannot be made on this machine (and without it there is no STL)."""
+    chosen = os.environ.get("TISMA_SCAN_DENSE")
+    if chosen:
+        return chosen
+    if reconstruct.OPENMVS_DIR:
+        return "openmvs"
+    return "colmap" if colmap_has_cuda(reconstruct.COLMAP_EXE) else None
+
+
 class Failed(Exception):
     def __init__(self, code: str, error: str, error_es: str) -> None:
         super().__init__(error)
@@ -143,7 +165,10 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     out.mkdir(parents=True, exist_ok=True)
     work = out.parent / "tisma_work"
-    dense = os.environ.get("TISMA_SCAN_DENSE") or ("openmvs" if reconstruct.OPENMVS_DIR else "colmap")
+    dense = dense_method(reconstruct)
+    if dense is None:
+        raise Failed("no_dense", "The dense cloud cannot be made on this computing server (COLMAP without CUDA)",
+                     "Este servidor de cálculo no puede armar la nube densa: le falta OpenMVS o una placa NVIDIA")
     argv = [str(scan), "--work", str(work), "--dense", dense]
     with open(out / "log.txt", "w", encoding="utf-8") as log:
         tee = Tee(log, real_stdout)
@@ -186,6 +211,9 @@ def check() -> dict:
             problems.append(f"COLMAP is missing ({colmap}; TISMA_COLMAP or the PATH)")
         if reconstruct.OPENMVS_DIR and not Path(reconstruct.OPENMVS_DIR).is_dir():
             problems.append(f"OpenMVS is set but missing ({reconstruct.OPENMVS_DIR})")
+        elif not problems and dense_method(reconstruct) is None:
+            problems.append("the dense cloud cannot be made: COLMAP has no CUDA here; install OpenMVS (TISMA_OPENMVS) "
+                            "or a COLMAP with CUDA and an NVIDIA card")
     if not shutil.which("nvidia-smi"):
         warnings.append("no NVIDIA card found: COLMAP runs on the processor, much slower")
     return {"ready": not problems, "problems": problems, "warnings": warnings}

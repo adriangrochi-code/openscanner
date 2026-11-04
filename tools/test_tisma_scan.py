@@ -35,6 +35,7 @@ def test_a_rebuilt_part_gives_its_files_progress_and_summary():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         (d / "colmap").write_text("")
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"   # as on a COLMAP with CUDA
 
         def fake_main(argv):
             work = Path(argv[argv.index("--work") + 1])
@@ -53,6 +54,7 @@ def test_a_rebuilt_part_gives_its_files_progress_and_summary():
             summary = ts.run(d / "scan.zip", d / "out", 2, True, out)
         finally:
             rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
         assert out.getvalue().split() == ["progress", "5", "progress", "25", "progress", "90", "progress", "100"]
         assert summary == {"dimensions_mm_xyz": [40.2, 30.2, 20.3], "volume_mm3": 24300.5}
         assert (d / "out" / "pieza.stl").exists() and "[hdr]" in (d / "out" / "log.txt").read_text(encoding="utf-8")
@@ -63,6 +65,8 @@ def test_a_failed_pipeline_is_a_coded_error():
         d = Path(d)
         (d / "colmap").write_text("")
 
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"
+
         def broken(argv):
             raise SystemExit("COLMAP no registró ninguna foto")
 
@@ -72,6 +76,7 @@ def test_a_failed_pipeline_is_a_coded_error():
             code = ts.main([str(d / "scan.zip"), "-o", str(d / "out"), "--summary", str(d / "s.json")])
         finally:
             rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
         summary = json.loads((d / "s.json").read_text(encoding="utf-8"))
         assert code == 1 and summary["code"] == "reconstruction_failed" and "ninguna foto" in summary["error"]
 
@@ -106,6 +111,21 @@ def test_check_says_what_is_missing():
     finally:
         rc.COLMAP_EXE = old
     assert not result["ready"] and any("COLMAP" in p for p in result["problems"])
+
+
+def test_without_a_way_to_the_dense_cloud_not_ready():
+    import shutil
+    colmap = shutil.which("colmap")
+    if not colmap or ts.colmap_has_cuda(colmap):
+        print("skip: needs a COLMAP without CUDA")
+        return
+    old = rc.COLMAP_EXE, rc.OPENMVS_DIR
+    rc.COLMAP_EXE, rc.OPENMVS_DIR = colmap, ""
+    try:
+        result = ts.check()
+    finally:
+        rc.COLMAP_EXE, rc.OPENMVS_DIR = old
+    assert not result["ready"] and any("dense cloud" in p for p in result["problems"])
 
 
 if __name__ == "__main__":
