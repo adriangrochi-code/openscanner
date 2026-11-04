@@ -98,6 +98,14 @@ jobs:
           notices dl/openmvs "$pkg/licenses/openmvs-release"
           Move-Item $colmap.FullName "$pkg/colmap"
           Move-Item $mvs.FullName "$pkg/openmvs"
+          # The releases ship no notices for the libraries inside them: every bundled DLL is listed, so each one's
+          # licence can be shipped with it (licenses/third-party/).
+          $pkgRoot = (Resolve-Path $pkg).Path
+          $dlls = Get-ChildItem "$pkg/colmap", "$pkg/openmvs" -Recurse -File -Filter *.dll |
+            ForEach-Object { $_.FullName.Substring($pkgRoot.Length + 1).Replace('\', '/') } | Sort-Object
+          $dlls | Set-Content "$pkg/licenses/BUNDLED_DLLS.txt" -Encoding utf8
+          "bundled DLLs: $(@($dlls).Count)"
+          $dlls
           # Their licenses, from the source of those same versions.
           function license($base, $out) {
             foreach ($name in "COPYING.txt", "LICENSE.txt", "LICENSE", "COPYING") {
