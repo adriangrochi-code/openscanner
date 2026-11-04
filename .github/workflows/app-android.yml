@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "app/**"
+      - "tools/fake_tisma_cloud.py"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle/**"

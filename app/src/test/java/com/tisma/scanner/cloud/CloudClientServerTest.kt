@@ -13,14 +13,17 @@ import java.net.ServerSocket
 import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.util.concurrent.TimeUnit
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 
 /**
- * Prueba de extremo a extremo del protocolo app <-> servidor: el CloudClient real de la app
- * contra el tisma_server.py real, por HTTPS (certificado de prueba), con una subida cortada
- * a mitad que se reanuda. Se salta si en la máquina no hay python3/openssl.
+ * Prueba de extremo a extremo del protocolo app <-> Tisma Cloud: el CloudClient real de la app contra
+ * tools/fake_tisma_cloud.py (que contesta como la API de escaneos de Tisma Cloud), por HTTPS con un
+ * certificado de prueba: entrar, una subida cortada a mitad que se reanuda, el trabajo en la cola y el
+ * zip del resultado. Se salta si en la máquina no hay python3/openssl.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -34,20 +37,25 @@ class CloudClientServerTest {
 
     private fun available(vararg cmd: String) = runCatching { ProcessBuilder(*cmd).start().waitFor() == 0 }.getOrDefault(false)
 
-    @Test fun uploadResumesAndJobCompletesOverHttps() {
-        val serverPy = File("../server/tisma_server.py").canonicalFile
-        assumeTrue("hace falta python3, openssl y el servidor", available("python3", "--version") && available("openssl", "version") && serverPy.exists())
+    private fun demoScan(dest: File) {
+        ZipOutputStream(dest.outputStream()).use { z ->
+            z.putNextEntry(ZipEntry("scan_demo/session.json")); z.write("{}".toByteArray()); z.closeEntry()
+            for (i in 0 until 4) {
+                z.putNextEntry(ZipEntry("scan_demo/images/0/$i.jpg"))
+                z.write(ByteArray(100_000) { (it * 31 + i).toByte() })
+                z.closeEntry()
+            }
+        }
+    }
+
+    @Test fun signInUploadResumesAndResultArrivesOverHttps() {
+        val fake = File("../tools/fake_tisma_cloud.py").canonicalFile
+        assumeTrue("hace falta python3, openssl y el servidor de prueba", available("python3", "--version") && available("openssl", "version") && fake.exists())
         val dir = kotlin.io.path.createTempDirectory("tisma_e2e").toFile()
         val port = ServerSocket(0).use { it.localPort }
         sh("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
             "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", dir = dir)
-        val key = "clave-e2e-" + System.nanoTime()
-        File(dir, "cfg.json").writeText("""{"host":"127.0.0.1","port":$port,"api_keys":["$key"],"data_dir":"datos",
-            "chunk_mb":1,"allow_without_colmap":true,"colmap":"no-existe",
-            "tls_cert":"${File(dir, "cert.pem").path}","tls_key":"${File(dir, "key.pem").path}"}""")
-        sh("python3", "-c", "import sys; sys.path.insert(0, '${serverPy.parent}'); from pathlib import Path; " +
-            "import tisma_server; tisma_server.make_demo_scan(Path('${dir.path}'))", dir = dir)
-        val zip = File(dir, "scan_demo.zip")
+        val zip = File(dir, "scan_demo.zip").also { demoScan(it) }
 
         // Confiar sólo en el certificado de prueba (como haría Android con el de tismaservidores.net).
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
@@ -58,38 +66,54 @@ class CloudClientServerTest {
         val previous = HttpsURLConnection.getDefaultSSLSocketFactory()
         HttpsURLConnection.setDefaultSSLSocketFactory(SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }.socketFactory)
 
-        val server = ProcessBuilder("python3", serverPy.path, "--config", File(dir, "cfg.json").path)
+        val chunk = 64 * 1024     // trozos pequeños para que el escaneo de prueba ocupe varios
+        val server = ProcessBuilder("python3", fake.path, "--port", "$port", "--cert", File(dir, "cert.pem").path,
+            "--key", File(dir, "key.pem").path, "--chunk", "$chunk")
             .directory(dir).redirectErrorStream(true).redirectOutput(File(dir, "server.log")).start()
         try {
-            val client = CloudClient("https://localhost:$port", key)
-            var up = false
-            repeat(60) { if (!up) { up = runCatching { client.health() != null }.getOrDefault(false); if (!up) Thread.sleep(250) } }
-            assertTrue("el servidor no arrancó: " + File(dir, "server.log").readText(), up)
+            val base = "https://localhost:$port"
+            var login: Pair<String, String>? = null
+            repeat(60) {
+                if (login == null) {
+                    login = runCatching { CloudClient.login(base, "e2e@tisma.test", "clave-e2e", "prueba") }.getOrNull()
+                    if (login == null) Thread.sleep(250)
+                }
+            }
+            assertTrue("el servidor no arrancó: " + File(dir, "server.log").readText(), login != null)
+            assertEquals("e2e@tisma.test", login!!.second)
 
-            // Clave incorrecta: rechazada.
-            val bad = runCatching { CloudClient("https://localhost:$port", "mala").create(10, "x") }.exceptionOrNull()
+            // Contraseña o token incorrectos: rechazados, con el texto para la persona.
+            val wrong = runCatching { CloudClient.login(base, "e2e@tisma.test", "otra", "prueba") }.exceptionOrNull()
+            assertEquals(401, (wrong as CloudClient.HttpError).code)
+            val bad = runCatching { CloudClient(base, "tu_malo").create(10, "x") }.exceptionOrNull()
             assertEquals(401, (bad as CloudClient.HttpError).code)
+            assertTrue(bad.message!!.contains("entrá de nuevo"))
 
-            val (id, _) = client.create(zip.length(), "e2e")
-            val chunk = 64 * 1024     // trozos pequeños para que el escaneo de prueba ocupe varios
+            val client = CloudClient(base, login!!.first)
+            val (id, size) = client.create(zip.length(), "e2e.zip")
+            assertEquals(chunk, size)
             // Subida cortada tras el primer trozo (como si se fuera la cobertura)…
             var chunksSent = 0
             val cut = runCatching {
                 client.upload(id, zip, chunk, onProgress = { _, _ -> chunksSent++ }, isCancelled = { chunksSent >= 1 })
             }.exceptionOrNull()
             assertTrue(cut is IOException)
-            val partial = client.status(id).getLong("received")
+            val partial = client.scanStatus(id).getLong("received")
             assertTrue("debe haber recibido algo pero no todo", partial in 1 until zip.length())
-            // …y reanudada: sigue desde lo que el servidor ya tiene.
-            client.upload(id, zip, chunk, onProgress = { _, _ -> })
-            var state = ""
-            repeat(240) {
-                if (state != "done" && state != "error") { state = client.status(id).getString("state"); Thread.sleep(250) }
-            }
-            assertEquals("done", state)
-            val log = File(dir, "log.txt")
-            client.download(id, "log.txt", log)
-            assertTrue(log.readText().contains("[hdr]"))
+            // …y reanudada: sigue desde lo que el servidor ya tiene, y queda en la cola.
+            val jobId = client.upload(id, zip, chunk, onProgress = { _, _ -> })
+            assertEquals(jobId, client.scanStatus(id).getString("job_id"))
+            var status = ""
+            repeat(20) { if (status != "done") status = client.job(jobId).getString("status") }
+            assertEquals("done", status)
+            val stl = File(dir, "pieza.stl")
+            val report = File(dir, "informe.json")
+            val got = client.downloadResult(jobId, mapOf("pieza.stl" to stl, "pieza_informe.json" to report))
+            assertEquals(2, got.size)
+            assertTrue(stl.readText().startsWith("solid"))
+            assertTrue(report.readText().contains("dimensions_mm_xyz"))
+            // Nada más del zip se escribe (log.txt no se pidió).
+            assertTrue(!File(dir, "log.txt").exists())
         } finally {
             server.destroy()
             HttpsURLConnection.setDefaultSSLSocketFactory(previous)
