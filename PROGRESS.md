@@ -37,8 +37,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   sources.csv) and check_bundled.py puts them in licenses/third-party/ + licenses/BUNDLED_DLLS.txt, failing the job
   on an unmapped DLL (1d07f56; package step green in run 41919077404).
 - **Open:** libspqr.dll (SuiteSparse SPQR) is GPL-2.0+; Qt 5, GMP, LibRaw and CHOLMOD are LGPL. Their source must be
-  offered with the package (Qt's archive link is in BUNDLED_DLLS.txt; the others are not done). Raised with the
-  server session and the owner.
+  offered with the package (Qt's archive link is in BUNDLED_DLLS.txt; the others are not done). Agreed with the
+  server session (its view, not legal advice; the owner decides): while the package only runs on Tisma's own
+  machines (beta, Tisma Cloud nodes) it is not conveyed, so nothing blocks the beta. **Before giving it to a third
+  party**: a TismaScan-windows-source artifact with the exact sources of those libraries at the DLLs' versions, and a
+  written offer in BUNDLED_DLLS.txt (whose note says so, 994a1c2). If the versions cannot be pinned from the
+  official binaries, build COLMAP and OpenMVS in CI.
 
 ## 2026-11-04: setup
 
