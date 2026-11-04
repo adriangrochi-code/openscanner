@@ -132,15 +132,26 @@ def test_bundled_programs_next_to_it():
     import os
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
-        (d / "colmap" / "bin").mkdir(parents=True)
+        # The layout of COLMAP's Windows release: COLMAP.bat, bin/colmap.exe, lib/, plugins/.
+        for sub in ("bin", "lib", "plugins"):
+            (d / "colmap" / sub).mkdir(parents=True)
         (d / "colmap" / "COLMAP.bat").write_text("@echo off\n")
+        (d / "colmap" / "bin" / "colmap.exe").write_bytes(b"")
         (d / "openmvs").mkdir()
         (d / "openmvs" / "DensifyPointCloud.exe").write_bytes(b"")
-        saved = {k: os.environ.pop(k, None) for k in ("TISMA_COLMAP", "TISMA_OPENMVS")}
+        saved = {k: os.environ.pop(k, None) for k in ("TISMA_COLMAP", "TISMA_OPENMVS", "QT_PLUGIN_PATH", "PATH")}
+        os.environ["PATH"] = saved["PATH"] or ""
         try:
             found = ts.bundled_programs(d)
-            assert found == {"TISMA_COLMAP": str(d / "colmap" / "COLMAP.bat"), "TISMA_OPENMVS": str(d / "openmvs")}
+            # The program, not the .bat (cmd.exe would split the commas of the camera parameters).
+            assert found == {"TISMA_COLMAP": str(d / "colmap" / "bin" / "colmap.exe"),
+                             "TISMA_OPENMVS": str(d / "openmvs")}
             assert os.environ["TISMA_OPENMVS"] == str(d / "openmvs")
+            assert os.environ["PATH"].split(os.pathsep)[0] == str(d / "colmap" / "lib")
+            assert os.environ["QT_PLUGIN_PATH"] == str(d / "colmap" / "plugins")
+            os.environ.pop("TISMA_COLMAP")
+            (d / "colmap" / "bin" / "colmap.exe").unlink()
+            assert ts.bundled_programs(d)["TISMA_COLMAP"] == str(d / "colmap" / "COLMAP.bat")
             # Set by the person: kept.
             os.environ["TISMA_COLMAP"] = "C:/mine/colmap.exe"
             os.environ.pop("TISMA_OPENMVS")

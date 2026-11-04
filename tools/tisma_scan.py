@@ -55,16 +55,26 @@ RESULTS = ("pieza.stl", "pieza.ply", "pieza_informe.json")
 
 
 def bundled_programs(folder: Path | None = None) -> dict[str, str]:
-    """COLMAP and OpenMVS that came next to this program (colmap/COLMAP.bat or colmap/bin/colmap(.exe), openmvs/ with
-    DensifyPointCloud), set as TISMA_COLMAP and TISMA_OPENMVS when they are not set. Returns what was set."""
+    """COLMAP and OpenMVS that came next to this program (colmap/bin/colmap(.exe) or colmap/COLMAP.bat, openmvs/ with
+    DensifyPointCloud), set as TISMA_COLMAP and TISMA_OPENMVS when they are not set. Returns what was set.
+
+    The program itself is preferred to COLMAP.bat: through a .bat, cmd.exe splits the commas of
+    --ImageReader.camera_params into separate arguments and COLMAP refuses the camera. What COLMAP.bat sets (its lib/
+    on the PATH, its Qt plugins) is set here instead."""
     if folder is None:
         folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else HERE
     found = {}
     if not os.environ.get("TISMA_COLMAP"):
-        for name in ("COLMAP.bat", "bin/colmap.exe", "bin/colmap"):
-            if (folder / "colmap" / name).is_file():
-                found["TISMA_COLMAP"] = str(folder / "colmap" / name)
+        colmap_dir = folder / "colmap"
+        for name in ("bin/colmap.exe", "bin/colmap", "COLMAP.bat"):
+            if (colmap_dir / name).is_file():
+                found["TISMA_COLMAP"] = str(colmap_dir / name)
                 break
+        if found.get("TISMA_COLMAP", "").endswith(("colmap.exe", "colmap")):
+            if (colmap_dir / "lib").is_dir():
+                os.environ["PATH"] = str(colmap_dir / "lib") + os.pathsep + os.environ.get("PATH", "")
+            if (colmap_dir / "plugins").is_dir() and not os.environ.get("QT_PLUGIN_PATH"):
+                os.environ["QT_PLUGIN_PATH"] = str(colmap_dir / "plugins")
     if not os.environ.get("TISMA_OPENMVS"):
         mvs = folder / "openmvs"
         if any((mvs / n).is_file() for n in ("DensifyPointCloud.exe", "DensifyPointCloud")):
