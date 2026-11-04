@@ -84,8 +84,17 @@ jobs:
           if (-not $colmap -or -not $mvs) { Get-ChildItem -Recurse dl | Select-Object -First 60 FullName; throw "unexpected layout" }
           Move-Item $colmap.FullName "$pkg/colmap"
           Move-Item $mvs.FullName "$pkg/openmvs"
-          Invoke-WebRequest "https://raw.githubusercontent.com/colmap/colmap/3.9.1/LICENSE.txt" -OutFile "$pkg/licenses/COLMAP-BSD-3-Clause.txt"
-          Invoke-WebRequest "https://raw.githubusercontent.com/cdcseacave/openMVS/v2.4.0/LICENSE" -OutFile "$pkg/licenses/OpenMVS-AGPL-3.0.txt"
+          # Their licenses, from the source of those same versions.
+          function license($base, $out) {
+            foreach ($name in "COPYING.txt", "LICENSE.txt", "LICENSE", "COPYING") {
+              try { Invoke-WebRequest "$base/$name" -OutFile $out; return } catch { }
+            }
+            throw "no license file at $base"
+          }
+          license "https://raw.githubusercontent.com/colmap/colmap/3.9.1" "$pkg/licenses/COLMAP-BSD-3-Clause.txt"
+          license "https://raw.githubusercontent.com/cdcseacave/openMVS/v2.4.0" "$pkg/licenses/OpenMVS-AGPL-3.0.txt"
+          Select-String -Path "$pkg/licenses/COLMAP-BSD-3-Clause.txt" -Pattern "Redistribution" -Quiet
+          Select-String -Path "$pkg/licenses/OpenMVS-AGPL-3.0.txt" -Pattern "AFFERO" -Quiet
           @"
           tisma-scan: the 3D scans of Tisma Scanner on a computing node of Tisma Cloud.
           Unpack this folder next to tisma-cloud.exe; the node finds tisma_scan.exe by itself.
