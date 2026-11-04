@@ -821,9 +821,22 @@ def dense(work, model_dir, mode):
             run_tool([exe, *a], cwd=und)
         mvs("InterfaceCOLMAP", "-i", ".", "-o", "scene.mvs", "--image-folder", "images")
         mvs("DensifyPointCloud", "scene.mvs", "--resolution-level", 0)
-        mvs("ReconstructMesh", "scene_dense.mvs")
-        mvs("RefineMesh", "scene_dense_mesh.mvs", "--resolution-level", 0)
-        mvs("TextureMesh", "scene_dense_mesh_refine.mvs", "--export-type", "obj")
+        # La pieza (STL) sale de la nube densa (scene_dense.ply, postprocess.py); la malla, su refinado y la textura
+        # de OpenMVS son sólo para textura.zip: si fallan, se avisa y se sigue.
+        try:
+            mvs("ReconstructMesh", "scene_dense.mvs")
+            if (und / "scene_dense_mesh.mvs").exists():
+                # OpenMVS 1.x: cada paso deja su propia escena .mvs.
+                mvs("RefineMesh", "scene_dense_mesh.mvs", "--resolution-level", 0)
+                mvs("TextureMesh", "scene_dense_mesh_refine.mvs", "--export-type", "obj")
+            else:
+                # OpenMVS 2.x: la escena es scene_dense.mvs y cada paso deja sólo su malla (.ply).
+                mvs("RefineMesh", "scene_dense.mvs", "-m", "scene_dense_mesh.ply", "-o",
+                    "scene_dense_mesh_refine.mvs", "--resolution-level", 0)
+                mvs("TextureMesh", "scene_dense.mvs", "-m", "scene_dense_mesh_refine.ply", "-o",
+                    "scene_dense_mesh_refine_texture.mvs", "--export-type", "obj")
+        except RuntimeError as e:
+            print(f"[dense] sin malla texturizada de OpenMVS ({e}): la pieza sale igual de la nube densa")
     print(f"[dense] resultado en {und if mode == 'openmvs' else work}")
 
 
