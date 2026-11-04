@@ -23,9 +23,11 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   scan has no focus sweep and no INS movement, a wrong-size mat would be used without a check.
 - Windows package: with COLMAP.bat, `%1` cuts the arguments at commas (the camera parameters), and QT_PLUGIN_PATH is
   `lib\plugins`. tisma_scan.exe (PyInstaller) passed its DLL directory on to COLMAP: reset while starting a program
-  (3852e82). With the .bat's PATH and QT_PLUGIN_PATH, `colmap.exe help` starts on the runner (run 41901450857);
-  `--check` and the synthetic scan with the package are still to be seen green (run of 74af7ee and later).
-- CPU e2e on scanner/next (815ed82, run 41895135244): green.
+  (3852e82). **Green** on scanner/next, runs 41903305452 (74af7ee) and 41903680499 (d720958): colmap.exe alone,
+  `tisma_scan.exe --check`, and the synthetic box (16 views, 640x480) with the package up to pieza.stl:
+  42.43 x 32.49 x 20.62 mm (+6 %, +8 %, +3 %, scale from the INS: the synthetic scan has no ArUco mat), closed
+  mesh, 26.70 cm3, 16 min on a Windows runner without an NVIDIA card. Sent to the server session.
+- CPU e2e on scanner/next: green for 815ed82 (run 41895135244) and d720958 (run 41903680460).
 
 ## 2026-11-04: setup
 
