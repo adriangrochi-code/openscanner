@@ -56,16 +56,18 @@ RESULTS = ("pieza.stl", "pieza.ply", "pieza_informe.json")
 
 def colmap_program(colmap: str) -> str:
     """The COLMAP program behind a COLMAP.bat (bin/colmap.exe next to it), with what the .bat sets: its lib/ on the
-    PATH and its Qt plugins. Through a .bat, cmd.exe splits the commas of --ImageReader.camera_params into separate
-    arguments and COLMAP refuses the camera. Anything else is returned as it is."""
+    PATH and lib/plugins as QT_PLUGIN_PATH. The .bat passes the arguments one by one with %1, which cuts at commas,
+    so --ImageReader.camera_params reached COLMAP as one number and it refused the camera. Anything else is returned
+    as it is."""
     bat = Path(colmap)
     exe = bat.parent / "bin" / "colmap.exe"
     if bat.suffix.lower() != ".bat" or not exe.is_file():
         return colmap
     if (bat.parent / "lib").is_dir():
         os.environ["PATH"] = str(bat.parent / "lib") + os.pathsep + os.environ.get("PATH", "")
-    if (bat.parent / "plugins").is_dir() and not os.environ.get("QT_PLUGIN_PATH"):
-        os.environ["QT_PLUGIN_PATH"] = str(bat.parent / "plugins")
+    plugins = bat.parent / "lib" / "plugins"  # COLMAP 3.9.1's COLMAP.bat: QT_PLUGIN_PATH=%SCRIPT_PATH%\lib\plugins
+    if plugins.is_dir():
+        os.environ["QT_PLUGIN_PATH"] = os.pathsep.join(filter(None, (str(plugins), os.environ.get("QT_PLUGIN_PATH"))))
     return str(exe)
 
 
@@ -103,8 +105,12 @@ def colmap_has_cuda(colmap: str) -> bool:
     """COLMAP says in its help whether it was built with CUDA ("... with CUDA" / "... without CUDA")."""
     import subprocess
 
+    import reconstruct  # loaded by now (load_pipeline); its _own_dlls keeps COLMAP off this .exe's DLLs
+
     try:
-        text = subprocess.run([colmap, "help"], capture_output=True, text=True, errors="replace", timeout=60).stdout
+        with reconstruct._own_dlls():
+            text = subprocess.run([colmap, "help"], capture_output=True, text=True, errors="replace",
+                                  timeout=60).stdout
     except (OSError, subprocess.SubprocessError):
         return False
     return "with CUDA" in text and "without CUDA" not in text

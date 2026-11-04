@@ -107,19 +107,17 @@ jobs:
           Get-ChildItem $pkg | Format-Table Name, Length
           "{0:N0} MB" -f ((Get-ChildItem $pkg -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
-      # What COLMAP.bat sets before it runs bin\colmap.exe: tisma_scan runs the program itself (through the .bat,
-      # cmd.exe splits the commas of the camera parameters) and must set the same.
-      - name: COLMAP del paquete (lo que pone COLMAP.bat)
+      # tisma_scan runs bin\colmap.exe itself, not COLMAP.bat (the .bat passes the arguments one by one with %1, which
+      # cuts the commas of the camera parameters), with what the .bat sets: lib\ on the PATH, lib\plugins for Qt.
+      - name: COLMAP del paquete, sin COLMAP.bat
         working-directory: scan-out/tisma-scan/colmap
         shell: pwsh
         run: |
-          Get-Content COLMAP.bat
-          Get-ChildItem | Format-Table Name, Length
-          Get-ChildItem -Directory -Recurse -Depth 1 | Select-Object -First 40 FullName
-          cmd /c "COLMAP.bat help" | Select-Object -First 3
-          "bat exit: $LASTEXITCODE"
-          & .\bin\colmap.exe help | Select-Object -First 3
-          "exe exit: $LASTEXITCODE"
+          Select-String -Path COLMAP.bat -Pattern "^set (PATH|QT_PLUGIN_PATH)="
+          $env:PATH = "$PWD\lib;$env:PATH"
+          $env:QT_PLUGIN_PATH = "$PWD\lib\plugins"
+          & .\bin\colmap.exe help | Select-Object -First 2
+          if ($LASTEXITCODE -ne 0) { throw "colmap.exe help: $LASTEXITCODE" }
 
       - name: tisma_scan.exe --check (con COLMAP y OpenMVS del paquete)
         working-directory: scan-out/tisma-scan

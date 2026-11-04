@@ -22,6 +22,7 @@ Ejemplo:
     python3 reconstruct.py scan_20261102_101500.zip --work out/ --mat tapete.json --dense openmvs
 """
 import argparse
+import contextlib
 import csv
 import os
 import json
@@ -404,12 +405,32 @@ def find_glomap():
     return shutil.which(GLOMAP_EXE) or (GLOMAP_EXE if Path(GLOMAP_EXE).is_file() else None)
 
 
+@contextlib.contextmanager
+def _own_dlls():
+    """
+    In a PyInstaller build on Windows, the bootloader sets the DLL directory to its own folder (_MEIPASS) and the
+    programs it starts inherit it: COLMAP or OpenMVS would load the DLLs that came with the .exe instead of their
+    own. PyInstaller's advice: reset it while starting them, and put it back after.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if os.name != "nt" or not meipass:
+        yield
+        return
+    import ctypes
+    ctypes.windll.kernel32.SetDllDirectoryW(None)
+    try:
+        yield
+    finally:
+        ctypes.windll.kernel32.SetDllDirectoryW(meipass)
+
+
 def run_tool(cmd, cwd=None):
     """Ejecuta una herramienta externa volcando su salida en el registro (stdout actual)."""
     cmd = [str(c) for c in cmd]
     print("[run]", " ".join(cmd), flush=True)
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                         errors="replace")
+    with _own_dlls():
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             errors="replace")
     for line in p.stdout:
         print("   ", line.rstrip(), flush=True)
     if p.wait() != 0:

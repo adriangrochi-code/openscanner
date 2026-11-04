@@ -132,8 +132,8 @@ def test_bundled_programs_next_to_it():
     import os
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
-        # The layout of COLMAP's Windows release: COLMAP.bat, bin/colmap.exe, lib/, plugins/.
-        for sub in ("bin", "lib", "plugins"):
+        # The layout of COLMAP 3.9.1's Windows release: COLMAP.bat, bin/colmap.exe, lib/, lib/plugins/.
+        for sub in ("bin", "lib", "lib/plugins"):
             (d / "colmap" / sub).mkdir(parents=True)
         (d / "colmap" / "COLMAP.bat").write_text("@echo off\n")
         (d / "colmap" / "bin" / "colmap.exe").write_bytes(b"")
@@ -148,7 +148,7 @@ def test_bundled_programs_next_to_it():
                              "TISMA_OPENMVS": str(d / "openmvs")}
             assert os.environ["TISMA_OPENMVS"] == str(d / "openmvs")
             assert os.environ["PATH"].split(os.pathsep)[0] == str(d / "colmap" / "lib")
-            assert os.environ["QT_PLUGIN_PATH"] == str(d / "colmap" / "plugins")
+            assert os.environ["QT_PLUGIN_PATH"] == str(d / "colmap" / "lib" / "plugins")
             # A COLMAP.bat set by the person: the colmap.exe next to it, too.
             os.environ["TISMA_COLMAP"] = str(d / "colmap" / "COLMAP.bat")
             os.environ.pop("TISMA_OPENMVS")
