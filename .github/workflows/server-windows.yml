@@ -107,6 +107,20 @@ jobs:
           Get-ChildItem $pkg | Format-Table Name, Length
           "{0:N0} MB" -f ((Get-ChildItem $pkg -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
+      # What COLMAP.bat sets before it runs bin\colmap.exe: tisma_scan runs the program itself (through the .bat,
+      # cmd.exe splits the commas of the camera parameters) and must set the same.
+      - name: COLMAP del paquete (lo que pone COLMAP.bat)
+        working-directory: scan-out/tisma-scan/colmap
+        shell: pwsh
+        run: |
+          Get-Content COLMAP.bat
+          Get-ChildItem | Format-Table Name, Length
+          Get-ChildItem -Directory -Recurse -Depth 1 | Select-Object -First 40 FullName
+          cmd /c "COLMAP.bat help" | Select-Object -First 3
+          "bat exit: $LASTEXITCODE"
+          & .\bin\colmap.exe help | Select-Object -First 3
+          "exe exit: $LASTEXITCODE"
+
       - name: tisma_scan.exe --check (con COLMAP y OpenMVS del paquete)
         working-directory: scan-out/tisma-scan
         run: |
