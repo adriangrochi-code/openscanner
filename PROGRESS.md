@@ -27,7 +27,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   `tisma_scan.exe --check`, and the synthetic box (16 views, 640x480) with the package up to pieza.stl:
   42.43 x 32.49 x 20.62 mm (+6 %, +8 %, +3 %, scale from the INS: the synthetic scan has no ArUco mat), closed
   mesh, 26.70 cm3, 16 min on a Windows runner without an NVIDIA card. Sent to the server session.
-- CPU e2e on scanner/next: green for 815ed82 (run 41895135244) and d720958 (run 41903680460).
+- CPU e2e on scanner/next: green for 815ed82 (run 41895135244), d720958 (41903680460) and the chessboard mat
+  9cb085b (41909006923). Windows green for 9cb085b (41909007022).
+- Licences of the Windows package (asked by QA through the server session; 830da96, run 41910637103 green): the
+  COLMAP/OpenMVS licence checks now fail the job, every licence/notice file of both release zips is kept in
+  licenses/colmap-release/ and licenses/openmvs-release/, and the OpenMVS v2.4.0 source ships as
+  source/openMVS-2.4.0-source.zip. The number of notice files found was not checked (see the artifact).
 
 ## 2026-11-04: setup
 
