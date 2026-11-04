@@ -11,6 +11,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   that has one.
 - Release in January 2027, with the desktop app and the Android slicer app; closed beta in December 2026.
 - Changes to `tisma_scan`'s command line or summary are agreed with the Tisma Cloud server session first.
+- (Relayed by the QA session, 2026-11-04 23:49 UTC.) The TismaScan-windows node package runs only on the owner's own
+  servers and is never given to third parties, so no source companion artifact is needed for it. The note in
+  BUNDLED_DLLS.txt still says what would be owed if that ever changed. The scanner app stays AGPL-3.0; the LICENSE
+  file waits for the owner's direct confirmation.
 
 ## 2026-11-04: scale accuracy, Windows package
 
@@ -39,8 +43,8 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - **Open:** libspqr.dll (SuiteSparse SPQR) is GPL-2.0+; Qt 5, GMP, LibRaw and CHOLMOD are LGPL. Their source must be
   offered with the package (Qt's archive link is in BUNDLED_DLLS.txt; the others are not done). Agreed with the
   server session (its view, not legal advice; the owner decides): while the package only runs on Tisma's own
-  machines (beta, Tisma Cloud nodes) it is not conveyed, so nothing blocks the beta. **Before giving it to a third
-  party**: a TismaScan-windows-source artifact with the exact sources of those libraries at the DLLs' versions, and a
+  machines (beta, Tisma Cloud nodes) it is not conveyed, so nothing blocks the beta. If it were ever given to a third
+  party (the owner says it will not be): a TismaScan-windows-source artifact with the exact sources of those libraries at the DLLs' versions, and a
   written offer in BUNDLED_DLLS.txt (whose note says so, 994a1c2). If the versions cannot be pinned from the
   official binaries, build COLMAP and OpenMVS in CI.
 
