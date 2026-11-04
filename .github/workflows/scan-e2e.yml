@@ -33,8 +33,10 @@ jobs:
         id: openmvs
         with:
           path: openmvs/bin
-          key: openmvs-${{ env.OPENMVS_VERSION }}-ubuntu-24.04-cpu
+          key: openmvs-${{ env.OPENMVS_VERSION }}-ubuntu-24.04-cpu-nofortify
 
+      # Without _FORTIFY_SOURCE: Ubuntu 24.04 builds with it at level 3 by default, and DensifyPointCloud v2.3.0 then
+      # aborts with "buffer overflow detected" (seen in this workflow, run 41871622288).
       - name: Compilar OpenMVS (AGPL-3.0; https://github.com/cdcseacave/openMVS)
         if: steps.openmvs.outputs.cache-hit != 'true'
         run: |
@@ -42,7 +44,8 @@ jobs:
           git clone -q --depth 1 https://github.com/cdcseacave/VCG.git vcglib
           git clone -q --depth 1 --branch "$OPENMVS_VERSION" https://github.com/cdcseacave/openMVS.git openmvs-src
           cmake -S openmvs-src -B openmvs-build -DCMAKE_BUILD_TYPE=Release -DVCG_ROOT="$PWD/vcglib" \
-            -DOpenMVS_USE_CUDA=OFF -DOpenMVS_USE_CERES=OFF -DOpenMVS_USE_PYTHON=OFF -DOpenMVS_BUILD_VIEWER=OFF
+            -DOpenMVS_USE_CUDA=OFF -DOpenMVS_USE_CERES=OFF -DOpenMVS_USE_PYTHON=OFF -DOpenMVS_BUILD_VIEWER=OFF \
+            -DCMAKE_CXX_FLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" -DCMAKE_C_FLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
           cmake --build openmvs-build -j "$(nproc)"
           mkdir -p openmvs/bin
           for tool in InterfaceCOLMAP DensifyPointCloud ReconstructMesh RefineMesh TextureMesh; do
