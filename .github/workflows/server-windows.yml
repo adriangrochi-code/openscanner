@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
@@ -61,3 +61,78 @@ jobs:
           name: TismaServer-windows
           path: out/
           retention-days: 30
+
+      # The scan node of Tisma Cloud with all it needs, in one folder (tisma-scan, unpacked next to tisma-cloud.exe):
+      # tisma_scan.exe and, from their official releases, COLMAP 3.9.1 (BSD-3-Clause; the 4.x changed the options the
+      # pipeline uses) and OpenMVS (AGPL-3.0, unmodified, run as a separate program). tisma_scan.exe finds them in
+      # colmap/ and openmvs/ by itself.
+      - name: Paquete del nodo de escaneo (tisma-scan)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $pkg = "scan-out/tisma-scan"
+          New-Item -ItemType Directory -Force "$pkg/licenses", dl | Out-Null
+          Copy-Item server/dist/tisma_scan.exe $pkg/
+          Invoke-WebRequest "https://github.com/colmap/colmap/releases/download/3.9.1/COLMAP-3.9.1-windows-cuda.zip" -OutFile dl/colmap.zip
+          Invoke-WebRequest "https://github.com/cdcseacave/openMVS/releases/download/v2.4.0/OpenMVS_Windows_x64.zip" -OutFile dl/openmvs.zip
+          Expand-Archive dl/colmap.zip dl/colmap
+          Expand-Archive dl/openmvs.zip dl/openmvs
+          # Each zip has its own layout: the folder with COLMAP.bat, and the one with DensifyPointCloud.exe.
+          $colmap = (Get-ChildItem dl/colmap -Recurse -Filter COLMAP.bat | Select-Object -First 1).Directory
+          $mvs = (Get-ChildItem dl/openmvs -Recurse -Filter DensifyPointCloud.exe | Select-Object -First 1).Directory
+          if (-not $colmap -or -not $mvs) { Get-ChildItem -Recurse dl | Select-Object -First 60 FullName; throw "unexpected layout" }
+          Move-Item $colmap.FullName "$pkg/colmap"
+          Move-Item $mvs.FullName "$pkg/openmvs"
+          # Their licenses, from the source of those same versions.
+          function license($base, $out) {
+            foreach ($name in "COPYING.txt", "LICENSE.txt", "LICENSE", "COPYING") {
+              try { Invoke-WebRequest "$base/$name" -OutFile $out; return } catch { }
+            }
+            throw "no license file at $base"
+          }
+          license "https://raw.githubusercontent.com/colmap/colmap/3.9.1" "$pkg/licenses/COLMAP-BSD-3-Clause.txt"
+          license "https://raw.githubusercontent.com/cdcseacave/openMVS/v2.4.0" "$pkg/licenses/OpenMVS-AGPL-3.0.txt"
+          Select-String -Path "$pkg/licenses/COLMAP-BSD-3-Clause.txt" -Pattern "Redistribution" -Quiet
+          Select-String -Path "$pkg/licenses/OpenMVS-AGPL-3.0.txt" -Pattern "AFFERO" -Quiet
+          @"
+          tisma-scan: the 3D scans of Tisma Scanner on a computing node of Tisma Cloud.
+          Unpack this folder next to tisma-cloud.exe; the node finds tisma_scan.exe by itself.
+
+          COLMAP 3.9.1 (colmap/): BSD-3-Clause, licenses/COLMAP-BSD-3-Clause.txt.
+            Official release, unmodified: https://github.com/colmap/colmap/releases/tag/3.9.1
+          OpenMVS 2.4.0 (openmvs/): GNU Affero General Public License 3.0, licenses/OpenMVS-AGPL-3.0.txt.
+            Official release, unmodified; its source: https://github.com/cdcseacave/openMVS/tree/v2.4.0
+          "@ | Set-Content "$pkg/LEEME.txt" -Encoding utf8
+          Get-ChildItem $pkg | Format-Table Name, Length
+          "{0:N0} MB" -f ((Get-ChildItem $pkg -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - name: tisma_scan.exe --check (con COLMAP y OpenMVS del paquete)
+        working-directory: scan-out/tisma-scan
+        run: |
+          .\tisma_scan.exe --check
+          if ($LASTEXITCODE -ne 0) { throw "not ready" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TismaScan-windows
+          path: scan-out/
+          retention-days: 30
+
+      # The whole pipeline with the programs of the package, on a machine without an NVIDIA card (as the runners are):
+      # the synthetic 40 x 30 x 20 mm box up to pieza.stl.
+      - name: Escaneo completo con el paquete (Windows, sin placa NVIDIA)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python tools/make_synthetic_scan.py scan.zip --views 16 --size 640x480
+          $exe = (Resolve-Path scan-out/tisma-scan/tisma_scan.exe).Path
+          & $exe scan.zip -o scan-result --summary summary.json
+          $code = $LASTEXITCODE
+          Get-Content summary.json
+          if (Test-Path scan-result/log.txt) { Get-Content scan-result/log.txt -Tail 60 }
+          if ($code -ne 0) { throw "tisma_scan failed ($code)" }
+          $dims = (Get-Content summary.json | ConvertFrom-Json).dimensions_mm_xyz | Sort-Object -Descending
+          $want = 40, 30, 20
+          for ($i = 0; $i -lt 3; $i++) { if ([math]::Abs($dims[$i] / $want[$i] - 1) -gt 0.15) { throw "measures $dims" } }
+          "pieza.stl: $dims mm"

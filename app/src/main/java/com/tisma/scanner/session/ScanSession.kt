@@ -145,14 +145,18 @@ class ScanSession(baseDir: File) {
     fun zip(): File = zipDir(dir)
 
     companion object {
+        /** Archivos del escaneo que nunca salen del teléfono: la posición absoluta (decisión del dueño, 04-11-2026). */
+        val STAYS_ON_PHONE = setOf("gps.csv")
+
         /** Comprime una carpeta de escaneo en un .zip a su lado (también para retomar un escaneo). */
         fun zipDir(dir: File): File {
         val out = File(dir.parentFile, dir.name + ".zip")
         ZipOutputStream(FileOutputStream(out).buffered()).use { zos ->
             // Los JPEG ya están comprimidos: compresión mínima = zip mucho más rápido.
             zos.setLevel(java.util.zip.Deflater.BEST_SPEED)
-            // Fuera lo interno del procesado en el móvil (estado para retomar, temporales).
-            val internal = setOf("recon_state.bin", "pendiente.json", "deblur_pendiente.csv")
+            // Fuera lo interno del procesado en el móvil (estado para retomar, temporales) y la posición absoluta
+            // (gps.csv: latitud, longitud y altura): nunca sale del teléfono, sólo las poses relativas entre fotos.
+            val internal = setOf("recon_state.bin", "pendiente.json", "deblur_pendiente.csv") + STAYS_ON_PHONE
             dir.walkTopDown().filter { it.isFile && it.name !in internal && !it.name.endsWith(".tmp") }.forEach { f ->
                 val entry = ZipEntry(dir.name + "/" + f.relativeTo(dir).invariantSeparatorsPath)
                 zos.putNextEntry(entry)
