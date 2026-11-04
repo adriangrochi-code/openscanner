@@ -20,10 +20,10 @@ NOTE = """\
 Libraries bundled in the COLMAP and OpenMVS releases of this package, each with its licence.
 
 Some are GPL (libspqr.dll, SuiteSparse SPQR: GPL-2.0-or-later) or LGPL (Qt 5, GMP, LibRaw, SuiteSparse CHOLMOD).
-While this package only runs on Tisma's own machines (the beta and Tisma Cloud's nodes) it is not conveyed to anyone.
-Before it is given to a third party (outside nodes, a public download), the exact sources of those libraries, at the
-versions of these DLLs, must go with it (a TismaScan-windows-source artifact) and this file must carry a written
-offer of them. OpenMVS (AGPL-3.0, unmodified) already ships its source in source/.
+Rule (owner's decision, 2026-11-04): this package runs only on the owner's own machines (Tisma Cloud's nodes) and
+is never given to third parties, so it is not conveyed and no source offer goes with it. Were that rule ever to
+change, the exact sources of those libraries at the versions of these DLLs, and a written offer of them, would have
+to go with it. OpenMVS (AGPL-3.0, unmodified) ships its source in source/ all the same.
 
 """
 # Texts other texts refer to (LGPL-3.0 and the GCC exception build on the GPL-3.0; SuiteSparse and LibRaw modules).

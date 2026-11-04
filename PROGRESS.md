@@ -43,8 +43,8 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - **Open:** libspqr.dll (SuiteSparse SPQR) is GPL-2.0+; Qt 5, GMP, LibRaw and CHOLMOD are LGPL. Their source must be
   offered with the package (Qt's archive link is in BUNDLED_DLLS.txt; the others are not done). Agreed with the
   server session (its view, not legal advice; the owner decides): while the package only runs on Tisma's own
-  machines (beta, Tisma Cloud nodes) it is not conveyed, so nothing blocks the beta. If it were ever given to a third
-  party (the owner says it will not be): a TismaScan-windows-source artifact with the exact sources of those libraries at the DLLs' versions, and a
+  machines (beta, Tisma Cloud nodes) it is not conveyed, so nothing blocks the beta. Only if the owner's rule (never given to
+  third parties) changed: a TismaScan-windows-source artifact with the exact sources of those libraries at the DLLs' versions, and a
   written offer in BUNDLED_DLLS.txt (whose note says so, 994a1c2). If the versions cannot be pinned from the
   official binaries, build COLMAP and OpenMVS in CI.
 
