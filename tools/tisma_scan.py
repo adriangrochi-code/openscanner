@@ -63,6 +63,15 @@ def colmap_has_cuda(colmap: str) -> bool:
     return "with CUDA" in text and "without CUDA" not in text
 
 
+def headless_colmap(reconstruct, gpu: bool = True) -> None:
+    """COLMAP on a server: without a screen its Qt needs the offscreen platform, and without CUDA (or with --no-gpu)
+    its SIFT must run on the processor (on the GPU it uses OpenGL, which aborts without a context)."""
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if not gpu or not colmap_has_cuda(reconstruct.COLMAP_EXE):
+        os.environ["TISMA_COLMAP_NO_GPU"] = "1"
+
+
 def dense_method(reconstruct) -> str | None:
     """How the dense cloud is made here: TISMA_SCAN_DENSE, else OpenMVS when set, else COLMAP's, which needs CUDA.
     None: it cannot be made on this machine (and without it there is no STL)."""
@@ -163,6 +172,7 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
             os.environ[var] = str(threads)
     if not gpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    headless_colmap(reconstruct, gpu)
     out.mkdir(parents=True, exist_ok=True)
     work = out.parent / "tisma_work"
     dense = dense_method(reconstruct)

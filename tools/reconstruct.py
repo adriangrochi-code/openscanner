@@ -416,7 +416,17 @@ def run_tool(cmd, cwd=None):
         raise RuntimeError(f"{Path(cmd[0]).name} terminó con código {p.returncode}")
 
 
+# Con TISMA_COLMAP_NO_GPU=1 (sin CUDA, o un servidor sin pantalla: el SIFT de COLMAP por GPU usa OpenGL y aborta sin
+# contexto), los puntos y el emparejado van por el procesador. tisma_scan lo pone solo.
+_SIFT_GPU = {"feature_extractor": "--SiftExtraction.use_gpu", "exhaustive_matcher": "--SiftMatching.use_gpu",
+             "sequential_matcher": "--SiftMatching.use_gpu", "matches_importer": "--SiftMatching.use_gpu",
+             "spatial_matcher": "--SiftMatching.use_gpu", "vocab_tree_matcher": "--SiftMatching.use_gpu"}
+
+
 def colmap(*args):
+    flag = _SIFT_GPU.get(str(args[0])) if args else None
+    if flag and os.environ.get("TISMA_COLMAP_NO_GPU") == "1" and flag not in map(str, args):
+        args = (*args, flag, 0)
     run_tool([COLMAP_EXE, *args])
 
 
