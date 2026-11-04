@@ -18,8 +18,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   merge.
 - Pipeline tests (`python3 -m pytest tools/`): 12 passed, locally with Python 3.13 and opencv-contrib 5.0.0. Open3D
   0.20 needs `libegl1 libgl1` on Linux.
-- App: `./gradlew :app:assembleDebug :app:testDebugUnitTest` with Android SDK 35 (see the next entry for the result).
-  Maven Central sometimes answers 429 through the session proxy: `--max-workers=1` and a retry got through.
+- App: `./gradlew :app:assembleDebug :app:testDebugUnitTest` with Android SDK 35 and JDK 21: the debug APK builds and
+  the 105 unit tests pass (0 failed), at 0f8500f. Not run on an emulator or a phone in this session.
+  In a cloud session, Maven Central (repo.maven.apache.org) answered 429 through the proxy on every try. What got
+  through, on this machine only and not in the repo: a Gradle init script that swaps Maven Central for Google's
+  mirror (https://maven-central.storage-download.googleapis.com/maven2/), and Robolectric's android-all-instrumented
+  jars (14 and 15) and nativeruntime-dist-compat put in ~/.m2/repository from that mirror, with their sha1 checked.
 - Full CPU path (CI "Escaneo completo en el procesador", run 41880333430 at 193b2aa, Ubuntu 24.04, COLMAP 3.9.1
   without CUDA, OpenMVS v2.3.0 built without CUDA): synthetic 40 x 30 x 20 mm box -> pieza.stl measuring
   41.17 x 31.08 x 20.14 mm (+2.9 %, +3.6 %, +0.7 %; the scale comes from the INS trajectory). It took 21 min on the
@@ -28,8 +32,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - Windows node package (TismaServer.exe workflow, runs 24 and 25): fails at the first COLMAP step. Through
   `colmap/COLMAP.bat`, cmd.exe splits the commas of `--ImageReader.camera_params`, and COLMAP refuses the camera.
   Fix (tisma_scan.bundled_programs): use `colmap/bin/colmap.exe` and set what COLMAP.bat sets (its `lib/` on the
-  PATH, `QT_PLUGIN_PATH`). COLMAP.bat is only the last fallback. Raised with the server session. It is checked by
-  the unit test only; the Windows run on CI will confirm it.
+  PATH, `QT_PLUGIN_PATH`), also when the person sets TISMA_COLMAP to a COLMAP.bat (e964132, 815ed82). Agreed with
+  the server session, which now leaves server-windows.yml to this session; it keeps the tisma-cloud side. Checked by
+  the unit test; the Windows CI run on scanner/next has to confirm it. PR #2 (scan/cpu-pipeline) does not have this
+  fix yet: how it gets there is the owner's call.
 
 ## What needs an NVIDIA GPU
 
