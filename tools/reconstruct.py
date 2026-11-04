@@ -750,12 +750,15 @@ def triangulate(obs):
     return X[:3] / X[3]
 
 
-# The mat that make_scan_mat.py prints by default and the README tells people to print (DICT_4X4_50, 30 mm markers):
-# looked for in every scan, so its scale is used without --mat (Tisma Cloud and TismaServer never pass one).
-STANDARD_MAT = {"dictionary": "DICT_4X4_50", "marker_mm": 30.0}
+# The standard mat of make_scan_mat.py: a chessboard (ChArUco) of 20 mm squares on any paper size, with a 15 mm
+# DICT_4X4_250 marker in each white square. Looked for in every scan, so its scale is used without --mat (Tisma Cloud
+# and TismaServer never pass one), whatever sheet was printed and however much of it the part covers.
+STANDARD_MAT = {"dictionary": "DICT_4X4_250", "marker_mm": 15.0}
 # Without --mat the marker size is assumed: a mat printed with other markers, or not at 100 %, would give a wrong
-# scale. It is only used when its edges agree (spread) and it is not far from the focus or INS scale.
-STANDARD_MAT_MAX_SPREAD = 0.02
+# scale. It is only used when it is not far from the focus or INS scale (that is what catches a wrong mat), and when
+# its edges are not too scattered (a 15 mm marker seen at 40-60 px scatters about 1-2 % per edge; the median of
+# many edges is far better).
+STANDARD_MAT_MAX_SPREAD = 0.05
 STANDARD_MAT_MAX_DIFF = 0.20
 
 
@@ -763,8 +766,9 @@ def scale_from_aruco(work, cams, imgs, mat_json):
     """Metres per model unit from the edges of the mat's ArUco markers, and their relative spread. mat_json is the
     .json of make_scan_mat.py or a dict like STANDARD_MAT."""
     mat = mat_json if isinstance(mat_json, dict) else json.loads(Path(mat_json).read_text())
-    marker_mm = mat["marker_mm"]
-    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
+    # Mats made before the chessboard have no "dictionary" in their .json: they were DICT_4X4_50.
+    dictionary = getattr(cv2.aruco, mat.get("dictionary", "DICT_4X4_50"))
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(dictionary),
                                   cv2.aruco.DetectorParameters())
     obs = defaultdict(list)  # (id, esquina) -> [(R,t,xy)]
     for name, im in imgs.items():
@@ -785,7 +789,8 @@ def scale_from_aruco(work, cams, imgs, mat_json):
     for mid in {k[0] for k in pts}:
         for a, b in [(0, 1), (1, 2), (2, 3), (3, 0)]:
             if (mid, a) in pts and (mid, b) in pts:
-                ratios.append(marker_mm / 1000.0 / np.linalg.norm(pts[(mid, a)] - pts[(mid, b)]))
+                side_mm = mat["marker_mm"]
+                ratios.append(side_mm / 1000.0 / np.linalg.norm(pts[(mid, a)] - pts[(mid, b)]))
     if len(ratios) < 4:
         return None, None
     r = np.array(ratios)
@@ -805,7 +810,7 @@ def choose_mat_scale(work, cams, imgs, mat_json, others):
         return None
     if mat_json:
         return s, f"ArUco (dispersión {rel * 100:.2f} %)"
-    label = f"tapete estándar, marcadores de {STANDARD_MAT['marker_mm']:g} mm (dispersión {rel * 100:.2f} %)"
+    label = f"tapete estándar (dispersión {rel * 100:.2f} %)"
     if rel > STANDARD_MAT_MAX_SPREAD:
         print(f"[scale] {label}: no se usa, los bordes no concuerdan (¿otro tapete? pásalo con --mat)")
         return None

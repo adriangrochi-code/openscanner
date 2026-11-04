@@ -16,16 +16,20 @@ The app is in Spanish; the labels below are quoted as the app shows them, with t
 
 ## 1. Print the mat
 
-Print the Tisma Scanner mat (A4, A3 or Letter) **at 100 %**, without "fit to page". Measure the 100 mm bar
-at its edge with a ruler: if it is not 100 mm, the part's scale will be off by the same proportion.
+Print the Tisma Scanner mat on whatever sheet you have (A6, A5, A4, A3, Letter, Legal or Tabloid). Print the
+**PDF** at **"actual size" or "100 %"**, without "fit to page". Measure the bar at its edge with a ruler
+(100 mm; 50 mm on A6): if it is not that, the part's scale will be off by the same proportion.
 
-The mat has black-and-white squares (markers) that Tisma Cloud recognises by itself. With them, the size of
+The mat is a chessboard: 20 mm squares, with a numbered marker in each white square. It is the same on every
+sheet (a bigger sheet has more squares), so Tisma Cloud recognises it by itself, whichever sheet you used.
+With the markers, the size of
 the part comes out within about 0.5 %. Without the mat, the scale comes from the phone's sensors and focus,
 within about 5-10 %.
 
 ## 2. Prepare the part
 
-- Put it in the middle of the mat, in the space between the markers.
+- Put it in the middle of the mat. It does not matter that it covers squares: a few visible around it are
+  enough. Choose a sheet that sticks out well beyond the part on every side.
 - **If it is plain, one colour or shiny**, photogrammetry finds no points to match. Give it texture:
   matting scan spray (it evaporates in a few hours), talcum powder or, if marking it does not matter, dots
   with a marker pen. On shiny parts the spray is a must.

@@ -149,66 +149,72 @@ def test_mapper_prefers_glomap_and_falls_back_to_colmap():
 
 
 
-def mat_views(tmp, marker_mm=30.0, units_per_m=7.3, n=10):
-    """Photos of a mat like make_scan_mat.py's (A4, 9 markers of marker_mm) from n views with known poses, and the
-    model of those views in units of 1/units_per_m m (the SfM's arbitrary scale)."""
+def mat_views(tmp, paper="a4", print_scale=1.0, units_per_m=7.3, n=10):
+    """Photos of make_scan_mat.py's mat for `paper`, printed at print_scale (1 = 100 %), from n views with known
+    poses, and the model of those views in units of 1/units_per_m m (the SfM's arbitrary scale)."""
     import cv2
-    px_mm = 4.0
-    W, H = int(210 * px_mm), int(297 * px_mm)
-    canvas = np.full((H, W), 255, np.uint8)
-    d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    m_px, mid = int(round(marker_mm * px_mm)), 0
-    for yi, y in enumerate((12, (297 - marker_mm) / 2, 297 - 12 - marker_mm)):
-        for xi, x in enumerate((12, (210 - marker_mm) / 2, 210 - 12 - marker_mm)):
-            if xi == 1 and yi == 1:
-                continue  # the centre is left for the part, as on the printed mat
-            x0, y0 = int(round(x * px_mm)), int(round(y * px_mm))
-            canvas[y0:y0 + m_px, x0:x0 + m_px] = cv2.aruco.generateImageMarker(d, mid, m_px)
-            mid += 1
-    K = np.array([[900.0, 0, 640], [0, 900.0, 480], [0, 0, 1]])
+    import make_scan_mat
+    canvas, meta = make_scan_mat.make_mat(paper, dpi=300)
+    pw, ph = make_scan_mat.PAPERS_MM[paper]
+    m_per_px = 25.4 / meta["dpi"] / 1000 * print_scale
+    # Closer to a phone photo (COLMAP works at 3200 px wide) than a small test image.
+    K = np.array([[1800.0, 0, 1280], [0, 1800.0, 960], [0, 0, 1]])
     # Canvas px -> m on the plane Z = 0, centred; rows go towards -Y, so the mat is seen from above, not mirrored.
-    S = np.array([[1 / (px_mm * 1000), 0, -0.105], [0, -1 / (px_mm * 1000), 0.1485], [0, 0, 1]])
-    (tmp / "images").mkdir()
+    cx, cy = pw / 2000 * print_scale, ph / 2000 * print_scale
+    S = np.array([[m_per_px, 0, -cx], [0, -m_per_px, cy], [0, 0, 1]])
+    dist = 0.35  # as when scanning: the distance to the part, whatever the sheet (it sees part of a big one)
     imgs = {}
+    (tmp / "images" / "0").mkdir(parents=True)
     for k in range(n):
         az, el = 2 * np.pi * k / n, np.radians(65)
-        c = 0.42 * np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+        c = dist * np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
         z = -c / np.linalg.norm(c)
         x = np.cross(z, [0, 0, 1.0]); x /= np.linalg.norm(x)
         R = np.vstack([x, np.cross(z, x), z])  # world -> camera
         t_m = -R @ c
         Hm = K @ np.column_stack([R[:, 0], R[:, 1], t_m]) @ S
-        img = cv2.warpPerspective(canvas, Hm, (1280, 960), flags=cv2.INTER_AREA, borderValue=128)
+        img = cv2.warpPerspective(canvas, Hm, (2560, 1920), flags=cv2.INTER_AREA, borderValue=128)
         name = f"0/{k}.jpg"
-        (tmp / "images" / "0").mkdir(exist_ok=True)
         cv2.imwrite(str(tmp / "images" / name), img)
         imgs[name] = dict(R=R, t=t_m * units_per_m, cam=1)
-    cams = {1: ("PINHOLE", 1280, 960, np.array([900.0, 900.0, 640, 480]))}
+    cams = {1: ("PINHOLE", 2560, 1920, np.array([1800.0, 1800.0, 1280, 960]))}
     return cams, imgs
 
 
-def test_standard_mat_scale_without_mat_json():
+def test_standard_mat_scale_without_mat_json_on_every_paper():
     import tempfile
-    with tempfile.TemporaryDirectory() as d:
-        cams, imgs = mat_views(Path(d))
-        s, rel = rc.scale_from_aruco(Path(d), cams, imgs, rc.STANDARD_MAT)
-        assert abs(s * 7.3 - 1) < 0.01, s * 7.3  # metres per unit within 1 % (+0.34 % measured)
-        assert rel < rc.STANDARD_MAT_MAX_SPREAD
-        # Chosen without --mat, close to the INS scale (8 % off, as the INS can be).
-        got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.08])
-        assert got and abs(got[0] * 7.3 - 1) < 0.01 and "tapete estándar" in got[1]
+    for paper in ("a6", "a4", "tabloid"):  # the same chessboard on the smallest, a common and the largest sheet
+        with tempfile.TemporaryDirectory() as d:
+            cams, imgs = mat_views(Path(d), paper)
+            s, rel = rc.scale_from_aruco(Path(d), cams, imgs, rc.STANDARD_MAT)
+            assert abs(s * 7.3 - 1) < 0.01, (paper, s * 7.3)  # metres per unit within 1 %
+            assert rel < rc.STANDARD_MAT_MAX_SPREAD
+            # Chosen without --mat, close to the INS scale (8 % off, as the INS can be).
+            got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.08])
+            assert got and abs(got[0] * 7.3 - 1) < 0.01 and "tapete estándar" in got[1]
 
 
-def test_a_mat_with_other_markers_is_not_taken_for_the_standard_one():
+def test_a_mat_not_printed_at_100_percent_is_not_trusted():
     import tempfile
     with tempfile.TemporaryDirectory() as d:
-        cams, imgs = mat_views(Path(d), marker_mm=40.0)  # read as 30 mm: 25 % off the true scale
+        # Printed at 133 %: its 15 mm markers measure 20 mm, the scale would be 25 % off.
+        cams, imgs = mat_views(Path(d), "a4", print_scale=4 / 3)
         assert rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3]) is None
-        # With its .json (--mat) it is right.
+        # With its .json (--mat), saying 20 mm, it is right.
         mat = Path(d) / "tapete.json"
-        mat.write_text('{"marker_mm": 40.0}')
+        mat.write_text('{"dictionary": "DICT_4X4_250", "marker_mm": 20.0}')
         s, _ = rc.choose_mat_scale(Path(d), cams, imgs, str(mat), [1 / 7.3])
         assert abs(s * 7.3 - 1) < 0.01
+
+
+def test_every_paper_size_has_the_same_chessboard():
+    import make_scan_mat as msm
+    for paper, (pw, ph) in msm.PAPERS_MM.items():
+        canvas, meta = msm.make_mat(paper, dpi=50)
+        assert canvas.shape == (round(ph * 50 / 25.4), round(pw * 50 / 25.4))
+        # The same chessboard on every sheet: same squares and markers, more of them on a bigger sheet.
+        assert (meta["marker_mm"], meta["dictionary"]) == (rc.STANDARD_MAT["marker_mm"], rc.STANDARD_MAT["dictionary"])
+        assert meta["square_mm"] == 20.0 and len(meta["markers_mm"]) >= 12, paper
 
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:

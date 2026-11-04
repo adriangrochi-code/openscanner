@@ -15,17 +15,20 @@ móvil sacas fotos alrededor de la pieza y Tisma Cloud arma la pieza en 3D a par
 
 ## 1. Imprime el tapete
 
-Imprime el tapete de Tisma Scanner (A4, A3 o Carta) **al 100 %**, sin «ajustar a la página». Mide con una
-regla la barra de 100 mm del borde: si no mide 100 mm, la escala de la pieza saldrá mal en la misma
-proporción.
+Imprime el tapete de Tisma Scanner en la hoja que tengas (A6, A5, A4, A3, Carta, Oficio o Tabloide).
+Imprime el **PDF** a **«tamaño real» o «100 %»**, sin «ajustar a la página». Mide con una regla la barra
+del borde (100 mm; 50 mm en A6): si no mide eso, la escala de la pieza saldrá mal en la misma proporción.
 
-El tapete tiene unos cuadrados blancos y negros (marcadores) que Tisma Cloud reconoce solo. Con ellos, el
+El tapete es un tablero de ajedrez: casillas de 20 mm, y en cada casilla blanca un marcador con su número.
+Es igual en todas las hojas (en una más grande hay más casillas), así que Tisma Cloud lo reconoce solo, sin
+importar qué hoja usaste. Con los marcadores, el
 tamaño de la pieza sale con un error de alrededor del 0,5 %. Sin tapete, la escala sale de los sensores
 del móvil y del enfoque, con un error de alrededor del 5-10 %.
 
 ## 2. Prepara la pieza
 
-- Ponla en el centro del tapete, en el hueco que queda entre los marcadores.
+- Ponla en el centro del tapete. No importa que tape casillas: con que se vean varias alrededor alcanza.
+  Elige una hoja que sobresalga bastante de la pieza por todos lados.
 - **Si es lisa, de un solo color o brillante**, la fotogrametría no encuentra puntos que emparejar. Dale
   textura: spray de escaneo matificante (se evapora en unas horas), polvo de talco o, si no importa
   marcarla, puntos con rotulador. En piezas brillantes, el spray es imprescindible.

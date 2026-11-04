@@ -61,9 +61,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 
 ## Open for the beta
 
-- The mat cannot be downloaded by a user today: it is made with `tools/make_scan_mat.py` (Python). The guides say
-  "print the Tisma Scanner mat"; the A4/A3/Letter PNGs (and their 100 mm check bar) should be published, in the
-  app or on the Tisma site.
+- The mats: the owner publishes them (2026-11-04) so anyone can print one, from a small sheet to a big one.
+  `python3 tools/make_scan_mat.py --all --out-dir tapetes` makes A6, A5, A4, A3, Letter, Legal and Tabloid, each
+  as PDF at the exact page size (what to print, at "actual size"), PNG with its DPI, and .json. Owner's idea: a
+  chessboard of fixed squares, so any sheet works. It is a ChArUco-like board: 20 mm squares, a 15 mm
+  DICT_4X4_250 marker in each white square, dark texture in the black ones (unique points for SIFT). Synthetic
+  views at 35 cm, 2560 px: scale +0.37 to +0.40 % on every sheet, spread under 0.1 %. That constant +0.4 % is
+  likely where the detector puts the marker corners: check it with a real printed mat before correcting it.
+  Not yet tried: printing one, and a full scan on it through COLMAP. It uses a lot of black ink.
 
 ## Next
 
