@@ -40,8 +40,10 @@ interface ScanActions {
     /** Borra la calibración automática del acelerómetro y sus posturas guardadas. */
     fun resetAutoCalibration()
     fun setCloudUrl(v: String)
-    fun setCloudKey(v: String)
-    /** Enviar el último escaneo a Tisma Server y traer la pieza. */
+    /** Entrar con la cuenta de Tisma Cloud (guarda el token de la sesión, no la contraseña). */
+    fun cloudLogin(email: String, password: String)
+    fun cloudLogout()
+    /** Enviar el último escaneo a Tisma Cloud y traer la pieza. */
     fun sendToCloud()
     fun setAntiShakeBurst(v: Boolean)
     /** Vídeo 360 (una cámara, flujo continuo, fotogramas automáticos) o fotos sueltas. */

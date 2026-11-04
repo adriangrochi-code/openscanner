@@ -61,7 +61,8 @@ class ScanScreenshotTest {
         override fun setDriftMinutes(m: Int) {}
         override fun resetAutoCalibration() {}
         override fun setCloudUrl(v: String) {}
-        override fun setCloudKey(v: String) {}
+        override fun cloudLogin(email: String, password: String) {}
+        override fun cloudLogout() {}
         override fun sendToCloud() {}
         override fun setAntiShakeBurst(v: Boolean) {}
         override fun stabilizePreview(frameTimestampNs: Long, viewW: Int, viewH: Int) = null

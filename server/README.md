@@ -1,5 +1,9 @@
 # Tisma Server en tismaservidores.net
 
+> La app ahora manda los escaneos a **Tisma Cloud** (con la cuenta de la persona y un plan que incluya los
+> escaneos). Tisma Cloud corre el mismo pipeline en sus nodos con `tisma_scan.exe` (`TismaScan.spec`).
+> Este servidor queda para usarlo solo, sin cuentas.
+
 `TismaServer.exe` recibe los escaneos de la app Tisma Scanner, los procesa (imágenes → COLMAP →
 nube densa → postprocesado) y devuelve la pieza en STL (mm) con un informe de calidad.
 
