@@ -128,6 +128,32 @@ def test_without_a_way_to_the_dense_cloud_not_ready():
     assert not result["ready"] and any("dense cloud" in p for p in result["problems"])
 
 
+def test_bundled_programs_next_to_it():
+    import os
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "colmap" / "bin").mkdir(parents=True)
+        (d / "colmap" / "COLMAP.bat").write_text("@echo off\n")
+        (d / "openmvs").mkdir()
+        (d / "openmvs" / "DensifyPointCloud.exe").write_bytes(b"")
+        saved = {k: os.environ.pop(k, None) for k in ("TISMA_COLMAP", "TISMA_OPENMVS")}
+        try:
+            found = ts.bundled_programs(d)
+            assert found == {"TISMA_COLMAP": str(d / "colmap" / "COLMAP.bat"), "TISMA_OPENMVS": str(d / "openmvs")}
+            assert os.environ["TISMA_OPENMVS"] == str(d / "openmvs")
+            # Set by the person: kept.
+            os.environ["TISMA_COLMAP"] = "C:/mine/colmap.exe"
+            os.environ.pop("TISMA_OPENMVS")
+            assert ts.bundled_programs(d) == {"TISMA_OPENMVS": str(d / "openmvs")}
+            assert os.environ["TISMA_COLMAP"] == "C:/mine/colmap.exe"
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+        assert ts.bundled_programs(d / "nothing") == {}
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

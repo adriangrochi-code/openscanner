@@ -13,7 +13,9 @@ tisma_cloud/node/runners.py, run_scan()):
 - <summary.json>: the measures of the report, or "error" (English), "code" and "error_es" (Spanish) when it fails,
   with an exit code other than 0.
 
-COLMAP and OpenMVS are found as for TismaServer: TISMA_COLMAP and TISMA_OPENMVS, or COLMAP on the PATH.
+COLMAP and OpenMVS are found as for TismaServer: TISMA_COLMAP and TISMA_OPENMVS, or COLMAP on the PATH. The Windows
+package of a scan node (the folder tisma-scan) brings them next to tisma_scan.exe, in colmap/ and openmvs/: they are
+used when those variables are not set.
 """
 
 from __future__ import annotations
@@ -52,6 +54,30 @@ SUMMARY_KEYS = ("dimensions_mm_xyz", "oriented_box_mm", "volume_mm3", "area_mm2"
 RESULTS = ("pieza.stl", "pieza.ply", "pieza_informe.json")
 
 
+def bundled_programs(folder: Path | None = None) -> dict[str, str]:
+    """COLMAP and OpenMVS that came next to this program (colmap/COLMAP.bat or colmap/bin/colmap(.exe), openmvs/ with
+    DensifyPointCloud), set as TISMA_COLMAP and TISMA_OPENMVS when they are not set. Returns what was set."""
+    if folder is None:
+        folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else HERE
+    found = {}
+    if not os.environ.get("TISMA_COLMAP"):
+        for name in ("COLMAP.bat", "bin/colmap.exe", "bin/colmap"):
+            if (folder / "colmap" / name).is_file():
+                found["TISMA_COLMAP"] = str(folder / "colmap" / name)
+                break
+    if not os.environ.get("TISMA_OPENMVS"):
+        mvs = folder / "openmvs"
+        if any((mvs / n).is_file() for n in ("DensifyPointCloud.exe", "DensifyPointCloud")):
+            found["TISMA_OPENMVS"] = str(mvs)
+    os.environ.update(found)
+    return found
+
+
+def nvidia_card() -> bool:
+    """An NVIDIA card with its driver (nvidia-smi comes with the driver, on Windows and Linux)."""
+    return shutil.which("nvidia-smi") is not None
+
+
 def colmap_has_cuda(colmap: str) -> bool:
     """COLMAP says in its help whether it was built with CUDA ("... with CUDA" / "... without CUDA")."""
     import subprocess
@@ -68,19 +94,20 @@ def headless_colmap(reconstruct, gpu: bool = True) -> None:
     its SIFT must run on the processor (on the GPU it uses OpenGL, which aborts without a context)."""
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    if not gpu or not colmap_has_cuda(reconstruct.COLMAP_EXE):
+    if not gpu or not nvidia_card() or not colmap_has_cuda(reconstruct.COLMAP_EXE):
         os.environ["TISMA_COLMAP_NO_GPU"] = "1"
 
 
 def dense_method(reconstruct) -> str | None:
-    """How the dense cloud is made here: TISMA_SCAN_DENSE, else OpenMVS when set, else COLMAP's, which needs CUDA.
+    """How the dense cloud is made here: TISMA_SCAN_DENSE, else OpenMVS when set, else COLMAP's, which needs CUDA and
+    an NVIDIA card.
     None: it cannot be made on this machine (and without it there is no STL)."""
     chosen = os.environ.get("TISMA_SCAN_DENSE")
     if chosen:
         return chosen
     if reconstruct.OPENMVS_DIR:
         return "openmvs"
-    return "colmap" if colmap_has_cuda(reconstruct.COLMAP_EXE) else None
+    return "colmap" if nvidia_card() and colmap_has_cuda(reconstruct.COLMAP_EXE) else None
 
 
 class Failed(Exception):
@@ -151,6 +178,7 @@ def summary_of(out: Path) -> dict:
 def load_pipeline():
     """reconstruct.py with its modules (numpy, OpenCV, Open3D): a node without them gives a coded error, and what
     is missing goes only to the log of the node (the standard error), not to the person."""
+    bundled_programs()
     try:
         import reconstruct
     except (ImportError, SystemExit) as ex:  # reconstruct.py ends with SystemExit when OpenCV is missing
@@ -222,9 +250,9 @@ def check() -> dict:
         if reconstruct.OPENMVS_DIR and not Path(reconstruct.OPENMVS_DIR).is_dir():
             problems.append(f"OpenMVS is set but missing ({reconstruct.OPENMVS_DIR})")
         elif not problems and dense_method(reconstruct) is None:
-            problems.append("the dense cloud cannot be made: COLMAP has no CUDA here; install OpenMVS (TISMA_OPENMVS) "
-                            "or a COLMAP with CUDA and an NVIDIA card")
-    if not shutil.which("nvidia-smi"):
+            problems.append("the dense cloud cannot be made: COLMAP has no CUDA or no NVIDIA card here; install "
+                            "OpenMVS (TISMA_OPENMVS) or a COLMAP with CUDA and an NVIDIA card")
+    if not nvidia_card():
         warnings.append("no NVIDIA card found: COLMAP runs on the processor, much slower")
     return {"ready": not problems, "problems": problems, "warnings": warnings}
 
