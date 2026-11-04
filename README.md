@@ -106,7 +106,9 @@ lisa, mate y de un solo color **no tiene puntos**. Esto es lo que más influye e
 
 1. **Pon la pieza sobre el tapete** (`python3 tools/make_scan_mat.py --paper a4`). Imprímelo al 100 %
    y comprueba con una regla que la barra mide 100 mm. El tapete localiza la cámara aunque la pieza
-   no tenga textura, y sus marcadores dan la **escala real en mm**.
+   no tenga textura, y sus marcadores dan la **escala real en mm**. El tapete estándar (marcadores de
+   30 mm, el que sale sin `--marker-mm`) se reconoce solo, también en Tisma Cloud. Si imprimes otro tamaño
+   de marcador, pásale su `.json` con `--mat` a `reconstruct.py`: sin él no se usa su escala.
 2. **Si la pieza es lisa, dale textura**: spray de escaneo matificante (se evapora en unas horas),
    polvo de talco, o puntos con rotulador si no importa marcarla. Si es brillante, el spray es obligatorio.
 3. **Luz difusa y constante**: día nublado, caja de luz o dos lámparas con difusor. La linterna

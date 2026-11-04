@@ -750,8 +750,19 @@ def triangulate(obs):
     return X[:3] / X[3]
 
 
+# The mat that make_scan_mat.py prints by default and the README tells people to print (DICT_4X4_50, 30 mm markers):
+# looked for in every scan, so its scale is used without --mat (Tisma Cloud and TismaServer never pass one).
+STANDARD_MAT = {"dictionary": "DICT_4X4_50", "marker_mm": 30.0}
+# Without --mat the marker size is assumed: a mat printed with other markers, or not at 100 %, would give a wrong
+# scale. It is only used when its edges agree (spread) and it is not far from the focus or INS scale.
+STANDARD_MAT_MAX_SPREAD = 0.02
+STANDARD_MAT_MAX_DIFF = 0.20
+
+
 def scale_from_aruco(work, cams, imgs, mat_json):
-    mat = json.loads(Path(mat_json).read_text())
+    """Metres per model unit from the edges of the mat's ArUco markers, and their relative spread. mat_json is the
+    .json of make_scan_mat.py or a dict like STANDARD_MAT."""
+    mat = mat_json if isinstance(mat_json, dict) else json.loads(Path(mat_json).read_text())
     marker_mm = mat["marker_mm"]
     det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
                                   cv2.aruco.DetectorParameters())
@@ -781,6 +792,29 @@ def scale_from_aruco(work, cams, imgs, mat_json):
     med = np.median(r)
     r = r[np.abs(r - med) < 0.05 * med]
     return float(np.median(r)), float(np.std(r) / np.median(r))
+
+
+def choose_mat_scale(work, cams, imgs, mat_json, others):
+    """
+    The mat's scale as (m/unit, description), or None. With --mat its .json gives the marker size. Without it, the
+    standard mat is looked for, and kept only when its edges agree within STANDARD_MAT_MAX_SPREAD and it is within
+    STANDARD_MAT_MAX_DIFF of the other scales (a mat printed with other markers would be far from them).
+    """
+    s, rel = scale_from_aruco(work, cams, imgs, mat_json or STANDARD_MAT)
+    if not s:
+        return None
+    if mat_json:
+        return s, f"ArUco (dispersión {rel * 100:.2f} %)"
+    label = f"tapete estándar, marcadores de {STANDARD_MAT['marker_mm']:g} mm (dispersión {rel * 100:.2f} %)"
+    if rel > STANDARD_MAT_MAX_SPREAD:
+        print(f"[scale] {label}: no se usa, los bordes no concuerdan (¿otro tapete? pásalo con --mat)")
+        return None
+    far = [o for o in others if abs(s / o - 1) > STANDARD_MAT_MAX_DIFF]
+    if far:
+        print(f"[scale] {label}: no se usa, {(s / far[0] - 1) * 100:+.0f} % de las otras escalas "
+              "(¿otros marcadores o no impreso al 100 %? pásalo con --mat)")
+        return None
+    return s, label
 
 
 def umeyama_scale(src, dst):
@@ -939,10 +973,6 @@ def main(argv=None):
     # Todas las fuentes de escala disponibles (se usa la mejor y se muestran las demás para
     # contrastarlas): tapete ArUco > distancia por enfoque > trayectoria INS.
     sources = []
-    if a.mat:
-        s_a, rel = scale_from_aruco(a.work, cams, imgs, a.mat)
-        if s_a:
-            sources.append((s_a, f"ArUco (dispersión {rel * 100:.2f} %)"))
     s_f, rel_f, n_f = scale_from_focus(a.work, imgs, read_points3d(txt))
     if s_f:
         calib = {c["id"]: c.get("focus_distance_calibration", "?") for c in session["cameras"]}
@@ -951,6 +981,9 @@ def main(argv=None):
     s_i = scale_from_ins(imgs, records, scan)
     if s_i:
         sources.append((s_i, "trayectoria INS suavizada (aprox. 5-10 %; mídelo con ins_accuracy.py)"))
+    mat = choose_mat_scale(a.work, cams, imgs, a.mat, [sv for sv, _ in sources])
+    if mat:
+        sources.insert(0, mat)
     for k, (sv, desc) in enumerate(sources):
         diff = f"  ({(sv / sources[0][0] - 1) * 100:+.1f} % vs la elegida)" if k else "  ← elegida"
         print(f"[scale] {sv:.6f} m/unidad · {desc}{diff}")
