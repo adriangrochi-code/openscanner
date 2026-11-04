@@ -116,8 +116,11 @@ jobs:
           Select-String -Path COLMAP.bat -Pattern "^set (PATH|QT_PLUGIN_PATH)="
           $env:PATH = "$PWD\lib;$env:PATH"
           $env:QT_PLUGIN_PATH = "$PWD\lib\plugins"
-          & .\bin\colmap.exe help | Select-Object -First 2
-          if ($LASTEXITCODE -ne 0) { throw "colmap.exe help: $LASTEXITCODE" }
+          # Whole output first: a pipe into Select-Object stops the program early and leaves $LASTEXITCODE empty.
+          $out = & .\bin\colmap.exe help
+          $code = $LASTEXITCODE
+          $out | Select-Object -First 2
+          if ($code -ne 0) { throw "colmap.exe help: $code" }
 
       - name: tisma_scan.exe --check (con COLMAP y OpenMVS del paquete)
         working-directory: scan-out/tisma-scan
