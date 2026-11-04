@@ -12,6 +12,21 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - Release in January 2027, with the desktop app and the Android slicer app; closed beta in December 2026.
 - Changes to `tisma_scan`'s command line or summary are agreed with the Tisma Cloud server session first.
 
+## 2026-11-04: scale accuracy, Windows package
+
+- **The mat's scale was never used on Tisma Cloud**: tisma_scan and TismaServer never pass `--mat`, so every
+  cloud scan took its scale from the focus or the INS (5-10 %). Now (d720958) reconstruct.py looks for the
+  standard mat (make_scan_mat.py's default, 30 mm markers) in every scan. As the marker size is assumed, it is
+  kept only with a spread under 2 % and within 20 % of the focus/INS scale; a mat with other markers needs its
+  .json with `--mat`. Measured on synthetic views of the mat (tools/test_reconstruct.py): **+0.34 %** scale error,
+  spread 0.07 %; a 40 mm mat is rejected. **Not tested** on a real printed mat or through COLMAP end to end. If a
+  scan has no focus sweep and no INS movement, a wrong-size mat would be used without a check.
+- Windows package: with COLMAP.bat, `%1` cuts the arguments at commas (the camera parameters), and QT_PLUGIN_PATH is
+  `lib\plugins`. tisma_scan.exe (PyInstaller) passed its DLL directory on to COLMAP: reset while starting a program
+  (3852e82). With the .bat's PATH and QT_PLUGIN_PATH, `colmap.exe help` starts on the runner (run 41901450857);
+  `--check` and the synthetic scan with the package are still to be seen green (run of 74af7ee and later).
+- CPU e2e on scanner/next (815ed82, run 41895135244): green.
+
 ## 2026-11-04: setup
 
 - `scanner/next` = `scan/cpu-pipeline` at cb85aef, which already has all of `cloud/tisma-cloud`. Nothing was left to
