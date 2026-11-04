@@ -501,10 +501,23 @@ private fun CamerasTab(s: UiState, vm: ScanActions, onShareText: (String) -> Uni
 
 @Composable
 private fun CloudTab(s: UiState, vm: ScanActions) {
-    Section("Tisma Server")
-    Hint("Los escaneos se procesan en tu servidor (fotogrametría, malla y STL en mm).")
+    Section("Tisma Cloud")
+    Hint("Los escaneos se procesan en Tisma Cloud (fotogrametría, malla y STL en mm) con tu cuenta de Tisma. " +
+        "Tu plan tiene que incluir los escaneos 3D.")
     TextSetting("Servidor", s.cloudUrl, "https://tismaservidores.net", secret = false, onChange = vm::setCloudUrl)
-    TextSetting("Clave de API", s.cloudKey, "la muestra TismaServer.exe al arrancar", secret = true, onChange = vm::setCloudKey)
+    if (s.cloudKey.isBlank()) {
+        var email by remember { mutableStateOf(s.cloudEmail) }
+        var password by remember { mutableStateOf("") }
+        TextSetting("Correo", email, "tu@correo.com", secret = false) { email = it }
+        TextSetting("Contraseña", password, "la de tu cuenta de Tisma", secret = true) { password = it }
+        SecondaryButton(if (s.cloudBusy) "Entrando…" else "Entrar", Modifier.fillMaxWidth().padding(top = 6.dp),
+            enabled = !s.cloudBusy && email.isNotBlank() && password.isNotEmpty()) {
+            vm.cloudLogin(email, password); password = ""
+        }
+    } else {
+        Mono("Sesión iniciada: ${s.cloudEmail}", Tisma.Ok)
+        SecondaryButton("Salir", Modifier.fillMaxWidth().padding(top = 6.dp), enabled = !s.cloudBusy) { vm.cloudLogout() }
+    }
     Section("Último escaneo")
     when {
         s.lastZip == null -> Hint("Haz un escaneo y pulsa ☁ Enviar en la pantalla de la cámara.")

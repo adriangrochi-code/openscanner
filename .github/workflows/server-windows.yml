@@ -25,11 +25,21 @@ jobs:
           pip install numpy opencv-contrib-python-headless open3d pyinstaller
 
       - name: Pruebas del pipeline (sin COLMAP)
-        run: python tools/test_reconstruct.py
+        run: |
+          python tools/test_reconstruct.py
+          python tools/test_tisma_scan.py
 
       - name: Compilar TismaServer.exe
         working-directory: server
         run: pyinstaller --noconfirm --clean TismaServer.spec
+
+      - name: Compilar tisma_scan.exe (nodos de Tisma Cloud)
+        working-directory: server
+        run: pyinstaller --noconfirm TismaScan.spec
+
+      - name: tisma_scan.exe responde
+        working-directory: server/dist
+        run: .\tisma_scan.exe --help
 
       - name: Autoprueba del .exe en Windows
         working-directory: server/dist
@@ -42,6 +52,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item server/dist/TismaServer.exe out/
+          Copy-Item server/dist/tisma_scan.exe out/
           Copy-Item server/README.md out/LEEME.md
           Copy-Item server/tisma_server.example.json out/
 

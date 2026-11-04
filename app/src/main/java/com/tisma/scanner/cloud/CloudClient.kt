@@ -6,57 +6,100 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipInputStream
 
 /**
- * Cliente de Tisma Server (ver server/README.md). Sin dependencias: HttpURLConnection.
- * Sólo HTTPS: la clave de API viaja en cada petición.
+ * Cliente de Tisma Cloud para los escaneos (API v1; contrato en el README de Tisma Cloud, «Escaneos 3D»).
+ * Sin dependencias: HttpURLConnection. Sólo HTTPS: el token de la sesión viaja en cada petición.
+ *
+ * - Se entra con la cuenta de Tisma (`POST /v1/auth/login`): el token es el de la sesión de este teléfono.
+ * - El escaneo se sube en trozos a `/v1/scans` (reanudable: 409 dice desde dónde seguir) y al completarlo
+ *   se vuelve un trabajo de la cola (`kind` = "scan"), que se sigue con `GET /v1/jobs/{id}`.
+ * - El resultado es un zip con `pieza.stl` (mm), `pieza_informe.json` y, si se hicieron, `pieza.ply`,
+ *   `textura.zip` y `log.txt`.
+ * - El plan de la cuenta tiene que incluir los escaneos: si no, el servidor contesta 402 con el texto.
  */
-class CloudClient(baseUrl: String, private val apiKey: String) {
+class CloudClient(baseUrl: String, private val token: String) {
 
-    private val base = baseUrl.trim().trimEnd('/')
+    private val base = normalize(baseUrl)
 
     init {
-        require(base.startsWith("https://")) { "El servidor debe usar https://" }
-        require(apiKey.isNotBlank()) { "Falta la clave de API (⚙ → Nube)" }
+        require(token.isNotBlank()) { "Entrá con tu cuenta de Tisma Cloud (⚙ → Nube)" }
     }
 
-    class HttpError(val code: Int, val body: JSONObject?) :
-        IOException("HTTP $code: ${body?.optString("error") ?: ""}")
-
-    private fun request(method: String, path: String, body: ByteArray? = null, len: Int = body?.size ?: 0,
-                        contentType: String = "application/json", timeoutMs: Int = 60_000): Pair<Int, JSONObject?> {
-        val c = URL(base + path).openConnection() as HttpURLConnection
-        try {
-            c.requestMethod = method
-            c.connectTimeout = 20_000
-            c.readTimeout = timeoutMs
-            c.setRequestProperty("Authorization", "Bearer $apiKey")
-            if (body != null) {
-                c.doOutput = true
-                c.setRequestProperty("Content-Type", contentType)
-                c.setFixedLengthStreamingMode(len)
-                c.outputStream.use { it.write(body, 0, len) }
+    /** Un error del servidor, con su texto (`detail`) para mostrar. */
+    class HttpError(val code: Int, val body: JSONObject?) : IOException(describe(code, body)) {
+        companion object {
+            fun describe(code: Int, body: JSONObject?): String {
+                val detail = body?.optString("detail")?.takeIf { it.isNotBlank() }
+                return when {
+                    code == 401 -> "La sesión venció o se cerró: entrá de nuevo"
+                    detail != null -> detail
+                    else -> "HTTP $code"
+                }
             }
-            val code = c.responseCode
-            val text = (if (code >= 400) c.errorStream else c.inputStream)?.bufferedReader()?.use { it.readText() }
-            val json = text?.takeIf { it.isNotBlank() }?.let { runCatching { JSONObject(it) }.getOrNull() }
-            return code to json
-        } finally {
-            c.disconnect()
         }
     }
 
-    fun health(): JSONObject? = request("GET", "/api/health").second
+    companion object {
+        fun normalize(url: String): String {
+            val base = url.trim().trimEnd('/')
+            require(base.startsWith("https://")) { "El servidor debe usar https://" }
+            return base
+        }
 
-    /** Crea la subida. Devuelve (id, tamaño de trozo). */
+        /** Entra con la cuenta. Devuelve (token, correo). */
+        fun login(baseUrl: String, email: String, password: String, device: String): Pair<String, String> {
+            val body = JSONObject().put("email", email.trim()).put("password", password).put("device", device)
+            val (code, j) = call(normalize(baseUrl), "POST", "/v1/auth/login", null, body.toString().toByteArray())
+            if (code != 200 || j == null) throw HttpError(code, j)
+            return j.getString("token") to j.optString("email", email.trim())
+        }
+
+        internal fun call(base: String, method: String, path: String, token: String?, body: ByteArray? = null,
+                          len: Int = body?.size ?: 0, contentType: String = "application/json",
+                          timeoutMs: Int = 60_000): Pair<Int, JSONObject?> {
+            val c = URL(base + path).openConnection() as HttpURLConnection
+            try {
+                c.requestMethod = method
+                c.connectTimeout = 20_000
+                c.readTimeout = timeoutMs
+                token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+                if (body != null) {
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type", contentType)
+                    // Con largo fijo: Tisma Cloud rechaza las subidas sin Content-Length (411).
+                    c.setFixedLengthStreamingMode(len)
+                    c.outputStream.use { it.write(body, 0, len) }
+                }
+                val code = c.responseCode
+                val text = (if (code >= 400) c.errorStream else c.inputStream)?.bufferedReader()?.use { it.readText() }
+                val json = text?.takeIf { it.isNotBlank() }?.let { runCatching { JSONObject(it) }.getOrNull() }
+                return code to json
+            } finally {
+                c.disconnect()
+            }
+        }
+    }
+
+    private fun request(method: String, path: String, body: ByteArray? = null, len: Int = body?.size ?: 0,
+                        contentType: String = "application/json", timeoutMs: Int = 60_000) =
+        call(base, method, path, token, body, len, contentType, timeoutMs)
+
+    fun logout() {
+        runCatching { request("POST", "/v1/auth/logout", "{}".toByteArray()) }
+    }
+
+    /** Empieza a mandar un escaneo. Devuelve (id de la subida, tamaño de trozo). */
     fun create(size: Long, name: String): Pair<String, Int> {
-        val (code, j) = request("POST", "/api/scans", JSONObject().put("size", size).put("name", name).toString().toByteArray())
+        val (code, j) = request("POST", "/v1/scans", JSONObject().put("size", size).put("name", name).toString().toByteArray())
         if (code != 201 || j == null) throw HttpError(code, j)
         return j.getString("id") to j.getInt("chunk_size")
     }
 
-    fun status(id: String): JSONObject {
-        val (code, j) = request("GET", "/api/scans/$id")
+    /** Lo que llegó de una subida (`received`) y su trabajo cuando se completó (`job_id`). */
+    fun scanStatus(id: String): JSONObject {
+        val (code, j) = request("GET", "/v1/scans/$id")
         if (code != 200 || j == null) throw HttpError(code, j)
         return j
     }
@@ -64,10 +107,12 @@ class CloudClient(baseUrl: String, private val apiKey: String) {
     /**
      * Sube el archivo desde lo que el servidor ya tiene, en trozos, reintentando cortes de red
      * con esperas crecientes. Si el servidor responde 409, se continúa desde lo que dice tener.
+     * Al terminar completa la subida y devuelve el id del trabajo.
      */
-    fun upload(id: String, file: File, chunkSize: Int, onProgress: (Long, Long) -> Unit, isCancelled: () -> Boolean = { false }) {
+    fun upload(id: String, file: File, chunkSize: Int, onProgress: (Long, Long) -> Unit,
+               isCancelled: () -> Boolean = { false }): String {
         val size = file.length()
-        var offset = status(id).optLong("received", 0L)
+        var offset = scanStatus(id).optLong("received", 0L)
         val buf = ByteArray(chunkSize)
         var failures = 0
         RandomAccessFile(file, "r").use { raf ->
@@ -76,7 +121,7 @@ class CloudClient(baseUrl: String, private val apiKey: String) {
                 raf.seek(offset)
                 val n = raf.read(buf, 0, minOf(chunkSize.toLong(), size - offset).toInt())
                 try {
-                    val (code, j) = request("PUT", "/api/scans/$id/data?offset=$offset", buf, n,
+                    val (code, j) = request("PUT", "/v1/scans/$id/data?offset=$offset", buf, n,
                         "application/octet-stream", timeoutMs = 120_000)
                     when (code) {
                         200, 409 -> { offset = j?.optLong("received", offset) ?: offset; failures = 0 }
@@ -89,12 +134,25 @@ class CloudClient(baseUrl: String, private val apiKey: String) {
                 } catch (e: IOException) {
                     // Corte de red: esperar y reanudar desde lo que tenga el servidor.
                     failures = backoff(failures)
-                    offset = runCatching { status(id).optLong("received", offset) }.getOrDefault(offset)
+                    offset = runCatching { scanStatus(id).optLong("received", offset) }.getOrDefault(offset)
                 }
             }
         }
-        val (code, j) = request("POST", "/api/scans/$id/complete", "{}".toByteArray())
-        if (code != 202) throw HttpError(code, j)
+        return complete(id)
+    }
+
+    /** Revisa el escaneo en el servidor y lo pone en la cola. Devuelve el id del trabajo. */
+    fun complete(id: String): String {
+        val (code, j) = request("POST", "/v1/scans/$id/complete", "{}".toByteArray(), timeoutMs = 300_000)
+        if (code != 201 || j == null) throw HttpError(code, j)
+        return j.getString("id")
+    }
+
+    /** El trabajo: `status` (queued, running, done, failed, cancelled), `progress`, `summary`, `error`. */
+    fun job(jobId: String): JSONObject {
+        val (code, j) = request("GET", "/v1/jobs/$jobId")
+        if (code != 200 || j == null) throw HttpError(code, j)
+        return j
     }
 
     private fun backoff(failures: Int): Int {
@@ -103,17 +161,34 @@ class CloudClient(baseUrl: String, private val apiKey: String) {
         return failures + 1
     }
 
-    fun download(id: String, name: String, dest: File) {
-        val c = URL("$base/api/scans/$id/files/$name").openConnection() as HttpURLConnection
+    /**
+     * Baja el resultado (un zip) y saca de él los archivos pedidos: nombre en el zip -> archivo de destino.
+     * Devuelve los que estaban.
+     */
+    fun downloadResult(jobId: String, wanted: Map<String, File>): List<File> {
+        val c = URL("$base/v1/jobs/$jobId/result").openConnection() as HttpURLConnection
+        val got = mutableListOf<File>()
         try {
-            c.setRequestProperty("Authorization", "Bearer $apiKey")
+            c.setRequestProperty("Authorization", "Bearer $token")
             c.connectTimeout = 20_000; c.readTimeout = 120_000
-            if (c.responseCode != 200) throw HttpError(c.responseCode, null)
-            val tmp = File(dest.parentFile, dest.name + ".part")
-            c.inputStream.use { inp -> tmp.outputStream().use { inp.copyTo(it) } }
-            if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
+            if (c.responseCode != 200) {
+                val text = c.errorStream?.bufferedReader()?.use { it.readText() }
+                throw HttpError(c.responseCode, text?.let { runCatching { JSONObject(it) }.getOrNull() })
+            }
+            ZipInputStream(c.inputStream.buffered()).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    // Sólo los nombres pedidos, sin carpetas: nada del zip elige dónde se escribe.
+                    val dest = wanted[entry.name] ?: continue
+                    val tmp = File(dest.parentFile, dest.name + ".part")
+                    tmp.outputStream().use { zip.copyTo(it) }
+                    if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
+                    got += dest
+                }
+            }
         } finally {
             c.disconnect()
         }
+        return got
     }
 }

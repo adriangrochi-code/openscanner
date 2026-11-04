@@ -63,6 +63,11 @@ App Android para **escanear piezas en 3D por fotogrametría**. Combina:
 
 ![Interfaz](docs/screenshots/scan_tab.png)
 
+**En Tisma Cloud** (Ajustes → Nube): se entra con la cuenta de Tisma, el escaneo se sube en trozos
+(se reanuda si se corta) y un nodo de Tisma Cloud con placa de video arma la pieza con
+`tools/tisma_scan.py` (o `tisma_scan.exe`, que compila el CI). Hace falta un plan que incluya los
+escaneos 3D. El contrato está en el README de Tisma Cloud, «Escaneos 3D (Tisma Scanner)».
+
 La reconstrucción 3D se hace en el PC (COLMAP + OpenMVS) con los scripts de `tools/`. El móvil se
 dedica a capturar los datos más ricos y mejor sincronizados posibles.
 
