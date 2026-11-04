@@ -32,7 +32,13 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - Licences of the Windows package (asked by QA through the server session; 830da96, run 41910637103 green): the
   COLMAP/OpenMVS licence checks now fail the job, every licence/notice file of both release zips is kept in
   licenses/colmap-release/ and licenses/openmvs-release/, and the OpenMVS v2.4.0 source ships as
-  source/openMVS-2.4.0-source.zip. The number of notice files found was not checked (see the artifact).
+  source/openMVS-2.4.0-source.zip. The releases ship no notices at all for the 95 DLLs they bundle, so
+  server/third_party/ maps each DLL to its library (dlls.csv), keeps each library's official licence text (texts/,
+  sources.csv) and check_bundled.py puts them in licenses/third-party/ + licenses/BUNDLED_DLLS.txt, failing the job
+  on an unmapped DLL (1d07f56; package step green in run 41919077404).
+- **Open:** libspqr.dll (SuiteSparse SPQR) is GPL-2.0+; Qt 5, GMP, LibRaw and CHOLMOD are LGPL. Their source must be
+  offered with the package (Qt's archive link is in BUNDLED_DLLS.txt; the others are not done). Raised with the
+  server session and the owner.
 
 ## 2026-11-04: setup
 
