@@ -16,6 +16,16 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+NOTE = """\
+Libraries bundled in the COLMAP and OpenMVS releases of this package, each with its licence.
+
+Some are GPL (libspqr.dll, SuiteSparse SPQR: GPL-2.0-or-later) or LGPL (Qt 5, GMP, LibRaw, SuiteSparse CHOLMOD).
+While this package only runs on Tisma's own machines (the beta and Tisma Cloud's nodes) it is not conveyed to anyone.
+Before it is given to a third party (outside nodes, a public download), the exact sources of those libraries, at the
+versions of these DLLs, must go with it (a TismaScan-windows-source artifact) and this file must carry a written
+offer of them. OpenMVS (AGPL-3.0, unmodified) already ships its source in source/.
+
+"""
 # Texts other texts refer to (LGPL-3.0 and the GCC exception build on the GPL-3.0; SuiteSparse and LibRaw modules).
 ALWAYS = ("gpl-3.0", "gpl-2.0", "lgpl-2.1")
 
@@ -48,7 +58,7 @@ def check(pkg: Path) -> list[str]:
         shutil.copy(HERE / "texts" / f"{lib}.txt", out / f"{lib}.txt")
     shutil.copy(HERE / "sources.csv", out / "SOURCES.csv")
     (pkg / "licenses" / "BUNDLED_DLLS.txt").write_text(
-        "DLL\tlibrary\tlicence\tnotes (texts in licenses/third-party/<library>.txt)\n" + "\n".join(lines) + "\n",
+        NOTE + "DLL\tlibrary\tlicence\tnotes (texts in licenses/third-party/<library>.txt)\n" + "\n".join(lines) + "\n",
         encoding="utf-8")
     print(f"{len(dlls)} bundled DLLs, {len(used)} licence texts, {len(missing)} without a licence")
     return missing
