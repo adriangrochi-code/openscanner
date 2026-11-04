@@ -54,27 +54,38 @@ SUMMARY_KEYS = ("dimensions_mm_xyz", "oriented_box_mm", "volume_mm3", "area_mm2"
 RESULTS = ("pieza.stl", "pieza.ply", "pieza_informe.json")
 
 
-def bundled_programs(folder: Path | None = None) -> dict[str, str]:
-    """COLMAP and OpenMVS that came next to this program (colmap/bin/colmap(.exe) or colmap/COLMAP.bat, openmvs/ with
-    DensifyPointCloud), set as TISMA_COLMAP and TISMA_OPENMVS when they are not set. Returns what was set.
+def colmap_program(colmap: str) -> str:
+    """The COLMAP program behind a COLMAP.bat (bin/colmap.exe next to it), with what the .bat sets: its lib/ on the
+    PATH and its Qt plugins. Through a .bat, cmd.exe splits the commas of --ImageReader.camera_params into separate
+    arguments and COLMAP refuses the camera. Anything else is returned as it is."""
+    bat = Path(colmap)
+    exe = bat.parent / "bin" / "colmap.exe"
+    if bat.suffix.lower() != ".bat" or not exe.is_file():
+        return colmap
+    if (bat.parent / "lib").is_dir():
+        os.environ["PATH"] = str(bat.parent / "lib") + os.pathsep + os.environ.get("PATH", "")
+    if (bat.parent / "plugins").is_dir() and not os.environ.get("QT_PLUGIN_PATH"):
+        os.environ["QT_PLUGIN_PATH"] = str(bat.parent / "plugins")
+    return str(exe)
 
-    The program itself is preferred to COLMAP.bat: through a .bat, cmd.exe splits the commas of
-    --ImageReader.camera_params into separate arguments and COLMAP refuses the camera. What COLMAP.bat sets (its lib/
-    on the PATH, its Qt plugins) is set here instead."""
+
+def bundled_programs(folder: Path | None = None) -> dict[str, str]:
+    """COLMAP and OpenMVS that came next to this program (colmap/COLMAP.bat or colmap/bin/colmap(.exe), openmvs/ with
+    DensifyPointCloud), set as TISMA_COLMAP and TISMA_OPENMVS when they are not set. A COLMAP.bat, found here or set
+    by the person, becomes the colmap.exe next to it (colmap_program). Returns what was set."""
     if folder is None:
         folder = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else HERE
     found = {}
-    if not os.environ.get("TISMA_COLMAP"):
-        colmap_dir = folder / "colmap"
-        for name in ("bin/colmap.exe", "bin/colmap", "COLMAP.bat"):
-            if (colmap_dir / name).is_file():
-                found["TISMA_COLMAP"] = str(colmap_dir / name)
+    colmap = os.environ.get("TISMA_COLMAP")
+    if not colmap:
+        for name in ("COLMAP.bat", "bin/colmap.exe", "bin/colmap"):
+            if (folder / "colmap" / name).is_file():
+                colmap = str(folder / "colmap" / name)
+                found["TISMA_COLMAP"] = colmap
                 break
-        if found.get("TISMA_COLMAP", "").endswith(("colmap.exe", "colmap")):
-            if (colmap_dir / "lib").is_dir():
-                os.environ["PATH"] = str(colmap_dir / "lib") + os.pathsep + os.environ.get("PATH", "")
-            if (colmap_dir / "plugins").is_dir() and not os.environ.get("QT_PLUGIN_PATH"):
-                os.environ["QT_PLUGIN_PATH"] = str(colmap_dir / "plugins")
+    program = colmap_program(colmap) if colmap else colmap
+    if program != colmap:
+        found["TISMA_COLMAP"] = program
     if not os.environ.get("TISMA_OPENMVS"):
         mvs = folder / "openmvs"
         if any((mvs / n).is_file() for n in ("DensifyPointCloud.exe", "DensifyPointCloud")):

@@ -149,6 +149,12 @@ def test_bundled_programs_next_to_it():
             assert os.environ["TISMA_OPENMVS"] == str(d / "openmvs")
             assert os.environ["PATH"].split(os.pathsep)[0] == str(d / "colmap" / "lib")
             assert os.environ["QT_PLUGIN_PATH"] == str(d / "colmap" / "plugins")
+            # A COLMAP.bat set by the person: the colmap.exe next to it, too.
+            os.environ["TISMA_COLMAP"] = str(d / "colmap" / "COLMAP.bat")
+            os.environ.pop("TISMA_OPENMVS")
+            assert ts.bundled_programs(d / "nothing") == {"TISMA_COLMAP": str(d / "colmap" / "bin" / "colmap.exe")}
+            assert os.environ["TISMA_COLMAP"] == str(d / "colmap" / "bin" / "colmap.exe")
+            # Without bin/colmap.exe, the .bat stays.
             os.environ.pop("TISMA_COLMAP")
             (d / "colmap" / "bin" / "colmap.exe").unlink()
             assert ts.bundled_programs(d)["TISMA_COLMAP"] == str(d / "colmap" / "COLMAP.bat")
