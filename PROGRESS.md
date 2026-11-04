@@ -59,8 +59,15 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - With CUDA it is faster: COLMAP's SIFT on the GPU, and the COLMAP dense cloud (`patch_match_stereo`), which only
   exists with CUDA. `tisma_scan --check` says which one this machine uses.
 
+## Open for the beta
+
+- The mat cannot be downloaded by a user today: it is made with `tools/make_scan_mat.py` (Python). The guides say
+  "print the Tisma Scanner mat"; the A4/A3/Letter PNGs (and their 100 mm check bar) should be published, in the
+  app or on the Tisma site.
+
 ## Next
 
 1. The full path on a real or turntable photo set (not only the synthetic box), with measured accuracy.
 2. Capture: coverage, "Listo para enviar", resuming uploads, accuracy of the scale (mat > focus > INS).
-3. User docs in Spanish and English.
+3. User docs: docs/GUIA.md (es) and docs/GUIDE.md (en) are written from the code's labels and thresholds;
+   to be checked against the app on a phone with the QA session.
