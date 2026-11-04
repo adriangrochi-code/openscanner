@@ -82,6 +82,20 @@ jobs:
           $colmap = (Get-ChildItem dl/colmap -Recurse -Filter COLMAP.bat | Select-Object -First 1).Directory
           $mvs = (Get-ChildItem dl/openmvs -Recurse -Filter DensifyPointCloud.exe | Select-Object -First 1).Directory
           if (-not $colmap -or -not $mvs) { Get-ChildItem -Recurse dl | Select-Object -First 60 FullName; throw "unexpected layout" }
+          # Every licence and notice file of both releases (Qt, Boost, CGAL, OpenCV, the CUDA runtime... ship inside
+          # them), with its path in the release, before only the program folders are moved into the package.
+          function notices($from, $to) {
+            $root = (Resolve-Path $from).Path
+            $found = Get-ChildItem $from -Recurse -File | Where-Object { $_.Name -match '^(LICEN[CS]E|COPYING|NOTICE)|licen[cs]e' }
+            foreach ($f in $found) {
+              $dest = Join-Path $to $f.FullName.Substring($root.Length).TrimStart('\', '/')
+              New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+              Copy-Item $f.FullName $dest
+            }
+            "{0}: {1} licence/notice files" -f $to, @($found).Count
+          }
+          notices dl/colmap "$pkg/licenses/colmap-release"
+          notices dl/openmvs "$pkg/licenses/openmvs-release"
           Move-Item $colmap.FullName "$pkg/colmap"
           Move-Item $mvs.FullName "$pkg/openmvs"
           # Their licenses, from the source of those same versions.
@@ -93,8 +107,16 @@ jobs:
           }
           license "https://raw.githubusercontent.com/colmap/colmap/3.9.1" "$pkg/licenses/COLMAP-BSD-3-Clause.txt"
           license "https://raw.githubusercontent.com/cdcseacave/openMVS/v2.4.0" "$pkg/licenses/OpenMVS-AGPL-3.0.txt"
-          Select-String -Path "$pkg/licenses/COLMAP-BSD-3-Clause.txt" -Pattern "Redistribution" -Quiet
-          Select-String -Path "$pkg/licenses/OpenMVS-AGPL-3.0.txt" -Pattern "AFFERO" -Quiet
+          if (-not (Select-String -Path "$pkg/licenses/COLMAP-BSD-3-Clause.txt" -Pattern "Redistribution" -Quiet)) {
+            throw "the COLMAP licence is not BSD-3-Clause"
+          }
+          if (-not (Select-String -Path "$pkg/licenses/OpenMVS-AGPL-3.0.txt" -Pattern "AFFERO" -Quiet)) {
+            throw "the OpenMVS licence is not the AGPL-3.0"
+          }
+          # AGPL-3.0: the corresponding source of OpenMVS travels with its programs.
+          New-Item -ItemType Directory -Force "$pkg/source" | Out-Null
+          Invoke-WebRequest "https://github.com/cdcseacave/openMVS/archive/refs/tags/v2.4.0.zip" -OutFile "$pkg/source/openMVS-2.4.0-source.zip"
+          if ((Get-Item "$pkg/source/openMVS-2.4.0-source.zip").Length -lt 1MB) { throw "the OpenMVS source zip is too small" }
           @"
           tisma-scan: the 3D scans of Tisma Scanner on a computing node of Tisma Cloud.
           Unpack this folder next to tisma-cloud.exe; the node finds tisma_scan.exe by itself.
@@ -102,7 +124,10 @@ jobs:
           COLMAP 3.9.1 (colmap/): BSD-3-Clause, licenses/COLMAP-BSD-3-Clause.txt.
             Official release, unmodified: https://github.com/colmap/colmap/releases/tag/3.9.1
           OpenMVS 2.4.0 (openmvs/): GNU Affero General Public License 3.0, licenses/OpenMVS-AGPL-3.0.txt.
-            Official release, unmodified; its source: https://github.com/cdcseacave/openMVS/tree/v2.4.0
+            Official release, unmodified; its source: source/openMVS-2.4.0-source.zip
+            (the same as https://github.com/cdcseacave/openMVS/tree/v2.4.0).
+          licenses/colmap-release/ and licenses/openmvs-release/: the licence and notice files that came in
+            those releases (for the libraries they include: Qt, Boost, CGAL, OpenCV, CUDA runtime...).
           "@ | Set-Content "$pkg/LEEME.txt" -Encoding utf8
           Get-ChildItem $pkg | Format-Table Name, Length
           "{0:N0} MB" -f ((Get-ChildItem $pkg -Recurse | Measure-Object Length -Sum).Sum / 1MB)
