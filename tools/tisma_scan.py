@@ -116,8 +116,20 @@ def summary_of(out: Path) -> dict:
     return {k: report[k] for k in SUMMARY_KEYS if k in report} if isinstance(report, dict) else {}
 
 
+def load_pipeline():
+    """reconstruct.py with its modules (numpy, OpenCV, Open3D): a node without them gives a coded error, and what
+    is missing goes only to the log of the node (the standard error), not to the person."""
+    try:
+        import reconstruct
+    except (ImportError, SystemExit) as ex:  # reconstruct.py ends with SystemExit when OpenCV is missing
+        print(f"tisma_scan: the pipeline cannot start on this node: {ex}", file=sys.stderr)
+        raise Failed("scan_setup", "This computing server lacks the programs for 3D scans",
+                     "A este servidor de cálculo le faltan programas para escanear") from None
+    return reconstruct
+
+
 def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
-    import reconstruct
+    reconstruct = load_pipeline()
 
     if not (shutil.which(reconstruct.COLMAP_EXE) or Path(reconstruct.COLMAP_EXE).exists()):
         raise Failed("no_colmap", "COLMAP is not installed on this computing server",

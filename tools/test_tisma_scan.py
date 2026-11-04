@@ -76,6 +76,28 @@ def test_a_failed_pipeline_is_a_coded_error():
         assert code == 1 and summary["code"] == "reconstruction_failed" and "ninguna foto" in summary["error"]
 
 
+def test_missing_modules_are_a_coded_error():
+    import builtins
+    real_import = builtins.__import__
+
+    def no_reconstruct(name, *args, **kwargs):
+        if name == "reconstruct":
+            raise SystemExit("Falta OpenCV: pip install opencv-contrib-python numpy")
+        return real_import(name, *args, **kwargs)
+
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        builtins.__import__ = no_reconstruct
+        saved = sys.modules.pop("reconstruct")
+        try:
+            code = ts.main([str(d / "scan.zip"), "-o", str(d / "out"), "--summary", str(d / "s.json")])
+        finally:
+            builtins.__import__ = real_import
+            sys.modules["reconstruct"] = saved
+        summary = json.loads((d / "s.json").read_text(encoding="utf-8"))
+        assert code == 1 and summary["code"] == "scan_setup" and "pip" not in summary["error_es"]
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
