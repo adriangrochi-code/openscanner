@@ -40,9 +40,11 @@ class CloudClientServerTest {
     private fun demoScan(dest: File) {
         ZipOutputStream(dest.outputStream()).use { z ->
             z.putNextEntry(ZipEntry("scan_demo/session.json")); z.write("{}".toByteArray()); z.closeEntry()
+            // Bytes al azar: no se comprimen, así el zip ocupa varios trozos de 64 KB.
+            val random = java.util.Random(7)
             for (i in 0 until 4) {
                 z.putNextEntry(ZipEntry("scan_demo/images/0/$i.jpg"))
-                z.write(ByteArray(100_000) { (it * 31 + i).toByte() })
+                z.write(ByteArray(100_000).also { random.nextBytes(it) })
                 z.closeEntry()
             }
         }
@@ -56,6 +58,7 @@ class CloudClientServerTest {
         sh("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "key.pem", "-out", "cert.pem",
             "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", dir = dir)
         val zip = File(dir, "scan_demo.zip").also { demoScan(it) }
+        assertTrue("el escaneo de prueba tiene que ocupar varios trozos", zip.length() > 3 * 64 * 1024)
 
         // Confiar sólo en el certificado de prueba (como haría Android con el de tismaservidores.net).
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
