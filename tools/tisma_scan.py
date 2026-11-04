@@ -5,6 +5,7 @@ The node of Tisma Cloud runs it as a separate program for each job (its contract
 tisma_cloud/node/runners.py, run_scan()):
 
     tisma_scan <scan.zip> -o <folder> --summary <summary.json> [--threads <n>] [--no-gpu]
+    tisma_scan --check      whether this machine can rebuild scans (JSON: ready, problems, warnings; exit 0 or 3)
 
 - the same pipeline as TismaServer (reconstruct.py: images -> COLMAP -> dense cloud -> postprocess.py);
 - on the standard output, one line per change of progress: "progress <0 to 100>";
@@ -165,7 +166,37 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
     return summary_of(out)
 
 
+def check() -> dict:
+    """Whether this machine can rebuild scans: {"ready", "problems", "warnings"}. The node of Tisma Cloud asks it
+    (tisma_scan --check) before it takes any scan, so that a missing piece never fails a person's job."""
+    problems: list[str] = []
+    warnings: list[str] = []
+    reconstruct = None
+    try:
+        reconstruct = load_pipeline()
+    except Failed:
+        problems.append("the Python modules of the pipeline (numpy, OpenCV) are missing")
+    try:
+        import open3d  # noqa: F401  (postprocess.py: the mesh and the STL)
+    except ImportError:
+        problems.append("Open3D is missing (the mesh and the STL)")
+    if reconstruct is not None:
+        colmap = reconstruct.COLMAP_EXE
+        if not (shutil.which(colmap) or Path(colmap).is_file()):
+            problems.append(f"COLMAP is missing ({colmap}; TISMA_COLMAP or the PATH)")
+        if reconstruct.OPENMVS_DIR and not Path(reconstruct.OPENMVS_DIR).is_dir():
+            problems.append(f"OpenMVS is set but missing ({reconstruct.OPENMVS_DIR})")
+    if not shutil.which("nvidia-smi"):
+        warnings.append("no NVIDIA card found: COLMAP runs on the processor, much slower")
+    return {"ready": not problems, "problems": problems, "warnings": warnings}
+
+
 def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if args[:1] == ["--check"]:
+        result = check()
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result["ready"] else 3
     ap = argparse.ArgumentParser(prog="tisma_scan", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("scan", type=Path, help="the zip of the scan (Tisma Scanner)")
@@ -173,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary", type=Path, required=True, help="JSON summary for Tisma Cloud")
     ap.add_argument("--threads", type=int, default=0, help="processor threads at most (0: all)")
     ap.add_argument("--no-gpu", action="store_true", help="do not use the graphics card")
-    a = ap.parse_args(argv)
+    a = ap.parse_args(args)
     a.output.mkdir(parents=True, exist_ok=True)
     try:
         summary = run(a.scan, a.output, a.threads, not a.no_gpu, sys.stdout)

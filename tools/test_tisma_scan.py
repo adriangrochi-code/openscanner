@@ -98,6 +98,16 @@ def test_missing_modules_are_a_coded_error():
         assert code == 1 and summary["code"] == "scan_setup" and "pip" not in summary["error_es"]
 
 
+def test_check_says_what_is_missing():
+    old = rc.COLMAP_EXE
+    rc.COLMAP_EXE = "/no/such/colmap"
+    try:
+        result = ts.check()
+    finally:
+        rc.COLMAP_EXE = old
+    assert not result["ready"] and any("COLMAP" in p for p in result["problems"])
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
