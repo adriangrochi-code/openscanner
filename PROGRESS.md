@@ -5,8 +5,8 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 
 ## Owner's decisions (2026-11-04)
 
-- Open source under AGPL-3.0. LICENSE is not added yet: the owner still has to confirm it directly. When they do,
-  add the full AGPL-3.0 text and record every dependency (all AGPL-compatible) in a THIRD_PARTY file.
+- Open source under AGPL-3.0, confirmed by the owner directly on 2026-11-05: LICENSE (the full gnu.org text) and
+  THIRD_PARTY.md (every dependency and its licence, all AGPL-compatible) are in the repo.
 - Only relative poses between shots leave the phone. `gps.csv` stays on the phone, and Tisma Cloud refuses a zip
   that has one.
 - Release in January 2027, with the desktop app and the Android slicer app; closed beta in December 2026.

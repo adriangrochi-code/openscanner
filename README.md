@@ -232,3 +232,8 @@ tools/
 - Captura RAW/DNG (más rango dinámico y sin procesado) si el móvil lo permite.
 - Usar la distancia entre objetivos (`pose_translation_m`) como restricción de rig en COLMAP.
 - Reconstrucción preliminar en el propio móvil para revisar el escaneo antes de irse.
+
+## Licencia
+
+Tisma Scanner es software libre bajo la **GNU Affero General Public License 3.0** ([LICENSE](LICENSE)).
+Las dependencias y sus licencias, todas compatibles, están en [THIRD_PARTY.md](THIRD_PARTY.md).
