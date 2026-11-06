@@ -339,6 +339,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         _state.update { it.copy(cloudUrl = prefs.getString("cloud_url", DEFAULT_CLOUD_URL) ?: DEFAULT_CLOUD_URL,
             cloudKey = prefs.getString("cloud_token", "") ?: "",
             cloudEmail = prefs.getString("cloud_email", "") ?: "") }
+        runCatching { watchCloudSend() }
         _state.update {
             it.copy(
                 cameras = inventory.values.map { c -> c.label },
@@ -541,93 +542,57 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     /**
-     * Envía el último escaneo a Tisma Cloud, sigue el trabajo y descarga la pieza.
-     * La subida es reanudable: el id de la subida se guarda por escaneo, así que si se corta o se
-     * cierra la app, el siguiente envío continúa donde quedó en vez de empezar de cero; una vez en la
-     * cola, se guarda el id del trabajo y se sigue ése.
+     * Envía el último escaneo a Tisma Cloud: lo pone en cola en WorkManager (CloudSendWorker), que lo sube,
+     * sigue el trabajo y baja la pieza aunque la app pase a segundo plano o se cierre, y lo retoma solo cuando
+     * vuelve la red. La subida es reanudable (CloudSend guarda el id de la subida y del trabajo).
      */
     override fun sendToCloud() {
         val zip = _state.value.lastZip ?: return
-        if (cloudJob?.isActive == true) return
-        val ui = _state.value
-        // La subida y la espera del resultado duran minutos: protegidas por el servicio en primer plano, con
-        // su progreso en la notificación, para que Android no corte la app si pasa a segundo plano.
-        val app = getApplication<android.app.Application>()
-        com.tisma.scanner.ProcessingService.start(app, "Enviando a Tisma Cloud…", com.tisma.scanner.ProcessingService.CLOUD)
-        cloudJob = viewModelScope.launch(Dispatchers.IO) {
-            fun st(text: String, progress: Float = -1f, busy: Boolean = true) {
-                _state.update { it.copy(cloudStatus = text, cloudProgress = progress, cloudBusy = busy) }
-                if (busy) com.tisma.scanner.ProcessingService.update(app, text, if (progress >= 0f) (progress * 100).toInt() else -1)
-            }
-            val uploadKey = "scan_" + zip.name + "_" + zip.length()
-            val jobKey = "$uploadKey.job"
-            // El trabajo terminó mal en el servidor: el próximo envío empieza de nuevo.
-            var ended = false
-            try {
-                val client = com.tisma.scanner.cloud.CloudClient(ui.cloudUrl, ui.cloudKey)
-                st("Conectando con ${ui.cloudUrl}…")
-                var jobId = prefs.getString(jobKey, null)
-                if (jobId == null) {
-                    var id = prefs.getString(uploadKey, null)
-                    var chunk = 16 * 1024 * 1024
-                    val existing = id?.let { runCatching { client.scanStatus(it) }.getOrNull() }
-                    jobId = existing?.optString("job_id")?.takeIf { it.isNotBlank() && it != "null" }
-                    if (jobId == null) {
-                        if (existing == null) {
-                            val (newId, c) = client.create(zip.length(), zip.name)
-                            id = newId; chunk = c
-                            prefs.edit().putString(uploadKey, id).apply()
-                        } else {
-                            chunk = existing.optInt("chunk_size", chunk)
+        if (_state.value.cloudBusy) return
+        _state.update { it.copy(cloudStatus = "Conectando con ${it.cloudUrl}…", cloudProgress = -1f, cloudBusy = true) }
+        com.tisma.scanner.cloud.CloudSendWorker.enqueue(getApplication(), zip, _state.value.cloudUrl)
+    }
+
+    /** Lo que muestra la app del envío a la nube, desde el trabajo de WorkManager (también tras reabrirla). */
+    private fun watchCloudSend() {
+        val W = com.tisma.scanner.cloud.CloudSendWorker
+        cloudJob = viewModelScope.launch {
+            androidx.work.WorkManager.getInstance(getApplication()).getWorkInfosForUniqueWorkFlow(W.UNIQUE).collect { infos ->
+                val info = infos.lastOrNull() ?: return@collect
+                // Un trabajo terminado sigue en el historial de WorkManager: lo que se hace una sola vez
+                // (cerrar la sesión vencida, el registro) se hace sólo la primera vez que se ve.
+                val first = prefs.getString("cloud_seen", null) != info.id.toString()
+                fun seen() = prefs.edit().putString("cloud_seen", info.id.toString()).apply()
+                when (info.state) {
+                    androidx.work.WorkInfo.State.ENQUEUED, androidx.work.WorkInfo.State.BLOCKED ->
+                        _state.update { it.copy(cloudStatus = if (info.runAttemptCount > 0) "Sin conexión: se retoma sola al volver la red"
+                            else "Esperando red para enviar…", cloudProgress = -1f, cloudBusy = true) }
+                    androidx.work.WorkInfo.State.RUNNING -> {
+                        val text = info.progress.getString(W.KEY_TEXT) ?: "Enviando a Tisma Cloud…"
+                        _state.update { it.copy(cloudStatus = text, cloudProgress = info.progress.getFloat(W.KEY_PROGRESS, -1f), cloudBusy = true) }
+                    }
+                    androidx.work.WorkInfo.State.SUCCEEDED -> {
+                        val stl = info.outputData.getString(W.KEY_STL)?.let(::File)?.takeIf { it.exists() }
+                        val summary = info.outputData.getString(W.KEY_SUMMARY) ?: ""
+                        _state.update { it.copy(cloudStatus = if (stl != null) "✓ Pieza lista $summary" else "",
+                            cloudProgress = -1f, cloudBusy = false, cloudStl = stl) }
+                        if (first && stl != null) { log("Pieza descargada: ${stl.name} $summary"); seen() }
+                    }
+                    androidx.work.WorkInfo.State.FAILED -> {
+                        val error = info.outputData.getString(W.KEY_ERROR) ?: "el envío falló"
+                        if (first) {
+                            if (info.outputData.getInt(W.KEY_CODE, 0) == 401) {
+                                // La sesión venció o se cerró en otro lado: hay que entrar de nuevo.
+                                prefs.edit().remove("cloud_token").apply()
+                                _state.update { it.copy(cloudKey = "") }
+                            }
+                            log("Nube: $error"); seen()
                         }
-                        jobId = client.upload(id!!, zip, chunk, onProgress = { done, total ->
-                            st("Subiendo %.0f / %.0f MB".format(done / 1e6, total / 1e6), done.toFloat() / total)
-                        }, isCancelled = { !isActive })
+                        _state.update { it.copy(cloudStatus = "✗ $error", cloudProgress = -1f, cloudBusy = false) }
                     }
-                    prefs.edit().putString(jobKey, jobId).remove(uploadKey).apply()
+                    androidx.work.WorkInfo.State.CANCELLED ->
+                        _state.update { it.copy(cloudStatus = "", cloudProgress = -1f, cloudBusy = false) }
                 }
-                // Seguimiento del trabajo en la cola de Tisma Cloud: un corte de red no lo interrumpe.
-                val job = client.waitForJob(jobId!!, 5000, onStatus = { j ->
-                    when (j.optString("status")) {
-                        "queued" -> st("En cola en Tisma Cloud…")
-                        "running" -> j.optInt("progress").let { st("Procesando en la nube: $it %", it / 100f) }
-                    }
-                }, isCancelled = { !isActive })
-                when (job.optString("status")) {
-                    "failed" -> {
-                        ended = true
-                        val s = job.optJSONObject("summary")
-                        throw java.io.IOException(s?.optString("error_es")?.takeIf { it.isNotBlank() }
-                            ?: job.optString("error", "el escaneo falló en el servidor"))
-                    }
-                    "cancelled" -> { ended = true; throw java.io.IOException("el escaneo se canceló") }
-                }
-                st("Descargando la pieza…")
-                val dir = zip.parentFile!!
-                val stl = File(dir, zip.nameWithoutExtension + "_pieza.stl")
-                val reportFile = File(dir, zip.nameWithoutExtension + "_informe.json")
-                client.downloadResult(jobId!!, mapOf("pieza.stl" to stl, "pieza_informe.json" to reportFile))
-                if (!stl.exists()) throw java.io.IOException("el resultado no trae la pieza (pieza.stl)")
-                val summary = runCatching {
-                    val r = job.optJSONObject("summary") ?: JSONObject(reportFile.readText())
-                    val d = r.getJSONArray("dimensions_mm_xyz")
-                    "%.2f × %.2f × %.2f mm".format(d.getDouble(0), d.getDouble(1), d.getDouble(2)) +
-                        (if (r.optBoolean("watertight")) " · cerrada" else "")
-                }.getOrDefault("")
-                prefs.edit().remove(jobKey).apply()
-                _state.update { it.copy(cloudStatus = "✓ Pieza lista $summary", cloudProgress = -1f, cloudBusy = false, cloudStl = stl) }
-                log("Pieza descargada: ${stl.name} $summary")
-            } catch (e: Exception) {
-                if (e is com.tisma.scanner.cloud.CloudClient.HttpError && e.code == 401) {
-                    // La sesión venció o se cerró en otro lado: hay que entrar de nuevo.
-                    prefs.edit().remove("cloud_token").apply()
-                    _state.update { it.copy(cloudKey = "") }
-                }
-                if (ended) prefs.edit().remove(jobKey).apply()
-                st("✗ ${e.message ?: e.javaClass.simpleName}", busy = false)
-                log("Nube: ${e.message}")
-            } finally {
-                com.tisma.scanner.ProcessingService.stop(app, com.tisma.scanner.ProcessingService.CLOUD)
             }
         }
     }

@@ -15,6 +15,7 @@ licence, before it is used; non-commercial or research-only licences are not acc
 | androidx.lifecycle (viewmodel-compose, runtime-compose) | 2.8.7 | Apache-2.0 | UI state |
 | androidx.core:core-ktx | 1.15.0 | Apache-2.0 | Android APIs |
 | kotlinx-coroutines-android | 1.9.0 | Apache-2.0 | concurrency |
+| androidx.work:work-runtime-ktx (WorkManager) | 2.10.0 | Apache-2.0 | cloud upload in the background |
 | Kotlin standard library | 2.1.21 | Apache-2.0 | language |
 | ONNX Runtime for Android (com.microsoft.onnxruntime:onnxruntime-android) | 1.19.2 | MIT | on-device AI inference |
 | Depth Anything 3 Small, as ONNX (`app/src/main/assets/models/da3_small.*`) | DA3-SMALL | Apache-2.0 | depth model (model weights) |

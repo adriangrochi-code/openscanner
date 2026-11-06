@@ -24,9 +24,16 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   tools/fake_tisma_cloud.py --flaky-jobs.
 - The upload and the wait for the result are protected by the foreground service (notification with progress,
   wake lock), like the processing; the service has holders so the upload ending does not stop the processing's
-  protection. Unit-tested (107 tests). **Not tested on a phone.** Still lost if the person swipes the app away
-  (the ViewModel ends; pressing Enviar again resumes from where the server got to). Moving the cloud work into
-  WorkManager would also survive that, and resume by itself when the network comes back.
+  protection.
+- Then the whole send moved to WorkManager: cloud/CloudSend.kt (the logic, no Android, tested against
+  fake_tisma_cloud.py: cut after one chunk, resumed on the same upload, part and measures downloaded) and
+  CloudSendWorker (foreground notification, needs network, retries with exponential backoff up to 20 times, so it
+  survives the app being closed and resumes when the network comes back). The ViewModel queues it and shows its
+  state, also after the app is reopened. Dependency androidx.work 2.10.0 (Apache-2.0, in THIRD_PARTY.md).
+  107 unit tests pass. **Not tested on a phone**: if Android refuses the foreground start from the background,
+  the work still runs (and is retried if stopped), only without its notification.
+- Tisma Cloud's scan-e2e.yml now runs scanner/next through master, node and result zip, on its pushes and every
+  Monday 06:17 UTC: if it goes red after a change here, the node contract moved; tell the server session first.
 - APK for the owner: dist/TismaScanner-0.1.0-debug-<commit>.apk (dist/ is not in git).
 
 ## 2026-11-04: scale accuracy, Windows package

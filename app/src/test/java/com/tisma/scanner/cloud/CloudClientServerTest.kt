@@ -120,6 +120,30 @@ class CloudClientServerTest {
             assertTrue(report.readText().contains("dimensions_mm_xyz"))
             // Nada más del zip se escribe (log.txt no se pidió).
             assertTrue(!File(dir, "log.txt").exists())
+
+            // El envío entero (CloudSend, lo que corre en CloudSendWorker): cortado tras el primer trozo…
+            val kept = mutableMapOf<String, String>()
+            val store = object : CloudSend.Store {
+                override fun get(key: String) = kept[key]
+                override fun put(key: String, value: String?) { if (value == null) kept.remove(key) else kept[key] = value }
+            }
+            var pieces = 0
+            val cutSend = runCatching {
+                CloudSend(client, store, pollMs = 10).run(zip, onStatus = { t, _ -> if (t.startsWith("Subiendo")) pieces++ },
+                    isCancelled = { pieces >= 1 })
+            }.exceptionOrNull()
+            assertTrue(cutSend is IOException)
+            val uploadId = kept.values.single()
+            val before = client.scanStatus(uploadId).getLong("received")
+            assertTrue(before in 1 until zip.length())
+            // …y retomado: sigue la misma subida (no empieza otra), y baja la pieza con sus medidas.
+            val texts = mutableListOf<String>()
+            val result = CloudSend(client, store, pollMs = 10).run(zip, onStatus = { t, _ -> texts += t })
+            assertEquals(zip.length(), client.scanStatus(uploadId).getLong("received"))
+            assertTrue(result.stl.readText().startsWith("solid"))
+            assertTrue(result.summary, result.summary.startsWith("40") && result.summary.endsWith("cerrada"))
+            assertTrue(texts.any { it.startsWith("Procesando en la nube") })
+            assertTrue("nada pendiente tras terminar", kept.isEmpty())
         } finally {
             server.destroy()
             HttpsURLConnection.setDefaultSSLSocketFactory(previous)
