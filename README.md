@@ -1,6 +1,7 @@
 # Tisma Scanner
 
-App Android para **escanear piezas en 3D por fotogrametría**. Combina:
+App Android para **escanear piezas en 3D por fotogrametría**. Guía de uso: [docs/GUIA.md](docs/GUIA.md)
+(English: [docs/GUIDE.md](docs/GUIDE.md)). Combina:
 
 - **Todas las cámaras posibles a la vez**: los objetivos físicos de la cámara lógica trasera
   (principal, ultra gran angular, tele/macro) y las cámaras concurrentes (frontal + trasera).
@@ -104,9 +105,11 @@ de 2 MP (macro), además de la frontal de 16 MP. Algo a tener en cuenta:
 La fotogrametría encuentra la posición de la cámara emparejando puntos entre fotos. Una superficie
 lisa, mate y de un solo color **no tiene puntos**. Esto es lo que más influye en la calidad, de más a menos:
 
-1. **Pon la pieza sobre el tapete** (`python3 tools/make_scan_mat.py --paper a4`). Imprímelo al 100 %
-   y comprueba con una regla que la barra mide 100 mm. El tapete localiza la cámara aunque la pieza
-   no tenga textura, y sus marcadores dan la **escala real en mm**.
+1. **Pon la pieza sobre el tapete** (`python3 tools/make_scan_mat.py --all`: A6, A5, A4, A3, Carta, Oficio y
+   Tabloide, en PDF y PNG). Imprime el PDF a tamaño real / 100 % y comprueba con una regla que la barra mide 100 mm. El tapete localiza la cámara aunque la pieza
+   no tenga textura, y sus marcadores dan la **escala real en mm**. Es un tablero de ajedrez de casillas de
+   20 mm con un marcador ArUco de 15 mm en cada casilla blanca, igual en todas las hojas (en una más grande
+   hay más casillas), así que se reconoce solo, también en Tisma Cloud, aunque la pieza tape parte del tablero.
 2. **Si la pieza es lisa, dale textura**: spray de escaneo matificante (se evapora en unas horas),
    polvo de talco, o puntos con rotulador si no importa marcarla. Si es brillante, el spray es obligatorio.
 3. **Luz difusa y constante**: día nublado, caja de luz o dos lámparas con difusor. La linterna
@@ -229,3 +232,8 @@ tools/
 - Captura RAW/DNG (más rango dinámico y sin procesado) si el móvil lo permite.
 - Usar la distancia entre objetivos (`pose_translation_m`) como restricción de rig en COLMAP.
 - Reconstrucción preliminar en el propio móvil para revisar el escaneo antes de irse.
+
+## Licencia
+
+Tisma Scanner es software libre bajo la **GNU Affero General Public License 3.0** ([LICENSE](LICENSE)).
+Las dependencias y sus licencias, todas compatibles, están en [THIRD_PARTY.md](THIRD_PARTY.md).

@@ -1,0 +1,45 @@
+pattern,library,notes
+^boost_.*\.dll$,boost,
+^brotli(common|dec|enc)\.dll$,brotli,
+^bz2\.dll$,bzip2,
+^ceres\.dll$,ceres-solver,
+^cudart64_\d+\.dll$,cuda-runtime,"Redistributable under the CUDA EULA, Attachment A"
+^double-conversion\.dll$,double-conversion,
+^FreeImage\.dll$,freeimage,"FreeImage Public License (chosen of FIPL / GPL)"
+^freetype\.dll$,freetype,"FreeType License (chosen of FTL / GPL-2.0)"
+^gflags\.dll$,gflags,
+^glew32\.dll$,glew,
+^glfw3\.dll$,glfw,
+^glog\.dll$,glog,
+^gmp-\d+\.dll$,gmp,"LGPL-3.0 (texts: gmp.txt and gpl-3.0.txt)"
+^harfbuzz\.dll$,harfbuzz,
+^hwy\.dll$,highway,
+^(Iex|IlmThread|OpenEXR|OpenEXRCore)-\d+_\d+\.dll$,openexr,
+^Imath-\d+_\d+\.dll$,imath,
+^jpeg62\.dll$,libjpeg-turbo,
+^jxl(_cms|_threads)?\.dll$,libjxl,
+^lcms2(-2)?\.dll$,lcms2,
+^deflate\.dll$,libdeflate,
+^lib(amd|camd|ccolamd|colamd)\.dll$,suitesparse,BSD-3-Clause
+^libcholmod\.dll$,suitesparse,"LGPL-2.1-or-later (text: lgpl-2.1.txt); source: SuiteSparse"
+^libspqr\.dll$,suitesparse,"GPL-2.0-or-later (text: gpl-2.0.txt); source: SuiteSparse"
+^lib(gcc_s_seh-1|gfortran-5|quadmath-0)\.dll$,gcc-runtime,"GPL-3.0 with the GCC Runtime Library Exception (texts: gcc-runtime.txt and gpl-3.0.txt)"
+^libwinpthread-1\.dll$,winpthreads,
+^liblapack\.dll$,lapack,
+^liblzma\.dll$,xz,
+^libpng16\.dll$,libpng,
+^lib(sharpyuv|webp|webpdecoder|webpdemux|webpmux)\.dll$,libwebp,
+^lz4\.dll$,lz4,
+^openblas\.dll$,openblas,
+^openjp2\.dll$,openjpeg,
+^opencv_\w+\d\.dll$,opencv,
+^pcre2-16\.dll$,pcre2,
+^pyOpenMVS\.dll$,openmvs,"Part of OpenMVS: AGPL-3.0, licenses/OpenMVS-AGPL-3.0.txt and source/"
+^python\d+\.dll$,python,
+^(Qt5Core|Qt5Gui|Qt5Widgets)\.dll$,qt5,"LGPL-3.0 (texts: qt5.txt and gpl-3.0.txt); Qt 5 source: https://download.qt.io/archive/qt/5.15/"
+^q(gif|ico|jpeg|windows|windowsvistastyle)\.dll$,qt5,"Qt 5 plugins, LGPL-3.0"
+^raw\.dll$,libraw,"LGPL-2.1 (chosen of LGPL-2.1 / CDDL-1.0; text: lgpl-2.1.txt)"
+^sqlite3\.dll$,sqlite,
+^tiff\.dll$,libtiff,
+^zlib1\.dll$,zlib,
+^zstd\.dll$,zstd,

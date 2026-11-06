@@ -9,3 +9,4 @@ captures/
 __pycache__/
 *.apk
 dist_server/
+dist/

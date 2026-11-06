@@ -148,6 +148,74 @@ def test_mapper_prefers_glomap_and_falls_back_to_colmap():
     assert run_with(True, glomap_present=False) == [("colmap", "mapper")]
 
 
+
+def mat_views(tmp, paper="a4", print_scale=1.0, units_per_m=7.3, n=10):
+    """Photos of make_scan_mat.py's mat for `paper`, printed at print_scale (1 = 100 %), from n views with known
+    poses, and the model of those views in units of 1/units_per_m m (the SfM's arbitrary scale)."""
+    import cv2
+    import make_scan_mat
+    canvas, meta = make_scan_mat.make_mat(paper, dpi=300)
+    pw, ph = make_scan_mat.PAPERS_MM[paper]
+    m_per_px = 25.4 / meta["dpi"] / 1000 * print_scale
+    # Closer to a phone photo (COLMAP works at 3200 px wide) than a small test image.
+    K = np.array([[1800.0, 0, 1280], [0, 1800.0, 960], [0, 0, 1]])
+    # Canvas px -> m on the plane Z = 0, centred; rows go towards -Y, so the mat is seen from above, not mirrored.
+    cx, cy = pw / 2000 * print_scale, ph / 2000 * print_scale
+    S = np.array([[m_per_px, 0, -cx], [0, -m_per_px, cy], [0, 0, 1]])
+    dist = 0.35  # as when scanning: the distance to the part, whatever the sheet (it sees part of a big one)
+    imgs = {}
+    (tmp / "images" / "0").mkdir(parents=True)
+    for k in range(n):
+        az, el = 2 * np.pi * k / n, np.radians(65)
+        c = dist * np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
+        z = -c / np.linalg.norm(c)
+        x = np.cross(z, [0, 0, 1.0]); x /= np.linalg.norm(x)
+        R = np.vstack([x, np.cross(z, x), z])  # world -> camera
+        t_m = -R @ c
+        Hm = K @ np.column_stack([R[:, 0], R[:, 1], t_m]) @ S
+        img = cv2.warpPerspective(canvas, Hm, (2560, 1920), flags=cv2.INTER_AREA, borderValue=128)
+        name = f"0/{k}.jpg"
+        cv2.imwrite(str(tmp / "images" / name), img)
+        imgs[name] = dict(R=R, t=t_m * units_per_m, cam=1)
+    cams = {1: ("PINHOLE", 2560, 1920, np.array([1800.0, 1800.0, 1280, 960]))}
+    return cams, imgs
+
+
+def test_standard_mat_scale_without_mat_json_on_every_paper():
+    import tempfile
+    for paper in ("a6", "a4", "tabloid"):  # the same chessboard on the smallest, a common and the largest sheet
+        with tempfile.TemporaryDirectory() as d:
+            cams, imgs = mat_views(Path(d), paper)
+            s, rel = rc.scale_from_aruco(Path(d), cams, imgs, rc.STANDARD_MAT)
+            assert abs(s * 7.3 - 1) < 0.002, (paper, s * 7.3)  # within 0.2 % (+0.03 to +0.06 % measured)
+            assert rel < rc.STANDARD_MAT_MAX_SPREAD
+            # Chosen without --mat, close to the INS scale (8 % off, as the INS can be).
+            got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.08])
+            assert got and abs(got[0] * 7.3 - 1) < 0.01 and "tapete estándar" in got[1]
+
+
+def test_a_mat_not_printed_at_100_percent_is_not_trusted():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        # Printed at 133 %: its 15 mm markers measure 20 mm, the scale would be 25 % off.
+        cams, imgs = mat_views(Path(d), "a4", print_scale=4 / 3)
+        assert rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3]) is None
+        # With its .json (--mat), saying 20 mm, it is right.
+        mat = Path(d) / "tapete.json"
+        mat.write_text('{"dictionary": "DICT_4X4_250", "marker_mm": 20.0}')
+        s, _ = rc.choose_mat_scale(Path(d), cams, imgs, str(mat), [1 / 7.3])
+        assert abs(s * 7.3 - 1) < 0.01
+
+
+def test_every_paper_size_has_the_same_chessboard():
+    import make_scan_mat as msm
+    for paper, (pw, ph) in msm.PAPERS_MM.items():
+        canvas, meta = msm.make_mat(paper, dpi=50)
+        assert canvas.shape == (round(ph * 50 / 25.4), round(pw * 50 / 25.4))
+        # The same chessboard on every sheet: same squares and markers, more of them on a bigger sheet.
+        assert (meta["marker_mm"], meta["dictionary"]) == (rc.STANDARD_MAT["marker_mm"], rc.STANDARD_MAT["dictionary"])
+        assert meta["square_mm"] == 20.0 and len(meta["markers_mm"]) >= 12, paper
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
