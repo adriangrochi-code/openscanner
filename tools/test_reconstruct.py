@@ -187,7 +187,7 @@ def test_standard_mat_scale_without_mat_json_on_every_paper():
         with tempfile.TemporaryDirectory() as d:
             cams, imgs = mat_views(Path(d), paper)
             s, rel = rc.scale_from_aruco(Path(d), cams, imgs, rc.STANDARD_MAT)
-            assert abs(s * 7.3 - 1) < 0.01, (paper, s * 7.3)  # metres per unit within 1 %
+            assert abs(s * 7.3 - 1) < 0.002, (paper, s * 7.3)  # within 0.2 % (+0.03 to +0.06 % measured)
             assert rel < rc.STANDARD_MAT_MAX_SPREAD
             # Chosen without --mat, close to the INS scale (8 % off, as the INS can be).
             got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.08])

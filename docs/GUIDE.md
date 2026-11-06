@@ -23,7 +23,7 @@ Print the Tisma Scanner mat on whatever sheet you have (A6, A5, A4, A3, Letter, 
 The mat is a chessboard: 20 mm squares, with a numbered marker in each white square. It is the same on every
 sheet (a bigger sheet has more squares), so Tisma Cloud recognises it by itself, whichever sheet you used.
 With the markers, the size of
-the part comes out within about 0.5 %. Without the mat, the scale comes from the phone's sensors and focus,
+the part comes out within about 0.1 %. Without the mat, the scale comes from the phone's sensors and focus,
 within about 5-10 %.
 
 ## 2. Prepare the part
@@ -86,7 +86,7 @@ Tisma Cloud refuses a scan that includes the location. The photos carry no locat
 ## What to expect
 
 - With the mat, texture and good light, at 20-40 cm: details of a few tenths of a millimetre, and a scale
-  within about 0.5 % (measured in synthetic tests; to be confirmed with a real printed mat in the beta).
+  within about 0.1 % (measured in synthetic tests; to be confirmed with a real printed mat in the beta).
 - Without the mat: the scale comes from the phone's sensors (about 5-10 %). A 40 × 30 × 20 mm test box came
   out 41.2 × 31.1 × 20.1 mm.
 - Transparent, very shiny or very thin parts are hard for any photogrammetry.

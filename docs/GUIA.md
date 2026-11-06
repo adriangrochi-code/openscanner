@@ -22,7 +22,7 @@ del borde (100 mm; 50 mm en A6): si no mide eso, la escala de la pieza saldrá m
 El tapete es un tablero de ajedrez: casillas de 20 mm, y en cada casilla blanca un marcador con su número.
 Es igual en todas las hojas (en una más grande hay más casillas), así que Tisma Cloud lo reconoce solo, sin
 importar qué hoja usaste. Con los marcadores, el
-tamaño de la pieza sale con un error de alrededor del 0,5 %. Sin tapete, la escala sale de los sensores
+tamaño de la pieza sale con un error de alrededor del 0,1 %. Sin tapete, la escala sale de los sensores
 del móvil y del enfoque, con un error de alrededor del 5-10 %.
 
 ## 2. Prepara la pieza
@@ -87,7 +87,7 @@ datos EXIF.
 ## Qué se puede esperar
 
 - Con tapete, textura y buena luz, a 20-40 cm: detalles de unas décimas de milímetro y una escala con un
-  error de alrededor del 0,5 % (medido en pruebas sintéticas; con un tapete impreso real, a confirmar
+  error de alrededor del 0,1 % (medido en pruebas sintéticas; con un tapete impreso real, a confirmar
   en la beta).
 - Sin tapete: la escala sale de los sensores del móvil (alrededor del 5-10 %). En una caja de prueba de
   40 × 30 × 20 mm salió 41,2 × 31,1 × 20,1 mm.

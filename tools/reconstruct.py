@@ -759,6 +759,7 @@ STANDARD_MAT = {"dictionary": "DICT_4X4_250", "marker_mm": 15.0}
 # its edges are not too scattered (a 15 mm marker seen at 40-60 px scatters about 1-2 % per edge; the median of
 # many edges is far better).
 STANDARD_MAT_MAX_SPREAD = 0.05
+MAT_MAX_IMAGES = 80
 STANDARD_MAT_MAX_DIFF = 0.20
 
 
@@ -768,10 +769,17 @@ def scale_from_aruco(work, cams, imgs, mat_json):
     mat = mat_json if isinstance(mat_json, dict) else json.loads(Path(mat_json).read_text())
     # Mats made before the chessboard have no "dictionary" in their .json: they were DICT_4X4_50.
     dictionary = getattr(cv2.aruco, mat.get("dictionary", "DICT_4X4_50"))
-    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(dictionary),
-                                  cv2.aruco.DetectorParameters())
+    # AprilTag corner refinement: fits the marker's edges. cornerSubPix is made for X-corners (a chessboard's) and
+    # pulled these L-corners outwards: +0.37 % on the scale, against +0.03 to +0.06 % with this (synthetic views).
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(dictionary), params)
     obs = defaultdict(list)  # (id, esquina) -> [(R,t,xy)]
-    for name, im in imgs.items():
+    names = sorted(imgs)
+    # The AprilTag refinement takes ~0.25 s per 3200 px photo: MAT_MAX_IMAGES spread over the scan are plenty.
+    names = names[::max(1, -(-len(names) // MAT_MAX_IMAGES))]
+    for name in names:
+        im = imgs[name]
         img = cv2.imread(str(work / "images" / name), cv2.IMREAD_GRAYSCALE)
         if img is None:
             continue
@@ -780,7 +788,6 @@ def scale_from_aruco(work, cams, imgs, mat_json):
             continue
         for c, i in zip(corners, ids.flatten()):
             c = c.reshape(4, 2)
-            cv2.cornerSubPix(img, c, (5, 5), (-1, -1), (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.01))
             nc = undistort_pts(c, cams[im["cam"]])
             for k in range(4):
                 obs[(int(i), k)].append((im["R"], im["t"], nc[k]))

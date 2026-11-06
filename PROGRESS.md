@@ -87,8 +87,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   as PDF at the exact page size (what to print, at "actual size"), PNG with its DPI, and .json. Owner's idea: a
   chessboard of fixed squares, so any sheet works. It is a ChArUco-like board: 20 mm squares, a 15 mm
   DICT_4X4_250 marker in each white square, dark texture in the black ones (unique points for SIFT). Synthetic
-  views at 35 cm, 2560 px: scale +0.37 to +0.40 % on every sheet, spread under 0.1 %. That constant +0.4 % is
-  likely where the detector puts the marker corners: check it with a real printed mat before correcting it.
+  views at 35 cm, 2560 px: scale +0.37 to +0.40 % on every sheet at first. Cause found (2026-11-06): cornerSubPix
+  is made for X-corners and pulled the markers' L-corners outwards. With the detector's AprilTag refinement:
+  **+0.03 to +0.06 %** on A6, A4 and Tabloid at 25, 35 and 55 cm (spread under 0.12 %). It costs 0.25 s per 3200 px
+  photo, so at most 80 photos spread over the scan are used (MAT_MAX_IMAGES).
   Not yet tried: printing one, and a full scan on it through COLMAP. It uses a lot of black ink.
 
 ## Next
