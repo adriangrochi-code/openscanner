@@ -580,23 +580,21 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     }
                     prefs.edit().putString(jobKey, jobId).remove(uploadKey).apply()
                 }
-                // Seguimiento del trabajo en la cola de Tisma Cloud.
-                var job = JSONObject()
-                while (true) {
-                    job = client.job(jobId!!)
-                    when (job.optString("status")) {
+                // Seguimiento del trabajo en la cola de Tisma Cloud: un corte de red no lo interrumpe.
+                val job = client.waitForJob(jobId!!, 5000, onStatus = { j ->
+                    when (j.optString("status")) {
                         "queued" -> st("En cola en Tisma Cloud…")
-                        "running" -> job.optInt("progress").let { st("Procesando en la nube: $it %", it / 100f) }
-                        "done" -> break
-                        "failed" -> {
-                            ended = true
-                            val s = job.optJSONObject("summary")
-                            throw java.io.IOException(s?.optString("error_es")?.takeIf { it.isNotBlank() }
-                                ?: job.optString("error", "el escaneo falló en el servidor"))
-                        }
-                        "cancelled" -> { ended = true; throw java.io.IOException("el escaneo se canceló") }
+                        "running" -> j.optInt("progress").let { st("Procesando en la nube: $it %", it / 100f) }
                     }
-                    delay(5000)
+                }, isCancelled = { !isActive })
+                when (job.optString("status")) {
+                    "failed" -> {
+                        ended = true
+                        val s = job.optJSONObject("summary")
+                        throw java.io.IOException(s?.optString("error_es")?.takeIf { it.isNotBlank() }
+                            ?: job.optString("error", "el escaneo falló en el servidor"))
+                    }
+                    "cancelled" -> { ended = true; throw java.io.IOException("el escaneo se canceló") }
                 }
                 st("Descargando la pieza…")
                 val dir = zip.parentFile!!

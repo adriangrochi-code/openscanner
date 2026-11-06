@@ -70,8 +70,9 @@ class CloudClientServerTest {
         HttpsURLConnection.setDefaultSSLSocketFactory(SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }.socketFactory)
 
         val chunk = 64 * 1024     // trozos pequeños para que el escaneo de prueba ocupe varios
+        // Las 3 primeras consultas del trabajo fallan como una red mala: corte, 503, corte.
         val server = ProcessBuilder("python3", fake.path, "--port", "$port", "--cert", File(dir, "cert.pem").path,
-            "--key", File(dir, "key.pem").path, "--chunk", "$chunk")
+            "--key", File(dir, "key.pem").path, "--chunk", "$chunk", "--flaky-jobs", "3")
             .directory(dir).redirectErrorStream(true).redirectOutput(File(dir, "server.log")).start()
         try {
             val base = "https://localhost:$port"
@@ -92,7 +93,7 @@ class CloudClientServerTest {
             assertEquals(401, (bad as CloudClient.HttpError).code)
             assertTrue(bad.message!!.contains("entrá de nuevo"))
 
-            val client = CloudClient(base, login!!.first)
+            val client = CloudClient(base, login!!.first, retryBaseMs = 50)
             val (id, size) = client.create(zip.length(), "e2e.zip")
             assertEquals(chunk, size)
             // Subida cortada tras el primer trozo (como si se fuera la cobertura)…
@@ -106,9 +107,11 @@ class CloudClientServerTest {
             // …y reanudada: sigue desde lo que el servidor ya tiene, y queda en la cola.
             val jobId = client.upload(id, zip, chunk, onProgress = { _, _ -> })
             assertEquals(jobId, client.scanStatus(id).getString("job_id"))
-            var status = ""
-            repeat(20) { if (status != "done") status = client.job(jobId).getString("status") }
-            assertEquals("done", status)
+            // El seguimiento del trabajo aguanta los cortes y llega al final pasando por la cola.
+            val seen = mutableListOf<String>()
+            val done = client.waitForJob(jobId, pollMs = 10, onStatus = { seen += it.getString("status") })
+            assertEquals("done", done.getString("status"))
+            assertEquals(listOf("queued", "running", "done"), seen.distinct())
             val stl = File(dir, "pieza.stl")
             val report = File(dir, "informe.json")
             val got = client.downloadResult(jobId, mapOf("pieza.stl" to stl, "pieza_informe.json" to report))
