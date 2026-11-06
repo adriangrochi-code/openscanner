@@ -16,6 +16,19 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   BUNDLED_DLLS.txt still says what would be owed if that ever changed. The scanner app stays AGPL-3.0; the LICENSE
   file waits for the owner's direct confirmation.
 
+## 2026-11-06: scale bias, cloud upload in the background
+
+- Mat scale: AprilTag corner refinement instead of cornerSubPix (5ac5396): +0.4 % -> +0.03 to +0.06 % in synthetic
+  views (see the mat entry below).
+- Following a job on Tisma Cloud now survives network drops and 5xx (CloudClient.waitForJob, 88fe29f), tested with
+  tools/fake_tisma_cloud.py --flaky-jobs.
+- The upload and the wait for the result are protected by the foreground service (notification with progress,
+  wake lock), like the processing; the service has holders so the upload ending does not stop the processing's
+  protection. Unit-tested (107 tests). **Not tested on a phone.** Still lost if the person swipes the app away
+  (the ViewModel ends; pressing Enviar again resumes from where the server got to). Moving the cloud work into
+  WorkManager would also survive that, and resume by itself when the network comes back.
+- APK for the owner: dist/TismaScanner-0.1.0-debug-<commit>.apk (dist/ is not in git).
+
 ## 2026-11-04: scale accuracy, Windows package
 
 - **The mat's scale was never used on Tisma Cloud**: tisma_scan and TismaServer never pass `--mat`, so every

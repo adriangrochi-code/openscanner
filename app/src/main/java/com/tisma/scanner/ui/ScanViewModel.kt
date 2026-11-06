@@ -550,9 +550,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val zip = _state.value.lastZip ?: return
         if (cloudJob?.isActive == true) return
         val ui = _state.value
+        // La subida y la espera del resultado duran minutos: protegidas por el servicio en primer plano, con
+        // su progreso en la notificación, para que Android no corte la app si pasa a segundo plano.
+        val app = getApplication<android.app.Application>()
+        com.tisma.scanner.ProcessingService.start(app, "Enviando a Tisma Cloud…", com.tisma.scanner.ProcessingService.CLOUD)
         cloudJob = viewModelScope.launch(Dispatchers.IO) {
-            fun st(text: String, progress: Float = -1f, busy: Boolean = true) =
+            fun st(text: String, progress: Float = -1f, busy: Boolean = true) {
                 _state.update { it.copy(cloudStatus = text, cloudProgress = progress, cloudBusy = busy) }
+                if (busy) com.tisma.scanner.ProcessingService.update(app, text, if (progress >= 0f) (progress * 100).toInt() else -1)
+            }
             val uploadKey = "scan_" + zip.name + "_" + zip.length()
             val jobKey = "$uploadKey.job"
             // El trabajo terminó mal en el servidor: el próximo envío empieza de nuevo.
@@ -620,6 +626,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 if (ended) prefs.edit().remove(jobKey).apply()
                 st("✗ ${e.message ?: e.javaClass.simpleName}", busy = false)
                 log("Nube: ${e.message}")
+            } finally {
+                com.tisma.scanner.ProcessingService.stop(app, com.tisma.scanner.ProcessingService.CLOUD)
             }
         }
     }
