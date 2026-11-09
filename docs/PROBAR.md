@@ -27,7 +27,8 @@ En `tapetes/` está en todos los tamaños: usa el de tu hoja (A4, Carta, A5…).
 2. Abre la app: ⚙ → **Nube** → **Entrar** con tu cuenta.
 3. Arriba a la derecha, **Lejos**. Toca el disparador y **camina despacio alrededor** de la pieza, a 2 o 3
    alturas, con la pieza entera en pantalla. La app saca las fotos sola.
-4. Sigue hasta que diga **«✓ Listo para enviar»** (la cúpula de abajo a la derecha se pone verde). Toca **■**.
+4. Sigue hasta que diga **«✓ Listo para enviar»**. La cúpula de abajo a la derecha muestra lo hecho: gris falta,
+   amarillo una foto, verde dos o más; cuanto más verde, mejor sale la pieza. Toca **■**.
 5. Toca **☁ Enviar**. Puedes bloquear el teléfono o salir de la app: sigue sola, y si se corta la red, retoma
    sola. Tarda varios minutos.
 6. Al final aparece **⬢ Pieza STL** con las medidas.

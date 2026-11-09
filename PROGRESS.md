@@ -115,6 +115,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 
 ## Open for the beta
 
+- "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the
+  dome paints it yellow and only 2+ green. Not changed blind: one pass at a height fires every 8 deg over 15 deg
+  sectors (about 2 per sector). quality_summary.json already has coverage_2plus: compare it with the part's
+  quality on the beta scans and raise the rule (e.g. coverage(2) >= 50 %) if 1-photo sectors give holes. The
+  tester instructions say so (greener is better) instead of "turns green".
+
 - The mats: the owner publishes them (2026-11-04) so anyone can print one, from a small sheet to a big one.
   `python3 tools/make_scan_mat.py --all --out-dir tapetes` makes A6, A5, A4, A3, Letter, Legal and Tabloid, each
   as PDF at the exact page size (what to print, at "actual size"), PNG with its DPI, and .json. Owner's idea: a

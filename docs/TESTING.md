@@ -28,8 +28,8 @@ on A6). Otherwise the part will come out bigger or smaller by the same proportio
 2. Open the app: ⚙ → **Nube** (Cloud) → **Entrar** (Sign in) with your account.
 3. At the top right, **Lejos** (far). Tap the shutter and **walk slowly around** the part, at 2 or 3 heights,
    with the whole part on screen. The app takes the photos by itself.
-4. Go on until it says **"✓ Listo para enviar"** (ready to send; the dome at the bottom right turns green). Tap
-   **■**.
+4. Go on until it says **"✓ Listo para enviar"** (ready to send). The dome at the bottom right shows what is done:
+   grey missing, yellow one photo, green two or more; the greener, the better the part. Tap **■**.
 5. Tap **☁ Enviar** (send). You can lock the phone or leave the app: it carries on, and resumes by itself if the
    network drops. It takes several minutes.
 6. At the end, **⬢ Pieza STL** (STL part) appears with the measures.
