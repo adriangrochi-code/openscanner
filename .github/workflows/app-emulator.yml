@@ -1,8 +1,9 @@
 name: App en el emulador (prueba de humo)
 
 # The first steps of docs/PROBAR.md on an Android 13 emulator: install the APK of the tester kit, open it, the main
-# screen without a crash, ⚙ → Nube → Entrar (tools/emulator_smoke.py). The app only carries arm64 libraries; the
-# x86_64 images from Android 11 on translate them. Screenshots and logcat in the artifact.
+# screen without a crash, ⚙ → Nube → Entrar (tools/emulator_smoke.py). The phones' APK carries only arm64 libraries
+# and the image does not translate them (INSTALL_FAILED_NO_MATCHING_ABIS), so this one is built with x86_64 too
+# (-PwithX86_64). Screenshots and logcat in the artifact.
 
 on:
   push:
@@ -27,7 +28,8 @@ jobs:
       - name: Compilar el APK
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleDebug
+          # With x86_64 as well: the emulator's images do not translate the arm64 libraries (ONNX Runtime).
+          ./gradlew --no-daemon -PwithX86_64 :app:assembleDebug
 
       - name: KVM para el emulador
         run: |

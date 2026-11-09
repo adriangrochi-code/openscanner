@@ -72,9 +72,9 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     adb("wait-for-device")
     adb("logcat", "-c", check=False)
-    adb("install", "-r", "-g", str(apk), timeout=600)  # -g: the permissions the app asks for, granted
-    adb("shell", "am", "start", "-W", "-n", f"{PKG}/.MainActivity", timeout=180)
     try:
+        adb("install", "-r", "-g", str(apk), timeout=600)  # -g: the permissions the app asks for, granted
+        adb("shell", "am", "start", "-W", "-n", f"{PKG}/.MainActivity", timeout=180)
         # 1. The main screen: the settings button and the capture controls.
         wait_for("⚙", 120)
         time.sleep(5)
@@ -92,7 +92,8 @@ def main() -> int:
         crashed()
         print("smoke test passed: opens, main screen, ⚙ → Nube → Entrar, no crash")
         return 0
-    except AssertionError as e:
+    except (AssertionError, RuntimeError) as e:
+        (out / "fallo.txt").write_text(str(e), encoding="utf-8")
         shot(out, "fallo")
         print("SMOKE TEST FAILED:", e, file=sys.stderr)
         return 1

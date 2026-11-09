@@ -17,7 +17,8 @@ android {
         versionName = "0.1.0"
         // Sólo ARM de 64 bits (todos los móviles actuales): ONNX Runtime trae librerías nativas
         // para cada arquitectura y, con todas, el APK pasaba de 23 a ~98 MB.
-        ndk { abiFilters += listOf("arm64-v8a") }
+        // -PwithX86_64 suma x86_64 sólo para la prueba en el emulador (sus imágenes no traducen arm64).
+        ndk { abiFilters += listOf("arm64-v8a") + if (project.hasProperty("withX86_64")) listOf("x86_64") else emptyList() }
     }
 
     buildTypes {
