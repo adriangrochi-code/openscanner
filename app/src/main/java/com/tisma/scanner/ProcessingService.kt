@@ -13,10 +13,12 @@ import android.os.IBinder
 import android.os.PowerManager
 
 /**
- * Mantiene viva la app mientras procesa un escaneo (malla con IA, nitidez de las fotos, .zip):
- * servicio en primer plano con una notificación de progreso, para que Android no la cierre en
- * segundo plano, y un "wake lock" parcial para que la CPU no se duerma con la pantalla apagada.
- * El trabajo lo hace el ViewModel; esto sólo lo protege y lo enseña.
+ * Mantiene viva la app mientras procesa un escaneo (malla con IA, nitidez de las fotos, .zip) o lo
+ * manda a Tisma Cloud (subida de 0,5-2 GB y espera del resultado): servicio en primer plano con una
+ * notificación de progreso, para que Android no la cierre en segundo plano, y un "wake lock" parcial
+ * para que la CPU no se duerma con la pantalla apagada. El trabajo lo hace el ViewModel; esto sólo lo
+ * protege y lo enseña. Cada trabajo lo pide con su nombre (Holders): el servicio sigue mientras alguno
+ * lo necesite, así que terminar la subida no deja sin protección a un procesado en curso.
  */
 class ProcessingService : Service() {
     private var wake: PowerManager.WakeLock? = null
@@ -70,7 +72,11 @@ class ProcessingService : Service() {
                 .build()
         }
 
-        fun start(ctx: Context, text: String) {
+        /** Quién necesita el servicio: el procesado del escaneo, la subida a la nube… */
+        val holders = Holders()
+
+        fun start(ctx: Context, text: String, holder: String = PROCESSING) {
+            holders.add(holder)
             runCatching { ctx.startForegroundService(Intent(ctx, ProcessingService::class.java).putExtra(EXTRA_TEXT, text)) }
         }
 
@@ -79,8 +85,20 @@ class ProcessingService : Service() {
             runCatching { ctx.getSystemService(NotificationManager::class.java).notify(ID, build(ctx, text, percent)) }
         }
 
-        fun stop(ctx: Context) {
-            runCatching { ctx.stopService(Intent(ctx, ProcessingService::class.java)) }
+        /** Este trabajo ya no lo necesita; el servicio se para cuando ninguno lo necesita. */
+        fun stop(ctx: Context, holder: String = PROCESSING) {
+            if (holders.remove(holder)) runCatching { ctx.stopService(Intent(ctx, ProcessingService::class.java)) }
         }
+
+        const val PROCESSING = "procesado"
+        const val CLOUD = "nube"
+    }
+
+    /** Los trabajos que tienen el servicio pedido. remove() dice si ya no queda ninguno. */
+    class Holders {
+        private val names = mutableSetOf<String>()
+        @Synchronized fun add(name: String) { names += name }
+        @Synchronized fun remove(name: String): Boolean { names -= name; return names.isEmpty() }
+        @Synchronized fun isEmpty() = names.isEmpty()
     }
 }

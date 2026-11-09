@@ -128,6 +128,49 @@ def test_without_a_way_to_the_dense_cloud_not_ready():
     assert not result["ready"] and any("dense cloud" in p for p in result["problems"])
 
 
+def test_bundled_programs_next_to_it():
+    import os
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        # The layout of COLMAP 3.9.1's Windows release: COLMAP.bat, bin/colmap.exe, lib/, lib/plugins/.
+        for sub in ("bin", "lib", "lib/plugins"):
+            (d / "colmap" / sub).mkdir(parents=True)
+        (d / "colmap" / "COLMAP.bat").write_text("@echo off\n")
+        (d / "colmap" / "bin" / "colmap.exe").write_bytes(b"")
+        (d / "openmvs").mkdir()
+        (d / "openmvs" / "DensifyPointCloud.exe").write_bytes(b"")
+        saved = {k: os.environ.pop(k, None) for k in ("TISMA_COLMAP", "TISMA_OPENMVS", "QT_PLUGIN_PATH", "PATH")}
+        os.environ["PATH"] = saved["PATH"] or ""
+        try:
+            found = ts.bundled_programs(d)
+            # The program, not the .bat (cmd.exe would split the commas of the camera parameters).
+            assert found == {"TISMA_COLMAP": str(d / "colmap" / "bin" / "colmap.exe"),
+                             "TISMA_OPENMVS": str(d / "openmvs")}
+            assert os.environ["TISMA_OPENMVS"] == str(d / "openmvs")
+            assert os.environ["PATH"].split(os.pathsep)[0] == str(d / "colmap" / "lib")
+            assert os.environ["QT_PLUGIN_PATH"] == str(d / "colmap" / "lib" / "plugins")
+            # A COLMAP.bat set by the person: the colmap.exe next to it, too.
+            os.environ["TISMA_COLMAP"] = str(d / "colmap" / "COLMAP.bat")
+            os.environ.pop("TISMA_OPENMVS")
+            assert ts.bundled_programs(d / "nothing") == {"TISMA_COLMAP": str(d / "colmap" / "bin" / "colmap.exe")}
+            assert os.environ["TISMA_COLMAP"] == str(d / "colmap" / "bin" / "colmap.exe")
+            # Without bin/colmap.exe, the .bat stays.
+            os.environ.pop("TISMA_COLMAP")
+            (d / "colmap" / "bin" / "colmap.exe").unlink()
+            assert ts.bundled_programs(d)["TISMA_COLMAP"] == str(d / "colmap" / "COLMAP.bat")
+            # Set by the person: kept.
+            os.environ["TISMA_COLMAP"] = "C:/mine/colmap.exe"
+            os.environ.pop("TISMA_OPENMVS")
+            assert ts.bundled_programs(d) == {"TISMA_OPENMVS": str(d / "openmvs")}
+            assert os.environ["TISMA_COLMAP"] == "C:/mine/colmap.exe"
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
+        assert ts.bundled_programs(d / "nothing") == {}
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

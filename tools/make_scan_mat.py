@@ -9,19 +9,38 @@ que emparejar, así que se apoya sobre este tapete, que aporta:
   * Marcadores ArUco de tamaño conocido -> escala métrica exacta (mejor que la INS o el GPS).
 
 Uso:
-    python3 make_scan_mat.py --paper a4 --out tapete_a4.png
-Imprime al 100 % (sin "ajustar a página") y mide con una regla la barra de 100 mm para
-comprobarlo. Si no mide 100 mm, corrige con --marker-mm o reimprime.
-Genera también <out>.json con las coordenadas (mm) de cada esquina de los marcadores.
+    python3 make_scan_mat.py --paper a4                 # tapete_a4.png, tapete_a4.pdf y tapete_a4.json
+    python3 make_scan_mat.py --all --out-dir tapetes    # todos los tamaños, para publicarlos
+
+Imprime el PDF a «tamaño real» / 100 % (sin «ajustar a la página») y mide con una regla la barra de
+100 mm. El PNG lleva sus DPI, pero muchos programas lo escalan al imprimir: el PDF es lo seguro.
+
+El tapete es un tablero de ajedrez (ChArUco) de casillas de 20 mm, igual en todas las hojas: en una hoja
+más grande hay más casillas, no más grandes. Cada casilla blanca lleva un marcador ArUco de 15 mm con su
+número; las negras, una textura oscura para que la fotogrametría tenga puntos únicos. Como el marcador es
+siempre el mismo, Tisma Cloud saca la escala sin que nadie le diga qué hoja se imprimió
+(reconstruct.STANDARD_MAT), aunque la pieza tape parte del tablero.
+También se genera <out>.json con las coordenadas (mm) de cada esquina de los marcadores.
 """
 import argparse
 import sys
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
 
-PAPERS_MM = {"a4": (210, 297), "a3": (297, 420), "letter": (216, 279)}
+# Hojas de impresora común, de la más chica a la más grande (mm, vertical).
+PAPERS_MM = {"a6": (105, 148), "a5": (148, 210), "a4": (210, 297), "a3": (297, 420),
+             "letter": (216, 279), "legal": (216, 356), "tabloid": (279, 432)}
+PAPER_NAMES = {"a6": "A6", "a5": "A5", "a4": "A4", "a3": "A3", "letter": "Carta", "legal": "Oficio (Legal)",
+               "tabloid": "Tabloide"}
+# El tapete estándar (mismos datos en reconstruct.STANDARD_MAT).
+DICTIONARY = "DICT_4X4_250"
+SQUARE_MM = 20.0
+MARKER_MM = 15.0
+MARGIN_MM = 8.0
+BAR_STRIP_MM = 9.0   # franja de abajo para la barra de verificación
 
 
 def multiscale_noise(h, w, rng):
@@ -44,54 +63,76 @@ def _utf8_console():
         except (AttributeError, ValueError):
             pass
 
+def make_mat(paper, dpi=300, seed=7):
+    """El tapete estándar en una hoja: (imagen en gris, datos del .json). Un tablero de ajedrez de casillas de
+    SQUARE_MM, tantas como entren, centrado; en cada casilla blanca un marcador de MARKER_MM."""
+    pw, ph = PAPERS_MM[paper]
+    px_per_mm = dpi / 25.4
+    W, H = int(round(pw * px_per_mm)), int(round(ph * px_per_mm))
+    canvas = np.full((H, W), 255, np.uint8)
+    dark = (multiscale_noise(H, W, np.random.default_rng(seed)).astype(np.float32) * 0.33).astype(np.uint8)
+    dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, DICTIONARY))
+    cols = int((pw - 2 * MARGIN_MM) // SQUARE_MM)
+    rows = int((ph - 2 * MARGIN_MM - BAR_STRIP_MM) // SQUARE_MM)
+    x0 = (pw - cols * SQUARE_MM) / 2
+    y0 = (ph - BAR_STRIP_MM - rows * SQUARE_MM) / 2
+    px = lambda mm: int(round(mm * px_per_mm))
+    m_px, inset = px(MARKER_MM), (SQUARE_MM - MARKER_MM) / 2
+    markers, mid = {}, 0
+    for r in range(rows):
+        for c in range(cols):
+            x, y = x0 + c * SQUARE_MM, y0 + r * SQUARE_MM
+            if (r + c) % 2 == 0:  # casilla negra, con textura oscura
+                canvas[px(y):px(y + SQUARE_MM), px(x):px(x + SQUARE_MM)] = \
+                    dark[px(y):px(y + SQUARE_MM), px(x):px(x + SQUARE_MM)]
+                continue
+            if mid >= dictionary.bytesList.shape[0]:
+                raise ValueError(f"{paper}: más casillas blancas que marcadores en {DICTIONARY}")
+            mx, my = x + inset, y + inset
+            canvas[px(my):px(my) + m_px, px(mx):px(mx) + m_px] = cv2.aruco.generateImageMarker(dictionary, mid, m_px)
+            # Esquinas en el orden de OpenCV: sup-izq, sup-der, inf-der, inf-izq (mm, plano Z=0)
+            markers[mid] = [[mx, my], [mx + MARKER_MM, my], [mx + MARKER_MM, my + MARKER_MM], [mx, my + MARKER_MM]]
+            mid += 1
+
+    # Barra de verificación de 100 mm (o de 50 mm donde no cabe) y cómo imprimir.
+    bar_mm = 100 if pw - 2 * MARGIN_MM >= 100 else 50
+    bx, by = px(MARGIN_MM), px(ph - 3)
+    cv2.rectangle(canvas, (bx, by - px(1.2)), (bx + px(bar_mm), by), 0, -1)
+    text = f"{bar_mm} mm - {PAPER_NAMES[paper]} - imprimir a tamano real / 100 %"
+    cv2.putText(canvas, text, (bx, by - px(2)), cv2.FONT_HERSHEY_SIMPLEX, 0.065 * px_per_mm * (0.8 if pw < 150 else 1),
+                0, max(1, int(px_per_mm / 6)), cv2.LINE_AA)
+    meta = {"dictionary": DICTIONARY, "square_mm": SQUARE_MM, "marker_mm": MARKER_MM, "paper": paper, "dpi": dpi,
+            "squares": [cols, rows], "check_bar_mm": bar_mm, "markers_mm": {str(k): v for k, v in markers.items()}}
+    return canvas, meta
+
+
+def save_mat(canvas, meta, base):
+    """<base>.png con sus DPI, <base>.pdf al tamaño exacto de la hoja y <base>.json."""
+    from PIL import Image
+    img = Image.fromarray(canvas)
+    dpi = meta["dpi"]
+    img.save(f"{base}.png", dpi=(dpi, dpi))
+    img.save(f"{base}.pdf", resolution=float(dpi))
+    with open(f"{base}.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+
 def main():
     _utf8_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--paper", choices=PAPERS_MM, default="a4")
+    ap.add_argument("--all", action="store_true", help="todos los tamaños de hoja")
     ap.add_argument("--dpi", type=int, default=300)
-    ap.add_argument("--marker-mm", type=float, default=30.0, help="lado del marcador ArUco (mm)")
-    ap.add_argument("--margin-mm", type=float, default=12.0)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--out", default="tapete.png")
+    ap.add_argument("--out-dir", default=".")
     a = ap.parse_args()
-
-    pw, ph = PAPERS_MM[a.paper]
-    px_per_mm = a.dpi / 25.4
-    W, H = int(round(pw * px_per_mm)), int(round(ph * px_per_mm))
-    rng = np.random.default_rng(a.seed)
-    canvas = multiscale_noise(H, W, rng)
-
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
-    m_px = int(round(a.marker_mm * px_per_mm))
-    quiet = int(round(7 * px_per_mm))  # borde blanco alrededor del marcador
-    # Marcadores en las esquinas y a mitad de los lados: siempre se ven varios.
-    xs = [a.margin_mm, (pw - a.marker_mm) / 2, pw - a.margin_mm - a.marker_mm]
-    ys = [a.margin_mm, (ph - a.marker_mm) / 2, ph - a.margin_mm - a.marker_mm]
-    markers = {}
-    mid = 0
-    for yi, y in enumerate(ys):
-        for xi, x in enumerate(xs):
-            if xi == 1 and yi == 1:
-                continue  # el centro queda libre para la pieza
-            x0, y0 = int(round(x * px_per_mm)), int(round(y * px_per_mm))
-            canvas[y0 - quiet:y0 + m_px + quiet, x0 - quiet:x0 + m_px + quiet] = 255
-            canvas[y0:y0 + m_px, x0:x0 + m_px] = cv2.aruco.generateImageMarker(dictionary, mid, m_px)
-            # Esquinas en el orden de OpenCV: sup-izq, sup-der, inf-der, inf-izq (mm, plano Z=0)
-            markers[mid] = [[x, y], [x + a.marker_mm, y], [x + a.marker_mm, y + a.marker_mm], [x, y + a.marker_mm]]
-            mid += 1
-
-    # Barra de verificación de 100 mm.
-    bx, by = int(a.margin_mm * px_per_mm), int((ph - a.margin_mm / 2) * px_per_mm)
-    cv2.rectangle(canvas, (bx, by - 12), (bx + int(100 * px_per_mm), by), 0, -1)
-    cv2.putText(canvas, "100 mm - imprimir al 100%  |  Tisma Scanner", (bx, by - 20),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2, cv2.LINE_AA)
-
-    cv2.imwrite(a.out, canvas)
-    meta = {"dictionary": "DICT_4X4_50", "marker_mm": a.marker_mm, "paper": a.paper,
-            "dpi": a.dpi, "markers_mm": {str(k): v for k, v in markers.items()}}
-    with open(a.out.rsplit(".", 1)[0] + ".json", "w") as f:
-        json.dump(meta, f, indent=2)
-    print(f"{a.out}: {W}x{H}px, {len(markers)} marcadores de {a.marker_mm} mm")
+    out = Path(a.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for paper in (PAPERS_MM if a.all else [a.paper]):
+        canvas, meta = make_mat(paper, a.dpi, a.seed)
+        save_mat(canvas, meta, out / f"tapete_{paper}")
+        print(f"tapete_{paper}: {PAPERS_MM[paper][0]} x {PAPERS_MM[paper][1]} mm, {len(meta['markers_mm'])} "
+              f"marcadores de {meta['marker_mm']:g} mm")
 
 
 if __name__ == "__main__":

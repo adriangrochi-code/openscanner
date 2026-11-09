@@ -22,6 +22,7 @@ Ejemplo:
     python3 reconstruct.py scan_20261102_101500.zip --work out/ --mat tapete.json --dense openmvs
 """
 import argparse
+import contextlib
 import csv
 import os
 import json
@@ -404,19 +405,49 @@ def find_glomap():
     return shutil.which(GLOMAP_EXE) or (GLOMAP_EXE if Path(GLOMAP_EXE).is_file() else None)
 
 
+@contextlib.contextmanager
+def _own_dlls():
+    """
+    In a PyInstaller build on Windows, the bootloader sets the DLL directory to its own folder (_MEIPASS) and the
+    programs it starts inherit it: COLMAP or OpenMVS would load the DLLs that came with the .exe instead of their
+    own. PyInstaller's advice: reset it while starting them, and put it back after.
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if os.name != "nt" or not meipass:
+        yield
+        return
+    import ctypes
+    ctypes.windll.kernel32.SetDllDirectoryW(None)
+    try:
+        yield
+    finally:
+        ctypes.windll.kernel32.SetDllDirectoryW(meipass)
+
+
 def run_tool(cmd, cwd=None):
     """Ejecuta una herramienta externa volcando su salida en el registro (stdout actual)."""
     cmd = [str(c) for c in cmd]
     print("[run]", " ".join(cmd), flush=True)
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                         errors="replace")
+    with _own_dlls():
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                             errors="replace")
     for line in p.stdout:
         print("   ", line.rstrip(), flush=True)
     if p.wait() != 0:
         raise RuntimeError(f"{Path(cmd[0]).name} terminó con código {p.returncode}")
 
 
+# Con TISMA_COLMAP_NO_GPU=1 (sin CUDA, o un servidor sin pantalla: el SIFT de COLMAP por GPU usa OpenGL y aborta sin
+# contexto), los puntos y el emparejado van por el procesador. tisma_scan lo pone solo.
+_SIFT_GPU = {"feature_extractor": "--SiftExtraction.use_gpu", "exhaustive_matcher": "--SiftMatching.use_gpu",
+             "sequential_matcher": "--SiftMatching.use_gpu", "matches_importer": "--SiftMatching.use_gpu",
+             "spatial_matcher": "--SiftMatching.use_gpu", "vocab_tree_matcher": "--SiftMatching.use_gpu"}
+
+
 def colmap(*args):
+    flag = _SIFT_GPU.get(str(args[0])) if args else None
+    if flag and os.environ.get("TISMA_COLMAP_NO_GPU") == "1" and flag not in map(str, args):
+        args = (*args, flag, 0)
     run_tool([COLMAP_EXE, *args])
 
 
@@ -719,13 +750,36 @@ def triangulate(obs):
     return X[:3] / X[3]
 
 
+# The standard mat of make_scan_mat.py: a chessboard (ChArUco) of 20 mm squares on any paper size, with a 15 mm
+# DICT_4X4_250 marker in each white square. Looked for in every scan, so its scale is used without --mat (Tisma Cloud
+# and TismaServer never pass one), whatever sheet was printed and however much of it the part covers.
+STANDARD_MAT = {"dictionary": "DICT_4X4_250", "marker_mm": 15.0}
+# Without --mat the marker size is assumed: a mat printed with other markers, or not at 100 %, would give a wrong
+# scale. It is only used when it is not far from the focus or INS scale (that is what catches a wrong mat), and when
+# its edges are not too scattered (a 15 mm marker seen at 40-60 px scatters about 1-2 % per edge; the median of
+# many edges is far better).
+STANDARD_MAT_MAX_SPREAD = 0.05
+MAT_MAX_IMAGES = 80
+STANDARD_MAT_MAX_DIFF = 0.20
+
+
 def scale_from_aruco(work, cams, imgs, mat_json):
-    mat = json.loads(Path(mat_json).read_text())
-    marker_mm = mat["marker_mm"]
-    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50),
-                                  cv2.aruco.DetectorParameters())
+    """Metres per model unit from the edges of the mat's ArUco markers, and their relative spread. mat_json is the
+    .json of make_scan_mat.py or a dict like STANDARD_MAT."""
+    mat = mat_json if isinstance(mat_json, dict) else json.loads(Path(mat_json).read_text())
+    # Mats made before the chessboard have no "dictionary" in their .json: they were DICT_4X4_50.
+    dictionary = getattr(cv2.aruco, mat.get("dictionary", "DICT_4X4_50"))
+    # AprilTag corner refinement: fits the marker's edges. cornerSubPix is made for X-corners (a chessboard's) and
+    # pulled these L-corners outwards: +0.37 % on the scale, against +0.03 to +0.06 % with this (synthetic views).
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
+    det = cv2.aruco.ArucoDetector(cv2.aruco.getPredefinedDictionary(dictionary), params)
     obs = defaultdict(list)  # (id, esquina) -> [(R,t,xy)]
-    for name, im in imgs.items():
+    names = sorted(imgs)
+    # The AprilTag refinement takes ~0.25 s per 3200 px photo: MAT_MAX_IMAGES spread over the scan are plenty.
+    names = names[::max(1, -(-len(names) // MAT_MAX_IMAGES))]
+    for name in names:
+        im = imgs[name]
         img = cv2.imread(str(work / "images" / name), cv2.IMREAD_GRAYSCALE)
         if img is None:
             continue
@@ -734,7 +788,6 @@ def scale_from_aruco(work, cams, imgs, mat_json):
             continue
         for c, i in zip(corners, ids.flatten()):
             c = c.reshape(4, 2)
-            cv2.cornerSubPix(img, c, (5, 5), (-1, -1), (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.01))
             nc = undistort_pts(c, cams[im["cam"]])
             for k in range(4):
                 obs[(int(i), k)].append((im["R"], im["t"], nc[k]))
@@ -743,13 +796,37 @@ def scale_from_aruco(work, cams, imgs, mat_json):
     for mid in {k[0] for k in pts}:
         for a, b in [(0, 1), (1, 2), (2, 3), (3, 0)]:
             if (mid, a) in pts and (mid, b) in pts:
-                ratios.append(marker_mm / 1000.0 / np.linalg.norm(pts[(mid, a)] - pts[(mid, b)]))
+                side_mm = mat["marker_mm"]
+                ratios.append(side_mm / 1000.0 / np.linalg.norm(pts[(mid, a)] - pts[(mid, b)]))
     if len(ratios) < 4:
         return None, None
     r = np.array(ratios)
     med = np.median(r)
     r = r[np.abs(r - med) < 0.05 * med]
     return float(np.median(r)), float(np.std(r) / np.median(r))
+
+
+def choose_mat_scale(work, cams, imgs, mat_json, others):
+    """
+    The mat's scale as (m/unit, description), or None. With --mat its .json gives the marker size. Without it, the
+    standard mat is looked for, and kept only when its edges agree within STANDARD_MAT_MAX_SPREAD and it is within
+    STANDARD_MAT_MAX_DIFF of the other scales (a mat printed with other markers would be far from them).
+    """
+    s, rel = scale_from_aruco(work, cams, imgs, mat_json or STANDARD_MAT)
+    if not s:
+        return None
+    if mat_json:
+        return s, f"ArUco (dispersión {rel * 100:.2f} %)"
+    label = f"tapete estándar (dispersión {rel * 100:.2f} %)"
+    if rel > STANDARD_MAT_MAX_SPREAD:
+        print(f"[scale] {label}: no se usa, los bordes no concuerdan (¿otro tapete? pásalo con --mat)")
+        return None
+    far = [o for o in others if abs(s / o - 1) > STANDARD_MAT_MAX_DIFF]
+    if far:
+        print(f"[scale] {label}: no se usa, {(s / far[0] - 1) * 100:+.0f} % de las otras escalas "
+              "(¿otros marcadores o no impreso al 100 %? pásalo con --mat)")
+        return None
+    return s, label
 
 
 def umeyama_scale(src, dst):
@@ -811,9 +888,22 @@ def dense(work, model_dir, mode):
             run_tool([exe, *a], cwd=und)
         mvs("InterfaceCOLMAP", "-i", ".", "-o", "scene.mvs", "--image-folder", "images")
         mvs("DensifyPointCloud", "scene.mvs", "--resolution-level", 0)
-        mvs("ReconstructMesh", "scene_dense.mvs")
-        mvs("RefineMesh", "scene_dense_mesh.mvs", "--resolution-level", 0)
-        mvs("TextureMesh", "scene_dense_mesh_refine.mvs", "--export-type", "obj")
+        # La pieza (STL) sale de la nube densa (scene_dense.ply, postprocess.py); la malla, su refinado y la textura
+        # de OpenMVS son sólo para textura.zip: si fallan, se avisa y se sigue.
+        try:
+            mvs("ReconstructMesh", "scene_dense.mvs")
+            if (und / "scene_dense_mesh.mvs").exists():
+                # OpenMVS 1.x: cada paso deja su propia escena .mvs.
+                mvs("RefineMesh", "scene_dense_mesh.mvs", "--resolution-level", 0)
+                mvs("TextureMesh", "scene_dense_mesh_refine.mvs", "--export-type", "obj")
+            else:
+                # OpenMVS 2.x: la escena es scene_dense.mvs y cada paso deja sólo su malla (.ply).
+                mvs("RefineMesh", "scene_dense.mvs", "-m", "scene_dense_mesh.ply", "-o",
+                    "scene_dense_mesh_refine.mvs", "--resolution-level", 0)
+                mvs("TextureMesh", "scene_dense.mvs", "-m", "scene_dense_mesh_refine.ply", "-o",
+                    "scene_dense_mesh_refine_texture.mvs", "--export-type", "obj")
+        except RuntimeError as e:
+            print(f"[dense] sin malla texturizada de OpenMVS ({e}): la pieza sale igual de la nube densa")
     print(f"[dense] resultado en {und if mode == 'openmvs' else work}")
 
 
@@ -895,10 +985,6 @@ def main(argv=None):
     # Todas las fuentes de escala disponibles (se usa la mejor y se muestran las demás para
     # contrastarlas): tapete ArUco > distancia por enfoque > trayectoria INS.
     sources = []
-    if a.mat:
-        s_a, rel = scale_from_aruco(a.work, cams, imgs, a.mat)
-        if s_a:
-            sources.append((s_a, f"ArUco (dispersión {rel * 100:.2f} %)"))
     s_f, rel_f, n_f = scale_from_focus(a.work, imgs, read_points3d(txt))
     if s_f:
         calib = {c["id"]: c.get("focus_distance_calibration", "?") for c in session["cameras"]}
@@ -907,6 +993,9 @@ def main(argv=None):
     s_i = scale_from_ins(imgs, records, scan)
     if s_i:
         sources.append((s_i, "trayectoria INS suavizada (aprox. 5-10 %; mídelo con ins_accuracy.py)"))
+    mat = choose_mat_scale(a.work, cams, imgs, a.mat, [sv for sv, _ in sources])
+    if mat:
+        sources.insert(0, mat)
     for k, (sv, desc) in enumerate(sources):
         diff = f"  ({(sv / sources[0][0] - 1) * 100:+.1f} % vs la elegida)" if k else "  ← elegida"
         print(f"[scale] {sv:.6f} m/unidad · {desc}{diff}")

@@ -1,0 +1,98 @@
+name: Escaneo completo en el procesador (tisma_scan)
+
+# The whole pipeline of a scan, as a Tisma Cloud node without an NVIDIA card runs it: COLMAP (Ubuntu's, without CUDA),
+# OpenMVS built from its release (the dense cloud on the processor; COLMAP's dense cloud needs CUDA) and tisma_scan, on a
+# synthetic scan (tools/make_synthetic_scan.py: a box of 40 x 30 x 20 mm). It must give pieza.stl with those measures.
+
+on:
+  push:
+    paths:
+      - "tools/**"
+      - ".github/workflows/scan-e2e.yml"
+  workflow_dispatch:
+
+env:
+  OPENMVS_VERSION: v2.3.0
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: COLMAP y lo que necesita OpenMVS
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends colmap build-essential cmake git libeigen3-dev \
+            libboost-iostreams-dev libboost-program-options-dev libboost-system-dev libboost-serialization-dev \
+            libopencv-dev libcgal-dev libglew-dev libjpeg-dev libpng-dev libtiff-dev zlib1g-dev libegl1 libgl1
+          colmap help | head -2
+
+      - uses: actions/cache@v4
+        id: openmvs
+        with:
+          path: openmvs/bin
+          key: openmvs-${{ env.OPENMVS_VERSION }}-ubuntu-24.04-cpu-nofortify
+
+      # Without _FORTIFY_SOURCE: Ubuntu 24.04 builds with it at level 3 by default, and DensifyPointCloud v2.3.0 then
+      # aborts with "buffer overflow detected" (seen in this workflow, run 41871622288).
+      - name: Compilar OpenMVS (AGPL-3.0; https://github.com/cdcseacave/openMVS)
+        if: steps.openmvs.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          git clone -q --depth 1 https://github.com/cdcseacave/VCG.git vcglib
+          git clone -q --depth 1 --branch "$OPENMVS_VERSION" https://github.com/cdcseacave/openMVS.git openmvs-src
+          cmake -S openmvs-src -B openmvs-build -DCMAKE_BUILD_TYPE=Release -DVCG_ROOT="$PWD/vcglib" \
+            -DOpenMVS_USE_CUDA=OFF -DOpenMVS_USE_CERES=OFF -DOpenMVS_USE_PYTHON=OFF -DOpenMVS_BUILD_VIEWER=OFF \
+            -DCMAKE_CXX_FLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" -DCMAKE_C_FLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0"
+          cmake --build openmvs-build -j "$(nproc)"
+          mkdir -p openmvs/bin
+          for tool in InterfaceCOLMAP DensifyPointCloud ReconstructMesh RefineMesh TextureMesh; do
+            found=$(find openmvs-build -type f -name "$tool" -perm -u+x | head -n 1)
+            test -n "$found" || { echo "missing $tool"; exit 1; }
+            cp "$found" openmvs/bin/
+          done
+          ls -la openmvs/bin
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Módulos del pipeline
+        run: pip install numpy opencv-contrib-python-headless open3d
+
+      - name: tisma_scan --check
+        env:
+          TISMA_OPENMVS: ${{ github.workspace }}/openmvs/bin
+        run: python tools/tisma_scan.py --check
+
+      - name: Escaneo sintético hasta pieza.stl
+        env:
+          TISMA_OPENMVS: ${{ github.workspace }}/openmvs/bin
+        run: |
+          set -e
+          python tools/make_synthetic_scan.py scan.zip
+          python tools/tisma_scan.py scan.zip -o out --summary summary.json | tee progress.txt
+          cat summary.json
+          python - <<'PY'
+          import json
+          s = json.load(open("summary.json"))
+          assert "error" not in s, s
+          dims = sorted(s["dimensions_mm_xyz"], reverse=True)
+          # A box of 40 x 30 x 20 mm; the scale comes from the INS trajectory (README: about 5-10 %).
+          for got, real in zip(dims, (40, 30, 20)):
+              assert abs(got / real - 1) < 0.15, (dims, "far from 40 x 30 x 20 mm")
+          print("measures", dims)
+          PY
+          test -s out/pieza.stl
+          grep -q "progress 100" progress.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scan-e2e
+          path: |
+            out/
+            summary.json
+          retention-days: 14

@@ -5,7 +5,10 @@ It answers as Tisma Cloud does (its README, «Escaneos 3D (Tisma Scanner)»): lo
 says where to go on, complete -> a job, the job queued -> running -> done, and the result zip. It does not rebuild
 anything: the result has a small pieza.stl and its report. One account: e2e@tisma.test / clave-e2e.
 
-    python3 fake_tisma_cloud.py --port N --cert cert.pem --key key.pem [--chunk BYTES]
+    python3 fake_tisma_cloud.py --port N --cert cert.pem --key key.pem [--chunk BYTES] [--flaky-jobs N]
+
+With --flaky-jobs N, the first N requests for a job fail as a bad network would: the odd ones close the
+connection without an answer, the even ones answer 503.
 """
 
 from __future__ import annotations
@@ -25,8 +28,9 @@ EMAIL, PASSWORD = "e2e@tisma.test", "clave-e2e"
 
 
 class State:
-    def __init__(self, chunk: int) -> None:
+    def __init__(self, chunk: int, flaky_jobs: int = 0) -> None:
         self.chunk = chunk
+        self.flaky_jobs = flaky_jobs
         self.tokens: set[str] = set()
         self.scans: dict[str, dict] = {}
         self.jobs: dict[str, dict] = {}
@@ -148,6 +152,14 @@ def handler(state: State):
                 return self.send(200, {"id": scan["id"], "size": scan["size"], "received": len(scan["data"]),
                                        "chunk_size": state.chunk, "job_id": scan["job_id"]})
             if len(parts) == 3 and parts[:2] == ["v1", "jobs"] and parts[2] in state.jobs:
+                with state.lock:
+                    flaky, state.flaky_jobs = state.flaky_jobs, max(0, state.flaky_jobs - 1)
+                if flaky % 2 == 1:  # the connection drops: no answer at all
+                    self.close_connection = True
+                    self.connection.close()
+                    return
+                if flaky:
+                    return self.send(503, {"detail": "Service Unavailable"})
                 return self.send(200, self.job_view(state.jobs[parts[2]]))
             if len(parts) == 4 and parts[:2] == ["v1", "jobs"] and parts[3] == "result" and parts[2] in state.jobs:
                 return self.send(200, raw=result_zip(), kind="application/zip")
@@ -162,8 +174,9 @@ def main() -> None:
     ap.add_argument("--cert", required=True)
     ap.add_argument("--key", required=True)
     ap.add_argument("--chunk", type=int, default=64 * 1024)
+    ap.add_argument("--flaky-jobs", type=int, default=0)
     a = ap.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", a.port), handler(State(a.chunk)))
+    server = ThreadingHTTPServer(("127.0.0.1", a.port), handler(State(a.chunk, a.flaky_jobs)))
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(a.cert, a.key)
     server.socket = ctx.wrap_socket(server.socket, server_side=True)

@@ -19,7 +19,7 @@ import java.util.zip.ZipInputStream
  *   `textura.zip` y `log.txt`.
  * - El plan de la cuenta tiene que incluir los escaneos: si no, el servidor contesta 402 con el texto.
  */
-class CloudClient(baseUrl: String, private val token: String) {
+class CloudClient(baseUrl: String, private val token: String, private val retryBaseMs: Long = 2_000L) {
 
     private val base = normalize(baseUrl)
 
@@ -155,9 +155,34 @@ class CloudClient(baseUrl: String, private val token: String) {
         return j
     }
 
+    /**
+     * Sigue un trabajo hasta que termina (`done`, `failed` o `cancelled`) y lo devuelve. Un corte de red o un
+     * error pasajero del servidor (5xx, 408, 429) no lo corta: se espera cada vez más y se vuelve a preguntar.
+     * Sólo un error de la petición (otro 4xx, como 401) o muchos cortes seguidos terminan con una excepción.
+     */
+    fun waitForJob(jobId: String, pollMs: Long, onStatus: (JSONObject) -> Unit,
+                   isCancelled: () -> Boolean = { false }): JSONObject {
+        var failures = 0
+        while (true) {
+            if (isCancelled()) throw IOException("cancelado")
+            try {
+                val j = job(jobId)
+                failures = 0
+                onStatus(j)
+                if (j.optString("status") in setOf("done", "failed", "cancelled")) return j
+                Thread.sleep(pollMs)
+            } catch (e: HttpError) {
+                if (e.code in 400..499 && e.code != 408 && e.code != 429) throw e
+                failures = backoff(failures)
+            } catch (e: IOException) {
+                failures = backoff(failures)
+            }
+        }
+    }
+
     private fun backoff(failures: Int): Int {
         if (failures >= 12) throw IOException("sin conexión con el servidor tras varios intentos")
-        Thread.sleep(minOf(60_000L, 2_000L shl failures))
+        Thread.sleep(minOf(60_000L, retryBaseMs shl failures))
         return failures + 1
     }
 

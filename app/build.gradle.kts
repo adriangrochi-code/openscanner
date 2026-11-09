@@ -62,6 +62,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     // Inferencia de modelos de IA en el móvil (Depth Anything 3 Small, Apache-2.0). ONNX Runtime es MIT.
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
+    // El envío a Tisma Cloud en segundo plano, que se retoma solo al volver la red (Apache-2.0).
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     testImplementation("junit:junit:4.13.2")
     // Capturas de pantalla de la UI en la JVM (sin emulador).
