@@ -1,7 +1,9 @@
 # Tisma Scanner
 
 App Android para **escanear piezas en 3D por fotogrametría**. Guía de uso: [docs/GUIA.md](docs/GUIA.md)
-(English: [docs/GUIDE.md](docs/GUIDE.md)). Combina:
+(English: [docs/GUIDE.md](docs/GUIDE.md)).
+Para testers: [docs/PROBAR.md](docs/PROBAR.md) (en: [docs/TESTING.md](docs/TESTING.md)); el CI arma el kit (APK +
+instrucciones + tapetes en PDF) en el artefacto `tisma-scanner-kit` de «App Android». Combina:
 
 - **Todas las cámaras posibles a la vez**: los objetivos físicos de la cámara lógica trasera
   (principal, ultra gran angular, tele/macro) y las cámaras concurrentes (frontal + trasera).

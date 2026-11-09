@@ -104,6 +104,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - With CUDA it is faster: COLMAP's SIFT on the GPU, and the COLMAP dense cloud (`patch_match_stereo`), which only
   exists with CUDA. `tisma_scan --check` says which one this machine uses.
 
+## Tester kit (2026-11-09)
+
+- docs/PROBAR.md (es) and docs/TESTING.md (en): 15 minutes, install, print the mat at actual size and check the
+  bar, scan the Lejos pass to "Listo para enviar", send, report measures vs calipers + phone + paper size, and
+  where the diagnostic log is (⚙ → Registro → Compartir registro de diagnóstico).
+- tools/make_tester_kit.py builds TismaScanner-kit-<version>.zip (APK, both instructions, LICENSE, mats as PDF for
+  A6..Tabloid). The "App Android" workflow builds it on every app change: artifact tisma-scanner-kit.
+
 ## Open for the beta
 
 - The mats: the owner publishes them (2026-11-04) so anyone can print one, from a small sheet to a big one.
