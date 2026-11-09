@@ -113,6 +113,13 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   A6..Tabloid). The "App Android" workflow builds it on every app change: artifact tisma-scanner-kit.
   First CI run green: 42646004610 (bdfd743), artifact tisma-scanner-kit 139 MB, kept 30 days.
 
+## Emulator smoke test (2026-11-09)
+
+- No KVM in these cloud sessions, so no emulator here. .github/workflows/app-emulator.yml runs one on GitHub's
+  runner (Android 13, x86_64 with arm64 translation): tools/emulator_smoke.py installs the APK with its permissions,
+  opens it, waits for the main screen, goes ⚙ → Nube → Entrar, fails on a crash in logcat, and keeps screenshots and
+  logcat (artifact emulator-smoke). It also runs with a phone on adb.
+
 ## Open for the beta
 
 - "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the
