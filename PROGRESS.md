@@ -111,6 +111,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   where the diagnostic log is (⚙ → Registro → Compartir registro de diagnóstico).
 - tools/make_tester_kit.py builds TismaScanner-kit-<version>.zip (APK, both instructions, LICENSE, mats as PDF for
   A6..Tabloid). The "App Android" workflow builds it on every app change: artifact tisma-scanner-kit.
+  First CI run green: 42646004610 (bdfd743), artifact tisma-scanner-kit 139 MB, kept 30 days.
 
 ## Open for the beta
 
