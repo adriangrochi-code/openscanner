@@ -132,7 +132,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   **+0.03 to +0.06 %** on A6, A4 and Tabloid at 25, 35 and 55 cm (spread under 0.12 %). It costs 0.25 s per 3200 px
   photo, so at most 80 photos spread over the scan are used (MAT_MAX_IMAGES).
   Through COLMAP (synthetic scan on the A5 mat, 36 views, 800x600): mat scale within 0.1-0.2 % of the exact one;
-  scan-e2e.yml now checks the scale comes from the mat, within 1 %. Not yet tried: printing one.
+  scan-e2e.yml now checks the scale comes from the mat, within 1 %. First run green (42650053332, 1d7a7da, full
+  CPU path with OpenMVS): mat scale -0.2 % vs exact, part 40.85 x 30.87 x 20.24 mm (+2.1 %, +2.9 %, +1.2 %: the
+  rest is the dense cloud and mesh, not the scale). Windows package green on it too (42650053314, 640x480).
+  Not yet tried: printing one.
 
 ## Next
 
