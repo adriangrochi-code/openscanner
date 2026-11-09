@@ -34,6 +34,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 val detail = body?.optString("detail")?.takeIf { it.isNotBlank() }
                 return when {
                     code == 401 -> "La sesión venció o se cerró: entrá de nuevo"
+                    code == SERVER_FULL -> "Tisma Cloud no tiene lugar ahora: el envío se reintenta solo más tarde"
                     detail != null -> detail
                     else -> "HTTP $code"
                 }
@@ -42,6 +43,9 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     }
 
     companion object {
+        /** Tisma Cloud sin lugar en disco (507, con Retry-After): la subida se guarda y se sigue más tarde. */
+        const val SERVER_FULL = 507
+
         fun normalize(url: String): String {
             val base = url.trim().trimEnd('/')
             require(base.startsWith("https://")) { "El servidor debe usar https://" }
@@ -130,6 +134,9 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                     onProgress(offset, size)
                 } catch (e: HttpError) {
                     if (e.code in 400..499 && e.code != 408 && e.code != 429) throw e
+                    // Sin lugar en el servidor: insistir cada pocos segundos no lo arregla; lo subido queda y
+                    // se sigue más tarde (CloudSendWorker lo reintenta con esperas largas).
+                    if (e.code == SERVER_FULL) throw e
                     failures = backoff(failures)
                 } catch (e: IOException) {
                     // Corte de red: esperar y reanudar desde lo que tenga el servidor.

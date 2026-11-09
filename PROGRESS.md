@@ -32,6 +32,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   state, also after the app is reopened. Dependency androidx.work 2.10.0 (Apache-2.0, in THIRD_PARTY.md).
   107 unit tests pass. **Not tested on a phone**: if Android refuses the foreground start from the background,
   the work still runs (and is retried if stopped), only without its notification.
+- Tisma Cloud answers 507 (+ Retry-After 300) when its disk is full (its caeb35e), on POST /v1/scans and PUT
+  .../data. The upload now stops at once on 507 and keeps what was received (no minutes of short retries); the
+  worker retries later with its backoff and the app says "Tisma Cloud no tiene lugar ahora…". Tested with
+  fake_tisma_cloud.py's POST /test/full (2026-11-09).
 - Tisma Cloud's scan-e2e.yml now runs scanner/next through master, node and result zip, on its pushes and every
   Monday 06:17 UTC: if it goes red after a change here, the node contract moved; tell the server session first.
 - APK for the owner: dist/TismaScanner-0.1.0-debug-<commit>.apk (dist/ is not in git).

@@ -46,6 +46,9 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             }
         }
         runCatching { setForeground(foreground("Enviando a Tisma Cloud…", -1)) }
+        // Por qué se está esperando, para mostrarlo mientras WorkManager tiene el envío en cola para reintentar.
+        fun waitReason(text: String?) = prefs.edit().apply { if (text == null) remove(KEY_WAIT) else putString(KEY_WAIT, text) }.apply()
+        waitReason(null)
         try {
             val result = CloudSend(CloudClient(url, token), store).run(zip, onStatus = { text, p ->
                 val percent = if (p >= 0f) (p * 100).toInt() else -1
@@ -56,10 +59,14 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         } catch (e: CloudClient.HttpError) {
             // Un error de la petición (sesión vencida, plan sin escaneos…): reintentar no lo arregla.
             if (e.code in 400..499 && e.code != 408 && e.code != 429) Result.failure(error(e.message ?: "error", e.code))
-            else retryOrFail(e)
+            else {
+                waitReason(if (e.code == CloudClient.SERVER_FULL) e.message else "El servidor no responde: se reintenta solo")
+                retryOrFail(e)
+            }
         } catch (e: CloudSend.JobFailed) {
             Result.failure(error(e.message ?: "el escaneo falló en el servidor"))
         } catch (e: IOException) {
+            waitReason("Sin conexión: se retoma sola al volver la red")
             retryOrFail(e)  // corte de red: WorkManager lo retoma cuando vuelve la red
         }
     }
@@ -98,6 +105,8 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         const val KEY_SUMMARY = "medidas"
         const val KEY_ERROR = "error"
         const val KEY_CODE = "codigo"
+        /** En las preferencias: por qué el envío espera para reintentar (sin red, servidor sin lugar…). */
+        const val KEY_WAIT = "cloud_wait"
         private const val CHANNEL = "nube"
         private const val NOTIFICATION_ID = 43
         /** Cortes de red seguidos antes de rendirse (con esperas crecientes: varias horas en total). */

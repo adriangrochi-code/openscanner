@@ -31,6 +31,7 @@ class State:
     def __init__(self, chunk: int, flaky_jobs: int = 0) -> None:
         self.chunk = chunk
         self.flaky_jobs = flaky_jobs
+        self.full = 0
         self.tokens: set[str] = set()
         self.scans: dict[str, dict] = {}
         self.jobs: dict[str, dict] = {}
@@ -81,9 +82,27 @@ def handler(state: State):
                     "progress": {"queued": 0, "running": 50, "done": 100}[status], "error": "",
                     "summary": {"dimensions_mm_xyz": [40.2, 30.2, 20.3]} if status == "done" else {}}
 
+        def server_full(self) -> bool:
+            """The disk is full for this upload request (set by POST /test/full): 507 with Retry-After."""
+            with state.lock:
+                full, state.full = state.full, max(0, state.full - 1)
+            if not full:
+                return False
+            body = json.dumps({"detail": "Insufficient Storage"}).encode()
+            self.send_response(507)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Retry-After", "300")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return True
+
         def do_POST(self) -> None:
             path = urlparse(self.path).path
             data = self.body()
+            if path == "/test/full":
+                state.full = int(json.loads(data or b"{}").get("n", 1))
+                return self.send(200, {"full": state.full})
             if path == "/v1/auth/login":
                 j = json.loads(data or b"{}")
                 if j.get("email") != EMAIL or j.get("password") != PASSWORD:
@@ -97,6 +116,8 @@ def handler(state: State):
                 state.tokens.discard(self.headers["Authorization"][7:])
                 return self.send(200, {"ok": True})
             if path == "/v1/scans":
+                if self.server_full():
+                    return
                 j = json.loads(data)
                 sid = str(uuid.uuid4())
                 state.scans[sid] = {"id": sid, "size": int(j["size"]), "data": bytearray(), "job_id": None}
@@ -129,6 +150,8 @@ def handler(state: State):
                 if scan is None:
                     return self.send(404, {"detail": "No such scan"})
                 offset = int(parse_qs(url.query)["offset"][0])
+                if self.server_full():
+                    return
                 with state.lock:
                     if offset != len(scan["data"]):
                         return self.send(409, {"detail": "The piece does not go there", "received": len(scan["data"])})

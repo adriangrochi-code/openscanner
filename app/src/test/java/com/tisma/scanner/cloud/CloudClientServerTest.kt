@@ -144,6 +144,28 @@ class CloudClientServerTest {
             assertTrue(result.summary, result.summary.startsWith("40") && result.summary.endsWith("cerrada"))
             assertTrue(texts.any { it.startsWith("Procesando en la nube") })
             assertTrue("nada pendiente tras terminar", kept.isEmpty())
+
+            // Tisma Cloud sin lugar en disco (507): la subida para enseguida (sin minutos de reintentos cortos),
+            // queda guardada, y la vez siguiente sigue desde lo recibido.
+            val zip2 = File(dir, "scan_lleno.zip").also { zip.copyTo(it) }
+            var n2 = 0
+            runCatching { CloudSend(client, store, 10).run(zip2, onStatus = { t, _ -> if (t.startsWith("Subiendo")) n2++ },
+                isCancelled = { n2 >= 1 }) }
+            val id2 = kept.values.single()
+            val got2 = client.scanStatus(id2).getLong("received")
+            sh("python3", "-c", "import json,ssl,urllib.request;ctx=ssl.create_default_context(cafile='cert.pem');" +
+                "urllib.request.urlopen(urllib.request.Request('$base/test/full',data=json.dumps({'n':1}).encode()),context=ctx)",
+                dir = dir)
+            val t0 = System.currentTimeMillis()
+            val full = runCatching { CloudSend(client, store, 10).run(zip2, onStatus = { _, _ -> }) }.exceptionOrNull()
+            assertEquals(CloudClient.SERVER_FULL, (full as CloudClient.HttpError).code)
+            assertTrue("para enseguida", System.currentTimeMillis() - t0 < 5_000)
+            assertTrue(full.message!!.contains("no tiene lugar"))
+            assertEquals("lo subido se conserva", got2, client.scanStatus(id2).getLong("received"))
+            assertEquals(id2, kept.values.single())
+            val result2 = CloudSend(client, store, 10).run(zip2, onStatus = { _, _ -> })
+            assertEquals(zip2.length(), client.scanStatus(id2).getLong("received"))
+            assertTrue(result2.stl.exists() && kept.isEmpty())
         } finally {
             server.destroy()
             HttpsURLConnection.setDefaultSSLSocketFactory(previous)

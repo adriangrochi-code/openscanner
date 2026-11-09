@@ -565,7 +565,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 fun seen() = prefs.edit().putString("cloud_seen", info.id.toString()).apply()
                 when (info.state) {
                     androidx.work.WorkInfo.State.ENQUEUED, androidx.work.WorkInfo.State.BLOCKED ->
-                        _state.update { it.copy(cloudStatus = if (info.runAttemptCount > 0) "Sin conexión: se retoma sola al volver la red"
+                        _state.update { it.copy(cloudStatus = if (info.runAttemptCount > 0)
+                                prefs.getString(W.KEY_WAIT, null) ?: "Sin conexión: se retoma sola al volver la red"
                             else "Esperando red para enviar…", cloudProgress = -1f, cloudBusy = true) }
                     androidx.work.WorkInfo.State.RUNNING -> {
                         val text = info.progress.getString(W.KEY_TEXT) ?: "Enviando a Tisma Cloud…"
