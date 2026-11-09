@@ -2,7 +2,8 @@ name: Escaneo completo en el procesador (tisma_scan)
 
 # The whole pipeline of a scan, as a Tisma Cloud node without an NVIDIA card runs it: COLMAP (Ubuntu's, without CUDA),
 # OpenMVS built from its release (the dense cloud on the processor; COLMAP's dense cloud needs CUDA) and tisma_scan, on a
-# synthetic scan (tools/make_synthetic_scan.py: a box of 40 x 30 x 20 mm). It must give pieza.stl with those measures.
+# synthetic scan (tools/make_synthetic_scan.py: a box of 40 x 30 x 20 mm on the printed A5 mat). It must give pieza.stl
+# with those measures, and take the scale from the mat, within 1 % of the exact one.
 
 on:
   push:
@@ -84,6 +85,14 @@ jobs:
           for got, real in zip(dims, (40, 30, 20)):
               assert abs(got / real - 1) < 0.15, (dims, "far from 40 x 30 x 20 mm")
           print("measures", dims)
+          # The synthetic scan is on the printed mat (make_scan_mat.py, A5) and its poses are exact: the scale must
+          # come from the mat, and the INS line ("% vs la elegida") is then the mat scale's error.
+          import re
+          log = open("out/log.txt", encoding="utf-8", errors="replace").read()
+          assert re.search(r"\[scale\] .*tapete estándar.*← elegida", log), "the scale did not come from the mat"
+          diff = re.search(r"\[scale\] .*trayectoria INS.*\(([-+][0-9.]+) % vs la elegida\)", log)
+          assert diff and abs(float(diff.group(1))) < 1.0, ("mat scale vs exact", diff and diff.group(0))
+          print("mat scale vs exact:", diff.group(1), "%")
           PY
           test -s out/pieza.stl
           grep -q "progress 100" progress.txt

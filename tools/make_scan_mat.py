@@ -17,7 +17,7 @@ Imprime el PDF a «tamaño real» / 100 % (sin «ajustar a la página») y mide 
 
 El tapete es un tablero de ajedrez (ChArUco) de casillas de 20 mm, igual en todas las hojas: en una hoja
 más grande hay más casillas, no más grandes. Cada casilla blanca lleva un marcador ArUco de 15 mm con su
-número; las negras, una textura oscura para que la fotogrametría tenga puntos únicos. Como el marcador es
+número; las otras, una textura de manchas para que la fotogrametría tenga puntos únicos. Como el marcador es
 siempre el mismo, Tisma Cloud saca la escala sin que nadie le diga qué hoja se imprimió
 (reconstruct.STANDARD_MAT), aunque la pieza tape parte del tablero.
 También se genera <out>.json con las coordenadas (mm) de cada esquina de los marcadores.
@@ -70,7 +70,10 @@ def make_mat(paper, dpi=300, seed=7):
     px_per_mm = dpi / 25.4
     W, H = int(round(pw * px_per_mm)), int(round(ph * px_per_mm))
     canvas = np.full((H, W), 255, np.uint8)
-    dark = (multiscale_noise(H, W, np.random.default_rng(seed)).astype(np.float32) * 0.33).astype(np.uint8)
+    # The "dark" squares carry the full multiscale texture (the old mat's), not a darkened one: with it at 33 %,
+    # COLMAP registered 3 of 36 synthetic views (only repeated squares and look-alike codes to match); with it whole,
+    # 36 of 36, and the mat's scale within 0.1-0.2 % of the exact one through COLMAP. It also takes less ink.
+    dark = multiscale_noise(H, W, np.random.default_rng(seed))
     dictionary = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, DICTIONARY))
     cols = int((pw - 2 * MARGIN_MM) // SQUARE_MM)
     rows = int((ph - 2 * MARGIN_MM - BAR_STRIP_MM) // SQUARE_MM)
@@ -82,7 +85,7 @@ def make_mat(paper, dpi=300, seed=7):
     for r in range(rows):
         for c in range(cols):
             x, y = x0 + c * SQUARE_MM, y0 + r * SQUARE_MM
-            if (r + c) % 2 == 0:  # casilla negra, con textura oscura
+            if (r + c) % 2 == 0:  # casilla de textura (la «negra» del tablero)
                 canvas[px(y):px(y + SQUARE_MM), px(x):px(x + SQUARE_MM)] = \
                     dark[px(y):px(y + SQUARE_MM), px(x):px(x + SQUARE_MM)]
                 continue

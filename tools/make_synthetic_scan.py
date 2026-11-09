@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """A synthetic scan in the format of Tisma Scanner, for tests of the whole pipeline (tisma_scan, Tisma Cloud).
 
-A box of 40 × 30 × 20 mm with a random texture on each face, on a textured mat, photographed by a pinhole camera from
+A box of 40 × 30 × 20 mm with a random texture on each face, on the printed mat of make_scan_mat.py (the chessboard
+with ArUco markers, A5 by default; --mat none for a plain textured square), photographed by a pinhole camera from
 rings around it (by default 3 heights × 24 views), with the poses a still phone would give: session.json (one camera
 with its intrinsics), frames.csv (position in m and orientation of the phone, which looks along its -Z) and
 capture_meta.jsonl. Not a photo: no blur, no noise, no lighting; enough for COLMAP to register the views and for the
 dense cloud and the mesh.
 
-    python3 make_synthetic_scan.py out.zip [--views 24] [--size 800x600]
+    python3 make_synthetic_scan.py out.zip [--views 24] [--size 800x600] [--mat a5|a4|...|none]
+
+The poses in frames.csv are exact, so the INS scale is too: in reconstruct.py's log, the INS line's "% vs la
+elegida" is the error of the scale taken from the mat.
 """
 
 from __future__ import annotations
@@ -19,8 +23,12 @@ import json
 import zipfile
 from pathlib import Path
 
+import sys
+
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 BOX_MM = (40.0, 30.0, 20.0)
 MAT_M = 0.20
@@ -37,12 +45,13 @@ def texture(rng: np.random.Generator, size: int = 512) -> np.ndarray:
     return (colour * 255).astype(np.uint8)
 
 
-def quads() -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """The planes to draw: (origin, u axis, v axis, outward normal), in m, Z up, the box centred on the mat."""
+def quads(mat_mm: tuple[float, float] = (MAT_M * 1000, MAT_M * 1000)) -> list[tuple[np.ndarray, ...]]:
+    """The planes to draw: (origin, u axis, v axis, outward normal), in m, Z up, the box centred on the mat. The mat's
+    v axis runs towards -Y, so its image is seen from above as printed (not mirrored)."""
     w, d, h = (v / 1000 for v in BOX_MM)
     x0, y0 = -w / 2, -d / 2
-    mat = (np.array([-MAT_M / 2, -MAT_M / 2, 0]), np.array([MAT_M, 0, 0]), np.array([0, MAT_M, 0]),
-           np.array([0, 0, 1.0]))
+    mw, mh = (v / 1000 for v in mat_mm)
+    mat = (np.array([-mw / 2, mh / 2, 0]), np.array([mw, 0, 0]), np.array([0, -mh, 0]), np.array([0, 0, 1.0]))
     faces = [
         (np.array([x0, y0, h]), np.array([w, 0, 0]), np.array([0, d, 0]), np.array([0, 0, 1.0])),      # top
         (np.array([x0, y0, 0]), np.array([w, 0, 0]), np.array([0, 0, h]), np.array([0, -1.0, 0])),     # front
@@ -79,36 +88,43 @@ def quaternion(r: np.ndarray) -> tuple[float, float, float, float]:
     return tuple(q)
 
 
-def render(k: np.ndarray, r_wc: np.ndarray, centre: np.ndarray, size: tuple[int, int], textures) -> np.ndarray:
+def render(k: np.ndarray, r_wc: np.ndarray, centre: np.ndarray, size: tuple[int, int], textures,
+           planes_mm=None) -> np.ndarray:
     width, height = size
     r_cw = r_wc.T
     t = -r_cw @ centre
     img = np.full((height, width, 3), 40, np.uint8)
     planes = []
-    for (origin, u, v, normal), tex in zip(quads(), textures):
+    for (origin, u, v, normal), tex in zip(planes_mm or quads(), textures):
         # Only the faces that look at the camera, drawn from the farthest.
         if normal @ (centre - (origin + (u + v) / 2)) <= 0:
             continue
         planes.append((np.linalg.norm(centre - (origin + (u + v) / 2)), origin, u, v, tex))
     for _, origin, u, v, tex in sorted(planes, key=lambda p: -p[0]):
-        n = tex.shape[0]
+        ny, nx = tex.shape[:2]
         corners = [origin, origin + u, origin + u + v, origin + v]
         if any((r_cw @ c + t)[2] < 0.01 for c in corners):
             continue
-        # Texture pixel (a, b) -> world origin + a/n u + b/n v -> image.
-        h = k @ np.stack([r_cw @ u / n, r_cw @ v / n, r_cw @ origin + t], 1)
-        warped = cv2.warpPerspective(tex, h, (width, height), flags=cv2.INTER_LINEAR)
-        mask = cv2.warpPerspective(np.full((n, n), 255, np.uint8), h, (width, height), flags=cv2.INTER_NEAREST)
+        # Texture pixel (a, b) -> world origin + a/nx u + b/ny v -> image.
+        h = k @ np.stack([r_cw @ u / nx, r_cw @ v / ny, r_cw @ origin + t], 1)
+        warped = cv2.warpPerspective(tex, h, (width, height), flags=cv2.INTER_AREA)
+        mask = cv2.warpPerspective(np.full((ny, nx), 255, np.uint8), h, (width, height), flags=cv2.INTER_NEAREST)
         img[mask > 0] = warped[mask > 0]
     return img
 
 
-def make(out: Path, views: int = 24, size: tuple[int, int] = (800, 600), seed: int = 0) -> Path:
+def make(out: Path, views: int = 24, size: tuple[int, int] = (800, 600), seed: int = 0, mat: str = "a5") -> Path:
     rng = np.random.default_rng(seed)
     width, height = size
     f = 0.9 * width
     k = np.array([[f, 0, width / 2], [0, f, height / 2], [0, 0, 1.0]])
-    textures = [texture(rng) for _ in quads()]
+    planes = quads()
+    textures = [texture(rng) for _ in planes]
+    if mat != "none":
+        import make_scan_mat  # same folder
+        canvas, _ = make_scan_mat.make_mat(mat, dpi=200)
+        planes = quads(make_scan_mat.PAPERS_MM[mat])
+        textures[0] = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
     target = np.array([0, 0, BOX_MM[2] / 2000])
     rows, meta, files = [], [], {}
     t_ns = 1_000_000_000
@@ -120,7 +136,7 @@ def make(out: Path, views: int = 24, size: tuple[int, int] = (800, 600), seed: i
             dist = 0.16
             centre = target + dist * np.array([np.cos(el) * np.cos(az), np.cos(el) * np.sin(az), np.sin(el)])
             r_wc = look_at(centre, target)
-            img = render(k, r_wc, centre, size, textures)
+            img = render(k, r_wc, centre, size, textures, planes)
             name = f"images/0/{t_ns}.jpg"
             ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
             assert ok
@@ -156,9 +172,10 @@ def main() -> None:
     ap.add_argument("out", type=Path)
     ap.add_argument("--views", type=int, default=24, help="views per ring (3 rings)")
     ap.add_argument("--size", default="800x600")
+    ap.add_argument("--mat", default="a5", help="paper of make_scan_mat.py's mat under the box, or none")
     a = ap.parse_args()
     w, h = (int(v) for v in a.size.split("x"))
-    print(make(a.out, a.views, (w, h)))
+    print(make(a.out, a.views, (w, h), mat=a.mat))
 
 
 if __name__ == "__main__":

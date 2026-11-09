@@ -125,12 +125,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   `python3 tools/make_scan_mat.py --all --out-dir tapetes` makes A6, A5, A4, A3, Letter, Legal and Tabloid, each
   as PDF at the exact page size (what to print, at "actual size"), PNG with its DPI, and .json. Owner's idea: a
   chessboard of fixed squares, so any sheet works. It is a ChArUco-like board: 20 mm squares, a 15 mm
-  DICT_4X4_250 marker in each white square, dark texture in the black ones (unique points for SIFT). Synthetic
+  DICT_4X4_250 marker in each white square, the full multiscale texture in the others (unique points for SIFT;
+  2026-11-09: a darkened texture there let COLMAP register only 3 of 36 synthetic views, the full one 36 of 36). Synthetic
   views at 35 cm, 2560 px: scale +0.37 to +0.40 % on every sheet at first. Cause found (2026-11-06): cornerSubPix
   is made for X-corners and pulled the markers' L-corners outwards. With the detector's AprilTag refinement:
   **+0.03 to +0.06 %** on A6, A4 and Tabloid at 25, 35 and 55 cm (spread under 0.12 %). It costs 0.25 s per 3200 px
   photo, so at most 80 photos spread over the scan are used (MAT_MAX_IMAGES).
-  Not yet tried: printing one, and a full scan on it through COLMAP. It uses a lot of black ink.
+  Through COLMAP (synthetic scan on the A5 mat, 36 views, 800x600): mat scale within 0.1-0.2 % of the exact one;
+  scan-e2e.yml now checks the scale comes from the mat, within 1 %. Not yet tried: printing one.
 
 ## Next
 
