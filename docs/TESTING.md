@@ -25,14 +25,16 @@ on A6). Otherwise the part will come out bigger or smaller by the same proportio
 
 1. Put the part in the middle of the mat, in good even light (no direct sun). If it is plain or shiny, pick one
    with some pattern or texture for this test.
-2. Open the app: ⚙ → **Nube** (Cloud) → **Entrar** (Sign in) with your account.
-3. At the top right, **Lejos** (far). Tap the shutter and **walk slowly around** the part, at 2 or 3 heights,
-   with the whole part on screen. The app takes the photos by itself.
-4. Go on until it says **"✓ Listo para enviar"** (ready to send). The dome at the bottom right shows what is done:
-   grey missing, yellow one photo, green two or more; the greener, the better the part. Tap **■**.
-5. Tap **☁ Enviar** (send). You can lock the phone or leave the app: it carries on, and resumes by itself if the
-   network drops. It takes several minutes.
-6. At the end, **⬢ Pieza STL** (STL part) appears with the measures.
+2. Open the app: ⚙ → **Nube** (Cloud) → **Entrar** (Sign in) with your account. Go back with **←**.
+3. The app opens in **"Vídeo 360"** (the switch at the bottom; leave it so). Put the part inside the frame and tap
+   the **red button**.
+4. **Walk slowly around** the part, at 2 or 3 heights, with the whole part on screen. If it says **"Más
+   despacio"** (slower), slow down. Under the button you see the **% covered** ("% cubierto"): go on past **75 %**.
+5. Tap the **red button** again to finish, then **→**.
+6. In "Tu pieza" (your part), tap **"Crear modelo final en Tisma Cloud"** (make the final model). You can lock
+   the phone or leave the app: it carries on, and resumes by itself if the network drops. It takes several
+   minutes.
+7. At the end, **"Pieza STL"** (STL part) appears with the measures.
 
 ## 4. Tell us
 

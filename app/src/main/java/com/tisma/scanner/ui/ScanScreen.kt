@@ -1000,7 +1000,7 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp))
                 .background(if (zip != null && !s.cloudBusy && !s.busy) Tisma.Purple else Tisma.Field)
                 .clickable(enabled = zip != null && !s.cloudBusy && !s.busy) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
-                Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Procesando en Tisma Server…"; else -> "Crear modelo final en Tisma Server" },
+                Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Enviando a Tisma Cloud…"; else -> "Crear modelo final en Tisma Cloud" },
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
             // Sin servidor: el modelo se calcula en el propio móvil (calidad media, escala real de la INS).

@@ -36,6 +36,16 @@ del móvil y del enfoque, con un error de alrededor del 5-10 %.
 
 ## 3. Escanea
 
+La app tiene dos modos (el selector junto al botón de abajo): **«Vídeo 360»**, con el que abre, y **«Fotos»**.
+
+**Vídeo 360 (lo más simple).** Entra con tu cuenta (⚙ → **Nube** → **Entrar**). Pon la pieza dentro del recuadro,
+toca el **botón rojo** y rodéala despacio a 2-3 alturas (si dice «Más despacio», ve más lento); debajo ves el
+**% cubierto**: sigue hasta pasar el 75 %. Toca el botón rojo para terminar y **→**. En «Tu pieza», toca **«Crear
+modelo final en Tisma Cloud»**; al final aparece **«Pieza STL»** con las medidas. El envío sigue y se retoma solo
+como se explica en el paso 4.
+
+**Fotos (más control).** Lo que sigue en este paso y el 4 es este modo:
+
 1. **Entra con tu cuenta**: ⚙ Ajustes → **Nube** → **Entrar**.
 2. Arriba a la derecha elige la pasada **Lejos**. Pulsa el botón de disparo para empezar.
 3. **Rodea la pieza despacio** a 2-3 alturas (unos 30°, 50° y 70° sobre la mesa), con la pieza entera

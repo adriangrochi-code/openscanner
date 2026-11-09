@@ -24,14 +24,15 @@ En `tapetes/` está en todos los tamaños: usa el de tu hoja (A4, Carta, A5…).
 
 1. Pon la pieza en el centro del tapete, con buena luz pareja (sin sol directo). Si es lisa o brillante, mejor
    una que tenga dibujo o textura para esta prueba.
-2. Abre la app: ⚙ → **Nube** → **Entrar** con tu cuenta.
-3. Arriba a la derecha, **Lejos**. Toca el disparador y **camina despacio alrededor** de la pieza, a 2 o 3
-   alturas, con la pieza entera en pantalla. La app saca las fotos sola.
-4. Sigue hasta que diga **«✓ Listo para enviar»**. La cúpula de abajo a la derecha muestra lo hecho: gris falta,
-   amarillo una foto, verde dos o más; cuanto más verde, mejor sale la pieza. Toca **■**.
-5. Toca **☁ Enviar**. Puedes bloquear el teléfono o salir de la app: sigue sola, y si se corta la red, retoma
-   sola. Tarda varios minutos.
-6. Al final aparece **⬢ Pieza STL** con las medidas.
+2. Abre la app: ⚙ → **Nube** → **Entrar** con tu cuenta. Vuelve con **←**.
+3. La app abre en **«Vídeo 360»** (el selector de abajo; déjalo así). Pon la pieza dentro del recuadro y toca el
+   **botón rojo**.
+4. **Camina despacio alrededor** de la pieza, a 2 o 3 alturas, con la pieza entera en pantalla. Si dice
+   **«Más despacio»**, ve más lento. Debajo del botón ves el **% cubierto**: sigue hasta pasar el **75 %**.
+5. Toca el **botón rojo** otra vez para terminar, y después **→**.
+6. En «Tu pieza», toca **«Crear modelo final en Tisma Cloud»**. Puedes bloquear el teléfono o salir de la app:
+   sigue sola, y si se corta la red, retoma sola. Tarda varios minutos.
+7. Al final aparece **«Pieza STL»** con las medidas.
 
 ## 4. Contarnos
 

@@ -37,6 +37,17 @@ within about 5-10 %.
 
 ## 3. Scan
 
+The app has two modes (the switch next to the bottom button): **"Vídeo 360"**, which it opens in, and **"Fotos"**
+(photos).
+
+**Vídeo 360 (simplest).** Sign in (⚙ → **Nube** → **Entrar**). Put the part inside the frame, tap the **red
+button** and walk slowly around it at 2-3 heights (if it says "Más despacio", slow down); under the button you see
+the **% covered**: go on past 75 %. Tap the red button to finish, then **→**. In "Tu pieza" (your part), tap
+**"Crear modelo final en Tisma Cloud"**; at the end **"Pieza STL"** appears with the measures. The send carries on
+and resumes by itself as step 4 explains.
+
+**Fotos (more control).** The rest of this step and step 4 are this mode:
+
 1. **Sign in**: ⚙ Ajustes (Settings) → **Nube** (Cloud) → **Entrar** (Sign in).
 2. At the top right, choose the **Lejos** (far) pass. Press the shutter button to start.
 3. **Walk slowly around the part** at 2-3 heights (about 30°, 50° and 70° above the table), with the whole

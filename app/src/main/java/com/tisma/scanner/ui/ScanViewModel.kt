@@ -69,7 +69,7 @@ data class UiState(
     /** Medir distancia con el enfoque: barrido automático cada pocos disparos (por defecto sí). */
     val focusDepth: Boolean = true,
     val focusSweeps: Int = 0,
-    // --- Nube (Tisma Server) ---
+    // --- Nube (Tisma Cloud) ---
     val cloudUrl: String = ScanViewModel.DEFAULT_CLOUD_URL,
     /** El token de la sesión de Tisma Cloud (vacío: sin sesión) y el correo de la cuenta. */
     val cloudKey: String = "",

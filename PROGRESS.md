@@ -120,6 +120,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   opens it, waits for the main screen, goes ⚙ → Nube → Entrar, fails on a crash in logcat, and keeps screenshots and
   logcat (artifact emulator-smoke). It also runs with a phone on adb.
 
+- First green run 42717167937 (7517c2c, after an x86_64 build was added with -PwithX86_64: the image does not
+  translate arm64). Its screenshots showed the tester instructions did not match the app: it opens in "Vídeo 360"
+  (red button, % cubierto, then → and "Crear modelo final en …" on the review screen), while they described the
+  "Fotos" mode (Lejos, dome, "Listo para enviar", ☁ Enviar). PROBAR.md/TESTING.md now follow Vídeo 360, GUIA/GUIDE
+  describe both; the review button said "Tisma Server", now "Tisma Cloud".
+
 ## Open for the beta
 
 - "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the
