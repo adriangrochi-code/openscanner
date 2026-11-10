@@ -27,6 +27,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import traceback
 import zipfile
 from pathlib import Path
@@ -229,11 +230,21 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     headless_colmap(reconstruct, gpu)
     out.mkdir(parents=True, exist_ok=True)
-    work = out.parent / "tisma_work"
     dense = dense_method(reconstruct)
     if dense is None:
         raise Failed("no_dense", "The dense cloud cannot be made on this computing server (COLMAP without CUDA)",
                      "Este servidor de cálculo no puede armar la nube densa: le falta OpenMVS o una placa NVIDIA")
+    # A new work folder for each job, removed at the end. A shared one (it was out.parent / "tisma_work") kept
+    # the photos, texture and pieza.stl of the job before: COLMAP could take the other scan's photos, and a job
+    # without a part could hand over the previous person's. It also filled the node's disk.
+    work = Path(tempfile.mkdtemp(prefix="tisma_work_", dir=out.parent))
+    try:
+        return rebuild(reconstruct, scan, out, work, dense, real_stdout)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def rebuild(reconstruct, scan: Path, out: Path, work: Path, dense: str, real_stdout) -> dict:
     argv = [str(scan), "--work", str(work), "--dense", dense]
     with open(out / "log.txt", "w", encoding="utf-8") as log:
         tee = Tee(log, real_stdout)

@@ -60,6 +60,43 @@ def test_a_rebuilt_part_gives_its_files_progress_and_summary():
         assert (d / "out" / "pieza.stl").exists() and "[hdr]" in (d / "out" / "log.txt").read_text(encoding="utf-8")
 
 
+def test_each_job_has_its_own_work_folder_removed_after():
+    """Two jobs side by side: the second never sees the first's files (a job without a part gives no_part, not the
+    previous person's pieza.stl), and no work folder is left on the node's disk."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "colmap").write_text("")
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"
+        seen = []
+
+        def first(argv):
+            work = Path(argv[argv.index("--work") + 1])
+            work.mkdir(parents=True, exist_ok=True)      # as reconstruct.main
+            seen.append(sorted(p.name for p in work.iterdir()))
+            (work / "images").mkdir(exist_ok=True)
+            (work / "images" / "foto_de_otro.jpg").write_text("x")
+            (work / "pieza.stl").write_text("solid otra\nendsolid otra\n")
+
+        def second_without_part(argv):
+            work = Path(argv[argv.index("--work") + 1])
+            work.mkdir(parents=True, exist_ok=True)      # as reconstruct.main
+            seen.append(sorted(p.name for p in work.iterdir()))
+
+        old = rc.COLMAP_EXE, rc.main
+        try:
+            rc.COLMAP_EXE, rc.main = str(d / "colmap"), first
+            assert ts.main([str(d / "a.zip"), "-o", str(d / "a"), "--summary", str(d / "a.json")]) == 0
+            rc.main = second_without_part
+            assert ts.main([str(d / "b.zip"), "-o", str(d / "b"), "--summary", str(d / "b.json")]) == 1
+        finally:
+            rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
+        assert seen == [[], []], seen
+        assert json.loads((d / "b.json").read_text(encoding="utf-8"))["code"] == "no_part"
+        assert not (d / "b" / "pieza.stl").exists()
+        assert not [p for p in d.iterdir() if p.name.startswith("tisma_work")], list(d.iterdir())
+
+
 def test_a_failed_pipeline_is_a_coded_error():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)

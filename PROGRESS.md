@@ -180,6 +180,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   floor (76 % volume error in the test). Now only borders reaching the lowest quarter of the part's height are
   candidates. Test: a flared open tube, volume within 1 % (fails on the old code). 20 pipeline tests pass.
   CI on 7c8a265 (42773889929, green; Windows green): closed, volume 24333 mm³ (+1.4 %), 40.74 x 30.69 x 20.13 mm, mat scale -0.2 %.
+- tisma_scan work folder (hourly bug pass, 08:15 UTC): it was out.parent / "tisma_work", shared by every job with
+  its output folder in the same place and never removed. reconstruct.py clears the COLMAP database and sparse
+  model but not images/, undistorted/ or pieza.stl, so a job could run COLMAP over the previous scan's photos,
+  zip its texture, or, with no part of its own, hand over the previous person's pieza.stl as a success. Now each
+  job has its own folder (tempfile.mkdtemp next to the output), removed at the end (also frees the node's disk).
+  Command line and summary unchanged. Test: two jobs side by side (fails on the old code). 21 pipeline tests pass.
 
 ## Open for the beta
 
