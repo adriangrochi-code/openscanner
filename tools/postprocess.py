@@ -43,7 +43,7 @@ def spacing_of(pcd):
     return float(np.median(d)) if len(d) else 1.0
 
 
-def support_plane(pcd, thr, up=None, max_planes=4):
+def support_plane(pcd, thr, up=None, max_planes=8, min_share=0.005):
     """
     Plano de apoyo (mesa/tapete). Se buscan varios planos y se elige con cuidado, porque una
     pieza plana tiene caras grandes que también son planos:
@@ -59,7 +59,9 @@ def support_plane(pcd, thr, up=None, max_planes=4):
         if len(rest.points) < 200:
             break
         model, inl = rest.segment_plane(distance_threshold=thr, ransac_n=3, num_iterations=3000)
-        if len(inl) < 0.03 * len(P_all):
+        # Hasta planos chicos: con la pieza densa y cerca, la mesa puede tener el 1 % de los puntos (antes se paraba
+        # en el 3 % y la mesa nunca era candidata; con gravedad, la tapa de una caja pasaba por mesa).
+        if len(inl) < max(200, min_share * len(P_all)):
             break
         n = np.array(model[:3]); d = model[3]
         k = np.linalg.norm(n); n, d = n / k, d / k
@@ -77,6 +79,13 @@ def support_plane(pcd, thr, up=None, max_planes=4):
     if up is not None:
         up = np.asarray(up, float) / np.linalg.norm(up)
         horiz = [c for c in cands if abs(c[0] @ up) > 0.9]
+        # La mesa tiene la pieza ENCIMA: un plano con la mayoría de los demás puntos debajo (la tapa de la pieza)
+        # no es la mesa, aunque sea el más bajo de los encontrados.
+        def most_above(c):
+            h = P_all @ up
+            others = np.setdiff1d(np.arange(len(P_all)), c[2])
+            return np.mean(h[others] > np.median(h[c[2]]) + thr) > 0.5 if len(others) else False
+        horiz = [c for c in horiz if most_above(c)]
         if horiz:
             # Altura de cada plano a lo largo de la gravedad: el más bajo es la mesa.
             best = min(horiz, key=lambda c: np.median(P_all[c[2]] @ up))
@@ -251,6 +260,20 @@ def cap_holes(mesh, max_perimeter, flatten_lowest=False):
     return closed
 
 
+def measured_extent(cloud, flat_base: bool, q: float = 0.05):
+    """
+    Las medidas de la pieza (mm, ejes ya alineados): de los puntos MEDIDOS, entre los percentiles q y 100 - q (fuera
+    el ruido suelto), con la base en Z = 0 si apoya en la mesa. No de la malla: Poisson y el suavizado dejan vértices
+    unas décimas más allá de la superficie medida (en aristas vivas) y, sumados a los dos lados, una placa de 2 mm
+    medía 2,38 (+19 %).
+    """
+    P = np.asarray(cloud.points)
+    lo = np.percentile(P, q, axis=0); hi = np.percentile(P, 100 - q, axis=0)
+    if flat_base:
+        lo[2] = 0.0
+    return hi - lo
+
+
 def closed_volume(mesh):
     """(cerrada, volumen mm³): cerrada = sin aristas de borde y cada arista en 2 caras."""
     T = np.asarray(mesh.triangles); V = np.asarray(mesh.vertices)
@@ -327,6 +350,13 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     report["support_plane"] = plane is not None
     report["gravity_from_ins"] = up is not None
 
+    # Nada sobre la mesa: la pieza es más delgada que la franja que se quita con el plano (o la nube es muy rala).
+    # Antes seguía y terminaba en un error de NumPy («zero-size array»), sin decir qué pasó.
+    if plane is not None and not keep_plane and len(pcd.points) < 200:
+        raise SystemExit(f"No queda pieza sobre la mesa: con esta nube (un punto cada {sp:.2f} mm) se quita la franja "
+                         f"de {2 * thr:.1f} mm junto a la mesa, y la pieza parece más delgada que eso. Escanea más cerca "
+                         "o con más fotos para una nube más densa.")
+
     # 2. Limpieza de puntos sueltos
     pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
     pcd, _ = pcd.remove_radius_outlier(nb_points=6, radius=sp * 4)
@@ -334,7 +364,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
 
     # 3. La pieza: el grupo mayor
     labels = np.array(pcd.cluster_dbscan(eps=sp * 6, min_points=10))
-    if labels.max() >= 0:
+    if len(labels) and labels.max() >= 0:
         big = np.bincount(labels[labels >= 0]).argmax()
         pcd = pcd.select_by_index(np.where(labels == big)[0])
     log(f"pieza: {len(pcd.points)} puntos")
@@ -389,6 +419,10 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         log(f"base plana en Z = 0 y agujeros cerrados: {n_capped}")
     if smooth > 0:
         mesh = mesh.filter_smooth_taubin(number_of_iterations=smooth)
+    if closed_base:
+        # El suavizado mueve también la base plana: nada de la pieza queda por debajo de la mesa (Z = 0).
+        V = np.asarray(mesh.vertices).copy(); V[:, 2] = np.maximum(V[:, 2], 0.0)
+        mesh.vertices = o3d.utility.Vector3dVector(V)
     mesh.compute_vertex_normals(); mesh.compute_triangle_normals()
 
     # Alinear la pieza con sus ejes en el plano (rectángulo de área mínima de la huella), lado
@@ -408,7 +442,8 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     o3d.io.write_triangle_mesh(str(out.with_suffix(".stl")), mesh)
     o3d.io.write_triangle_mesh(str(out.with_suffix(".ply")), mesh)
     o3d.io.write_point_cloud(str(out.with_name(out.name + "_nube.ply")), measured)
-    dims = mesh.get_axis_aligned_bounding_box().get_extent()
+    dims = measured_extent(measured, flat_base=plane is not None)
+    mesh_dims = mesh.get_axis_aligned_bounding_box().get_extent()
     closed, vol = closed_volume(mesh)
     obb = mesh.get_oriented_bounding_box()
     fit_mean, fit_p95 = mesh_quality(mesh, measured)
@@ -416,6 +451,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         "triangles": len(mesh.triangles),
         "watertight": closed,
         "dimensions_mm_xyz": [round(float(v), 3) for v in dims],
+        "mesh_dimensions_mm_xyz": [round(float(v), 3) for v in mesh_dims],
         "oriented_box_mm": [round(float(v), 3) for v in sorted(obb.extent, reverse=True)],
         "area_mm2": round(float(mesh.get_surface_area()), 2),
         "volume_mm3": round(vol, 2) if vol else None,

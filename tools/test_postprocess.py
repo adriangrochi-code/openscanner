@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import postprocess as pp  # noqa: E402
 
 
-def box_on_table(w=0.040, d=0.030, h=0.020, step=0.0006, seed=0, gap=None):
+def box_on_table(w=0.040, d=0.030, h=0.020, step=0.0006, seed=0, gap=None, table_step=0.0012):
     """Puntos de las caras visibles de una caja de w × d × h m (sin la de abajo) y de la mesa alrededor. Con
     gap(t), a lo largo de cada pared (t de 0 a 1) falta la parte de abajo hasta esa altura (m), como cerca del
     tapete en la prueba completa de CI."""
@@ -24,7 +24,7 @@ def box_on_table(w=0.040, d=0.030, h=0.020, step=0.0006, seed=0, gap=None):
         walls = np.vstack(pts[1:])
         t = np.where(np.isin(walls[:, 1], (0, d)), walls[:, 0] / w, walls[:, 1] / d)
         pts = [pts[0], walls[walls[:, 2] >= gap(t)]]
-    t = np.arange(-0.03, 0.07, 0.0012); X, Y = np.meshgrid(t, t)
+    t = np.arange(-0.03, 0.07, table_step); X, Y = np.meshgrid(t, t)
     out = ~((X > -0.001) & (X < w + 0.001) & (Y > -0.001) & (Y < d + 0.001))
     pts.append(np.c_[X[out], Y[out], np.zeros(out.sum())])
     P = np.vstack(pts)
@@ -60,6 +60,54 @@ def test_walls_missing_near_the_mat_go_down_to_the_floor():
         V = np.asarray(o3d.io.read_triangle_mesh(str(Path(d) / "pieza.ply")).vertices)
         low = V[V[:, 2] < 0.5]
         assert np.ptp(low[:, 0]) > 38 and np.ptp(low[:, 1]) > 28, (np.ptp(low[:, 0]), np.ptp(low[:, 1]))
+
+
+def test_a_thin_plate_measures_its_thickness():
+    """A 3 mm plate: its thickness came out ~0.35 mm too thick (+19 % on a 2 mm plate at real density), from mesh
+    vertices that Poisson and the smoothing push past the measured surface and below the table. The measures come
+    from the measured points (robust extremes), with the base at Z = 0; nothing of the mesh is below the table."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        P = box_on_table(0.030, 0.020, 0.003, step=0.00015, seed=1)
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)))
+        r = pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=20000)
+        dims = sorted(r["dimensions_mm_xyz"], reverse=True)
+        assert abs(dims[2] / 3 - 1) < 0.04, dims                      # 3 mm within 0.12 mm
+        assert abs(dims[0] / 30 - 1) < 0.03 and abs(dims[1] / 20 - 1) < 0.03, dims
+        V = np.asarray(o3d.io.read_triangle_mesh(str(Path(d) / "pieza.ply")).vertices)
+        assert V[:, 2].min() >= 0, V[:, 2].min()
+
+
+def test_a_sparse_table_under_a_dense_part_is_still_the_table():
+    """The table with under 3 % of the points (a dense, textured part close up; the mat thin at the edges): the plane
+    search stopped before reaching it, and with gravity the lowest horizontal plane found was the box's TOP, so the
+    whole part was removed as table. The table is looked for down to smaller planes, and a plane with most of the
+    other points below it is never the table."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        P = box_on_table(step=0.0003, table_step=0.004)          # table ~1 % of the points
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)))
+        r = pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=20000)
+        dims = sorted(r["dimensions_mm_xyz"], reverse=True)
+        assert all(abs(g / w - 1) < 0.05 for g, w in zip(dims, (40, 30, 20))), dims
+        assert r["watertight"] and abs(r["volume_mm3"] / 24000 - 1) < 0.05, r
+
+
+def test_a_part_thinner_than_the_table_strip_says_so():
+    """With a coarse cloud, a part thinner than the strip removed with the table (6 point spacings) left nothing, and
+    the run ended in a NumPy error («zero-size array…»). Now it stops with a message that says what happened."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        P = box_on_table(0.040, 0.030, 0.002, step=0.0004)       # 2 mm plate, 0.4 mm between points
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)))
+        try:
+            pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=8000)
+            assert False, "no part, no error"
+        except SystemExit as e:
+            assert "mesa" in str(e) and "mm" in str(e), e
 
 
 def flared_tube(bottom=20.0, top=24.0, z0=1.0, z1=20.0, k=4):
@@ -110,4 +158,5 @@ if __name__ == "__main__":
     test_walls_missing_near_the_mat_go_down_to_the_floor()
     test_simple_loops_split_a_pinched_border()
     test_a_wide_open_top_is_not_taken_as_the_base()
+    test_a_thin_plate_measures_its_thickness()
     print("ok")

@@ -206,6 +206,27 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Deep bug hunt (owner, 2026-11-10 20:00 → 11-12 03:10): hard shapes in postprocess
+
+Synthetic clouds of known parts on a table at real density (0.05-0.1 mm between points, as OpenMVS on CI):
+
+| Part | Before | After |
+|---|---|---|
+| 2 mm plate | thickness 2.38 (+19 %) | 2.02 (+1.2 %) |
+| 1 mm plate | 1.32 (+32 %), not closed | 0.99 (-1 %), **still not closed** |
+| 6x5x4 mm | height +1.6 % | +1.3 %; footprint +2.5/+3.2 % |
+| 40x30x20 box, table with ~1 % of the points | whole part removed as «table» → error | 40.15 x 30.15 x 20.08, closed, volume -0.1 % |
+| thin part, coarse cloud | NumPy «zero-size array» | clear message (strip removed with the table) |
+
+Fixes (tools/postprocess.py), each with a test that fails without it:
+- Measures from the measured points (0.05-99.95 percentile, base at Z = 0), not from the mesh's extreme vertices,
+  which Poisson and the smoothing leave a few tenths past the surface (mesh box kept as mesh_dimensions_mm_xyz).
+  And nothing of the mesh below the table after smoothing. test_a_thin_plate_measures_its_thickness.
+- The support plane: searched down to small planes (0.5 % / 200 points, up to 8), and a plane with most other
+  points below it is never the table (it was the box's top with a sparse table).
+  test_a_sparse_table_under_a_dense_part_is_still_the_table.
+- Nothing left above the table: a clear SystemExit instead of a NumPy error. test_a_part_thinner_than_….
+
 ## «Publicar»: the author is the account (owner's rule, 2026-11-10 18:45; spec 967f7a3, p2p_library 7 bis)
 
 - A scanned piece belongs to the person who scanned it. The dialog no longer has a free «Autor» field (it was
