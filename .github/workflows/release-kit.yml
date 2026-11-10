@@ -1,9 +1,13 @@
 name: Release del kit de testers
 
-# Publishes the testers' kit (APK + instructions + the mat as PDF) as a GitHub release, run by hand from scanner/next:
-# it builds the APK, runs the unit tests, makes the kit and publishes it with the notes in docs/releases/<version>.md.
+# Publishes the testers' kit (APK + instructions + the mat as PDF) as a GitHub pre-release when the notes of a new
+# version, docs/releases/<version>.md, reach scanner/next (or by hand, once this file is on the default branch):
+# it builds the APK, runs the unit tests, makes the kit and publishes it with those notes.
 
 on:
+  push:
+    branches: [scanner/next]
+    paths: ["docs/releases/*.md"]
   workflow_dispatch:
     inputs:
       version:
@@ -19,9 +23,19 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      - name: Notas de la versión
-        run: test -s "docs/releases/${{ inputs.version }}.md" || { echo "falta docs/releases/${{ inputs.version }}.md"; exit 1; }
+      # The version: the one given by hand, or the notes file this push added or changed.
+      - name: Versión y notas
+        id: v
+        run: |
+          v="${{ inputs.version }}"
+          if [ -z "$v" ]; then
+            v=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'docs/releases/*.md' | tail -n 1 | xargs -r basename | sed 's/\.md$//')
+          fi
+          test -n "$v" && test -s "docs/releases/$v.md" || { echo "no release notes for '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v4
         with:
@@ -41,14 +55,14 @@ jobs:
           ./gradlew --no-daemon :app:assembleDebug :app:testDebugUnitTest
 
       - name: Kit para testers
-        run: python tools/make_tester_kit.py app/build/outputs/apk/debug/app-debug.apk --version "${{ inputs.version }}" --out kit
+        run: python tools/make_tester_kit.py app/build/outputs/apk/debug/app-debug.apk --version "${{ steps.v.outputs.version }}" --out kit
 
       - name: Publicar la release
         uses: softprops/action-gh-release@v2.2.2
         with:
-          tag_name: scanner-v${{ inputs.version }}
+          tag_name: scanner-v${{ steps.v.outputs.version }}
           target_commitish: ${{ github.sha }}
-          name: Tisma Scanner ${{ inputs.version }}
-          body_path: docs/releases/${{ inputs.version }}.md
+          name: Tisma Scanner ${{ steps.v.outputs.version }}
+          body_path: docs/releases/${{ steps.v.outputs.version }}.md
           prerelease: true
           files: kit/*.zip
