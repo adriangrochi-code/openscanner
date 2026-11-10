@@ -25,6 +25,11 @@ class LibraryPublishTest {
             """{"path":"pieza_informe.json","role":"analysis","sha256":"bb","size":75}]}""", LibraryPublish.canonical(files))
     }
 
+    @Test fun stringsAreEscapedAsPythonsJsonDumpsWithoutAsciiEscapes() {
+        // json.dumps(v, ensure_ascii=False): «/» y ñ tal cual; comillas, barra invertida y control escapados.
+        assertEquals("\"sub/año \\\"x\\\" \\\\ \\n\\t\\u0001ü\"", LibraryPublish.jsonString("sub/año \"x\" \\ \n\t\u0001ü"))
+    }
+
     @Test fun theBodyIsSignedWithThePeerKeyAndKeepsTheLimits() {
         val key = LibraryPublish.PeerKey.create()
         val body = LibraryPublish.body(item, key, "Engranaje", "Ana", "CC-BY-4.0", "", ByteArray(10))

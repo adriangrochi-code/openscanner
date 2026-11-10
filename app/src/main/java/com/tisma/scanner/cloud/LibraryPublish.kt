@@ -65,15 +65,35 @@ object LibraryPublish {
         return out
     }
 
+    /**
+     * Una cadena JSON como la escribe Python con json.dumps(ensure_ascii=False): sólo se escapan comillas, barra
+     * invertida y caracteres de control; «/» y lo que no es ASCII (ñ…) van tal cual. org.json escapa «/», y la firma
+     * no coincidiría con la del servidor.
+     */
+    fun jsonString(v: String): String = buildString {
+        append('"')
+        for (c in v) when (c) {
+            '"' -> append("\\\"")
+            '\\' -> append("\\\\")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            '\b' -> append("\\b")
+            '\u000C' -> append("\\f")
+            else -> if (c < ' ') append("\\u%04x".format(c.code)) else append(c)
+        }
+        append('"')
+    }
+
     /** El manifiesto canónico que se firma: {"files":[{path,role,sha256,size}…]}, claves ordenadas, sin espacios. */
     fun canonical(files: JSONArray): String = buildString {
         append("{\"files\":[")
         val list = (0 until files.length()).map { files.getJSONObject(it) }.sortedBy { it.getString("path") }
         list.forEachIndexed { i, f ->
             if (i > 0) append(',')
-            append("{\"path\":").append(JSONObject.quote(f.getString("path")))
-            append(",\"role\":").append(JSONObject.quote(f.getString("role")))
-            append(",\"sha256\":").append(JSONObject.quote(f.getString("sha256")))
+            append("{\"path\":").append(jsonString(f.getString("path")))
+            append(",\"role\":").append(jsonString(f.getString("role")))
+            append(",\"sha256\":").append(jsonString(f.getString("sha256")))
             append(",\"size\":").append(f.getLong("size"))
             append('}')
         }
