@@ -211,8 +211,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - Sign-in with a wrong password said «La sesión venció o se cerró: entra de nuevo» (every 401 got that text).
   CloudClient.login now says «Correo o contraseña incorrectos». CloudClientServerTest checks the text (fails on
   the old code). 123 app tests pass.
-- Asked the server session whether its `detail` texts are Spanish: the app shows them as they come for codes it
-  does not map itself, and the fake server's are English.
+- Tisma Cloud's `detail` texts are English for every client (server session, 16:22): the app now translates the
+  ones a person can meet (account, sending, «Imprimir», «Publicar»; list from the server session, put in tú) by
+  status code + start of the text, keeping numbers (CloudClient.HttpError.spanish). A disabled account at sign-in
+  says so; any other 422 on publish shows «No se pudo publicar» and logs the detail. ServerTextsTest. 127 app tests.
 
 ## Bug pass 15:20 UTC (2026-11-10): pipeline tests on CI
 

@@ -619,9 +619,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             r.onSuccess { m -> prefs.edit().putString("library_model_$job", m.optString("id")).apply(); log("Publicada: ${m.optString("id")}") }
             _state.update { it.copy(libraryBusy = false, libraryPublished = r.isSuccess || it.libraryPublished,
                 libraryKept = r.isSuccess || it.libraryKept,
-                libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e ->
-                    val code = (e as? com.tisma.scanner.cloud.CloudClient.HttpError)?.code
-                    "✗ " + if (code == 429) "Llegaste al límite de publicaciones de hoy (20): prueba mañana" else (e.message ?: "no se pudo publicar") })) }
+                libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e -> "✗ " + (e.message ?: "No se pudo publicar") })) }
+            r.onFailure { e ->
+                (e as? com.tisma.scanner.cloud.CloudClient.HttpError)?.body?.optString("detail")?.takeIf { it.isNotBlank() }
+                    ?.let { log("Publicar: HTTP ${e.code} ${it}") }
+            }
         }
     }
 

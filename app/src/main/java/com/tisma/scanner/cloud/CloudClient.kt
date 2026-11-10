@@ -30,8 +30,60 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     /** Un error del servidor, con su texto (`detail`) para mostrar. */
     class HttpError(val code: Int, val body: JSONObject?, text: String = describe(code, body)) : IOException(text) {
         companion object {
+            /**
+             * Los textos de Tisma Cloud (`detail`) están en inglés para todos sus clientes: aquí, en español, por código y
+             * comienzo del texto (algunos llevan números: «larger than 12 GB» → «pasa de 12 GB»). Lista de la sesión del
+             * servidor, 2026-11-10. N en el texto en español es el primer número del original.
+             */
+            private val SPANISH = listOf(
+                // Cuenta
+                Triple(setOf(401), "Wrong e-mail or password", "Correo o contraseña incorrectos"),
+                Triple(setOf(401), "The account is disabled", "La cuenta está deshabilitada"),
+                Triple(setOf(403), "E-mail not verified", "Confirma tu correo con el código que te mandamos"),
+                Triple(setOf(429), "Too many login attempts", "Demasiados intentos: espera un minuto"),
+                Triple(setOf(429), "Too many attempts", "Demasiados intentos: espera un minuto"),
+                Triple(setOf(429), "Too many wrong passwords",
+                    "Demasiadas contraseñas equivocadas: espera una hora o elige una nueva con un código por correo"),
+                Triple(setOf(409), "An account with this e-mail exists", "Ya hay una cuenta con ese correo: entra con su contraseña"),
+                Triple(setOf(400), "Wrong or expired code", "Código incorrecto o vencido"),
+                Triple(setOf(429), "Wait a minute before asking another code", "Espera un minuto antes de pedir otro código"),
+                Triple(setOf(503), "The e-mail could not be sent", "No se pudo mandar el correo: prueba en unos minutos"),
+                // Envío de un escaneo
+                Triple(setOf(413), "The scan is larger than", "El escaneo pasa de N GB"),
+                Triple(setOf(429), "Three scans are being sent already", "Ya se están mandando tres escaneos: termina o borra uno"),
+                Triple(setOf(422), "The scan is not a zip file", "El archivo no es un escaneo de Tisma Scanner"),
+                Triple(setOf(422), "session.json is missing", "El archivo no es un escaneo de Tisma Scanner"),
+                Triple(setOf(422), "The scan has no photos", "El archivo no es un escaneo de Tisma Scanner"),
+                Triple(setOf(422), "The scan carries the absolute position of the phone",
+                    "Actualiza Tisma Scanner: este escaneo trae la ubicación del teléfono"),
+                // «Imprimir»
+                Triple(setOf(409), "The scan is not done", "El escaneo todavía no terminó"),
+                Triple(setOf(410), "The result of the scan was removed", "El resultado ya no está (se guarda 72 h)"),
+                Triple(setOf(413), "The files of the account are over", "Tus archivos en Tisma Cloud pasan de N GB: borra alguno"),
+                // «Publicar»
+                Triple(setOf(429), "Too many publications today", "Ya publicaste 20 modelos hoy"),
+                Triple(setOf(403), "This account cannot publish in the library", "Esta cuenta no puede publicar en la biblioteca"),
+                Triple(setOf(403), "Blocked in the library", "Esta cuenta no puede publicar en la biblioteca"),
+                Triple(setOf(422), "Removed from the library", "Este archivo fue retirado de la biblioteca de Tisma"),
+                Triple(setOf(409), "The model is being changed at the same time", "Se está cambiando al mismo tiempo: prueba de nuevo"),
+            )
+
+            /** El texto en español de un `detail` conocido, o null. */
+            fun spanish(code: Int, detail: String?): String? {
+                if (detail == null) return null
+                SPANISH.firstOrNull { (codes, start, _) -> code in codes && detail.startsWith(start) }?.let { (_, _, es) ->
+                    val n = Regex("\\d+(?:[.,]\\d+)?").find(detail)?.value
+                    return if ("N" in es.split(' ') && n != null) es.split(' ').joinToString(" ") { if (it == "N") n else it } else es
+                }
+                // Los de «Publicar» que nombran un campo: «name has control or direction characters», «… is at most N».
+                if (code == 422 && "has control or direction characters" in detail) return "El nombre tiene caracteres no permitidos"
+                if (code == 422 && "is at most" in detail && "characters" in detail) return "El texto es demasiado largo"
+                return null
+            }
+
             fun describe(code: Int, body: JSONObject?): String {
                 val detail = body?.optString("detail")?.takeIf { it.isNotBlank() }
+                spanish(code, detail)?.let { return it }
                 return when {
                     code == 401 -> "La sesión venció o se cerró: entra de nuevo"
                     code == SERVER_FULL -> "Tisma Cloud no tiene lugar ahora: el envío se reintenta solo más tarde"
@@ -60,7 +112,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
             val body = JSONObject().put("email", email.trim()).put("password", password).put("device", device)
             val (code, j) = call(normalize(baseUrl), "POST", "/v1/auth/login", null, body.toString().toByteArray())
             // Al entrar, 401 es correo o contraseña mal, no «la sesión venció» (que es lo que significa en lo demás).
-            if (code == 401) throw HttpError(code, j, "Correo o contraseña incorrectos")
+            if (code == 401) throw HttpError(code, j, HttpError.spanish(code, j?.optString("detail")) ?: "Correo o contraseña incorrectos")
             if (code != 200 || j == null) throw HttpError(code, j)
             return j.getString("token") to j.optString("email", email.trim())
         }
@@ -215,6 +267,9 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     /** «Publicar»: `POST /v1/library/models` con el cuerpo de LibraryPublish.body. Devuelve la entrada (`id` lm_…). */
     fun publishModel(body: JSONObject): JSONObject {
         val (code, j) = request("POST", "/v1/library/models", body.toString().toByteArray(), timeoutMs = 120_000)
+        // Otro 422 al publicar es un fallo de la app (firma, tamaños, roles): «No se pudo publicar»; el detalle queda
+        // en HttpError.body para el registro.
+        if (code == 422 && HttpError.spanish(code, j?.optString("detail")) == null) throw HttpError(code, j, "No se pudo publicar")
         if (code != 201 || j == null) throw HttpError(code, j)
         return j
     }
