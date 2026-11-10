@@ -150,12 +150,20 @@ def test_mapper_prefers_glomap_and_falls_back_to_colmap():
 
 
 
-def mat_views(tmp, paper="a4", print_scale=1.0, units_per_m=7.3, n=10):
+def mat_views(tmp, paper="a4", print_scale=1.0, units_per_m=7.3, n=10, occlude=False):
     """Photos of make_scan_mat.py's mat for `paper`, printed at print_scale (1 = 100 %), from n views with known
-    poses, and the model of those views in units of 1/units_per_m m (the SfM's arbitrary scale)."""
+    poses, and the model of those views in units of 1/units_per_m m (the SfM's arbitrary scale). occlude: the part
+    over the middle, a hand over a corner and every third marker half covered (flat, on the mat)."""
     import cv2
     import make_scan_mat
     canvas, meta = make_scan_mat.make_mat(paper, dpi=300)
+    if occlude:
+        h, w = canvas.shape[:2]; px = meta["dpi"] / 25.4
+        cv2.ellipse(canvas, (w // 2, h // 2), (int(w * 0.3), int(h * 0.25)), 0, 0, 360, 40, -1)
+        cv2.rectangle(canvas, (0, 0), (int(w * 0.45), int(h * 0.35)), 90, -1)
+        for corners in list(meta["markers_mm"].values())[::3]:
+            (x0, y0), (x1, y1) = corners[0], corners[2]
+            cv2.rectangle(canvas, (int(x0 * px), int(y0 * px)), (int((x0 + x1) / 2 * px), int(y1 * px)), 60, -1)
     pw, ph = make_scan_mat.PAPERS_MM[paper]
     m_per_px = 25.4 / meta["dpi"] / 1000 * print_scale
     # Closer to a phone photo (COLMAP works at 3200 px wide) than a small test image.
@@ -197,6 +205,17 @@ def test_standard_mat_scale_without_mat_json_on_every_paper():
             # scale agrees: it is checked against the median of the others, not against each one.
             got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.30, 1 / 7.3 * 0.98, 1 / 7.3 * 1.03])
             assert got and abs(got[0] * 7.3 - 1) < 0.01, got
+
+
+def test_a_mat_partly_hidden_still_gives_the_scale():
+    """As when scanning: the part covers the middle of the mat, a hand or a cable a corner, and some markers are half
+    covered (a half marker must not be read with a wrong corner). Measured: within 0.05 % (2026-11-10)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        cams, imgs = mat_views(Path(d), "a4", occlude=True)
+        s, rel = rc.scale_from_aruco(Path(d), cams, imgs, rc.STANDARD_MAT)
+        assert abs(s * 7.3 - 1) < 0.002, s * 7.3
+        assert rel < rc.STANDARD_MAT_MAX_SPREAD, rel
 
 
 def test_a_mat_not_printed_at_100_percent_is_not_trusted():

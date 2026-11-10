@@ -228,7 +228,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | Texts (plurals, tú) | revisado | 11:45, GuideLabelsTest + TextsTest. |
 | **Mat** | | |
 | Printable mat (sheets, margins, check bar) | revisado | 13:20 bar inside printer margins; every sheet tested. Already published mats must be made again. |
-| Mat detection and scale | parcial | 10:15 median of other scales; synthetic views per sheet within 0.2 %. Pending: mat partly hidden by the part, curled paper, shiny/low light. |
+| Mat detection and scale | parcial | 10:15 median of other scales; synthetic views per sheet within 0.2 %. 21:05 partly hidden (middle, a corner, half-covered markers): within 0.05 %, test added; curled paper: by design (each marker's own 15 mm edges in 3D, median of many), not tested. Pending: glare/low light (needs real photos). |
 | **Pipeline / nodes** | | |
 | Scan zip intake | revisado | 09:15 session.json folder, __MACOSX, zip bomb. |
 | Photo selection (blurry drop) | revisado | 10:15 fine. |
