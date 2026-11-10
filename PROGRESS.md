@@ -206,6 +206,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 15:20 UTC (2026-11-10): pipeline tests on CI
+
+- Windows CI went red on e89bc97: the new kit test was in test_tisma_scan.py, which the Windows job runs without
+  Pillow. Moved to tools/test_tester_kit.py (skips without Pillow/OpenCV).
+- Found while fixing it: no workflow ran test_postprocess.py (all of today's mesh fixes) or the kit test, and only
+  the Windows job ran test_reconstruct.py and test_tisma_scan.py. scan-e2e.yml now runs `pytest tools/` before
+  the full scan (pillow and pytest added there).
+
 ## Bug pass 14:20 UTC (2026-11-10): licence notices
 
 - Missing: the app had no licence notice at all. AGPL-3.0 section 5(d) asks an interactive interface to show

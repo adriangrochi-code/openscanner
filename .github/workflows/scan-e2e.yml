@@ -61,7 +61,12 @@ jobs:
           python-version: "3.11"
 
       - name: Módulos del pipeline
-        run: pip install numpy opencv-contrib-python-headless open3d
+        run: pip install numpy opencv-contrib-python-headless open3d pillow pytest
+
+      # Every pipeline test (malla, escala, tapete, tisma_scan, kit): before this step only the Windows job ran two of
+      # these files, and test_postprocess.py and test_tester_kit.py ran nowhere.
+      - name: Pruebas del pipeline
+        run: python -m pytest -q tools/
 
       - name: tisma_scan --check
         env:
