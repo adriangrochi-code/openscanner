@@ -37,6 +37,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.File
@@ -353,6 +356,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             cloudKey = prefs.getString("cloud_token", "") ?: "",
             cloudEmail = prefs.getString("cloud_email", "") ?: "") }
         runCatching { watchCloudSend() }
+        // Los ajustes de captura de la última vez (antes volvían a los de fábrica en cada apertura), y se guardan
+        // cada vez que cambian. Antes de abrir las cámaras: el modo y la calidad JPEG se aplican más abajo.
+        _state.update { SavedSettings.load(prefs, it) }
+        cameras.jpegQuality = _state.value.jpegQuality
+        viewModelScope.launch {
+            _state.map { SavedSettings.of(it) }.distinctUntilChanged().drop(1).collect { SavedSettings.save(prefs, _state.value) }
+        }
         _state.update {
             it.copy(
                 cameras = inventory.values.map { c -> c.label },

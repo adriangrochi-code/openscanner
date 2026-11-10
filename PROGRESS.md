@@ -223,7 +223,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | «Imprimir» / «Publicar» | revisado | 04:20 limits in characters; 11:45 thumbnail drew hidden faces; 19:05 author = account's library_name, licence picker. |
 | Account (login, logout, expired session, server texts) | revisado | 16:15 wrong password text; 16:22 all server texts in Spanish. |
 | Offline / back online | parcial | 20:30 network errors in Spanish. Pending: send queued offline then online (end to end). |
-| Settings (⚙ Captura, Cámaras, calibration, INS, sensors) | pendiente | |
+| Settings (⚙ Captura, Cámaras, calibration, INS, sensors) | parcial | 22:20 capture settings were memory-only: every reopen reset mode (Vídeo 360/Fotos), HDR, auto shots, deblur, AI, JPEG quality… to the defaults. Now saved/restored (SavedSettings; torch not kept on purpose). SavedSettingsTest; the restore in init is a phone check (change, close, reopen). Pending: Cámaras tab, calibration flows. |
 | About / licences | revisado | 14:20 AGPL notices in the app, licences in the APK. Owner: © name, repo public? |
 | Texts (plurals, tú) | revisado | 11:45, GuideLabelsTest + TextsTest. |
 | **Mat** | | |
@@ -232,7 +232,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | **Pipeline / nodes** | | |
 | Scan zip intake | revisado | 09:15 session.json folder, __MACOSX, zip bomb. |
 | Photo selection (blurry drop) | revisado | 10:15 fine. |
-| Scale (mat > focus > INS) | revisado | 10:15 mat vs median. 21:15 INS: frames outside the trajectory's time span were all put at its first/last point (np.interp clamps): -27 % scale with 40 % of frames outside; now skipped, test. Focus scale read: per-point ratio, median, MAD rejection: fine. |
+| Scale (mat > focus > INS) | revisado | 10:15 mat vs median. 21:15 INS: frames outside the trajectory's time span were all put at its first/last point (np.interp clamps): -27 % scale with 40 % of frames outside; now skipped, test (real: photos saved while «stopping» come after the trajectory ends). Focus scale read: per-point ratio, median, MAD rejection: fine. |
 | COLMAP SfM / OpenMVS dense | parcial | CI full CPU path green. Pending: failure modes (few photos, symmetric/featureless part), textura.zip. |
 | Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. |
 | Meshing and closing | revisado | 03:20-07:15 base skirt, pinches, open top; 20:00 nothing below the table. |
