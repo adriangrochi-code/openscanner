@@ -232,7 +232,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | **Pipeline / nodes** | | |
 | Scan zip intake | revisado | 09:15 session.json folder, __MACOSX, zip bomb. |
 | Photo selection (blurry drop) | revisado | 10:15 fine. |
-| Scale (mat > focus > INS) | parcial | 10:15 mat vs median. Pending: focus and INS scale on their own. |
+| Scale (mat > focus > INS) | revisado | 10:15 mat vs median. 21:15 INS: frames outside the trajectory's time span were all put at its first/last point (np.interp clamps): -27 % scale with 40 % of frames outside; now skipped, test. Focus scale read: per-point ratio, median, MAD rejection: fine. |
 | COLMAP SfM / OpenMVS dense | parcial | CI full CPU path green. Pending: failure modes (few photos, symmetric/featureless part), textura.zip. |
 | Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. |
 | Meshing and closing | revisado | 03:20-07:15 base skirt, pinches, open top; 20:00 nothing below the table. |

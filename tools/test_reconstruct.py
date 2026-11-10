@@ -297,6 +297,27 @@ def test_load_session_finds_the_scan_folder_and_refuses_a_zip_bomb():
         assert not (d / "w_bomba" / "raw").exists()
 
 
+def test_ins_scale_uses_only_frames_inside_the_trajectory():
+    """Frames before or after the INS trajectory were placed at its first or last point (np.interp clamps), and the
+    scale came out too small. Only frames inside the trajectory's time span are used."""
+    import tempfile
+    true = 0.137                                   # metres per SfM unit
+    n = 40
+    imgs, records, rows = {}, [], []
+    for k in range(n):
+        a = 2 * np.pi * k / n
+        c_m = np.array([0.3 * np.cos(a), 0.3 * np.sin(a), 0.2])          # camera centre in metres (orbit)
+        R = np.eye(3)
+        imgs[f"0/{k}.jpg"] = dict(R=R, t=-(c_m / true), cam=1)           # SfM centre = c_m / true
+        records.append((f"0/{k}.jpg", {"t_ns": str(k * 10**9), "px": "1", "py": "0", "pz": "0"}))
+        if k < 0.6 * n:                                                   # the trajectory ends early
+            rows.append(f"{k * 10**9},{c_m[0]},{c_m[1]},{c_m[2]},0,0,0,0")
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "ins_trajectory.csv").write_text("t_ns,px,py,pz,vx,vy,vz,stationary\n" + "\n".join(rows) + "\n")
+        s = rc.scale_from_ins(imgs, records, Path(d))
+    assert s is not None and abs(s / true - 1) < 0.01, (s, true)
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

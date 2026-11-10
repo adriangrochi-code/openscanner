@@ -874,12 +874,16 @@ def scale_from_ins(imgs, records, scan=None):
     for name, im in imgs.items():
         fr = ref.get(name)
         if fr and fr.get("px"):
-            src.append(-im["R"].T @ im["t"])  # centro de cámara SfM
             if tt is not None:
                 t = int(fr["t_ns"]) * 1e-9
+                # Fuera del tramo de la trayectoria np.interp devuelve su primer o último punto: esas fotos quedaban
+                # todas en un mismo lugar y la escala salía chica (-27 % con el 40 % de las fotos fuera). Se saltan.
+                if t < tt[0] - 0.2 or t > tt[-1] + 0.2:
+                    continue
                 dst.append([np.interp(t, tt, Ps[:, k]) for k in range(3)])
             else:
                 dst.append([float(fr["px"]), float(fr["py"]), float(fr["pz"])])
+            src.append(-im["R"].T @ im["t"])  # centro de cámara SfM
     if len(src) < 5:
         return None
     src, dst = np.array(src), np.array(dst)
