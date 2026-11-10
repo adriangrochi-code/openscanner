@@ -17,6 +17,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -561,6 +562,7 @@ private fun TextSetting(label: String, value: String, placeholder: String, secre
 
 @Composable
 private fun LogTab(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
+    AboutSection()
     Section("Diagnóstico")
     Hint("Registro siempre activo: cada segundo guarda los fotogramas que llegan a la pantalla y los que " +
         "entrega la cámara, fallos, bloqueos de la interfaz y memoria, más cada evento (escanear, fotos, " +
@@ -618,6 +620,31 @@ private fun LogTab(s: UiState, vm: ScanActions, onShare: (File) -> Unit) {
     Mono(s.gpsText)
     Section("Registro")
     s.log.forEach { Mono(it) }
+}
+
+/** Acerca de: versión, licencia (AGPL-3.0), sin garantía, código fuente y licencias de terceros. */
+@Composable
+private fun AboutSection() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "" }
+    var showing by remember { mutableStateOf<String?>(null) }
+    Section("Acerca de")
+    Text(com.tisma.scanner.About.notice(version), color = Tisma.TextDim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 2.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        SecondaryButton("Licencia (AGPL-3.0)", Modifier.weight(1f)) { showing = com.tisma.scanner.About.LICENSE_FILE }
+        SecondaryButton("Licencias de terceros", Modifier.weight(1f)) { showing = com.tisma.scanner.About.THIRD_PARTY_FILE }
+    }
+    showing?.let { file ->
+        val text = remember(file) { com.tisma.scanner.About.read(ctx, file) }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showing = null },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { showing = null }) { Text("Cerrar") } },
+            text = {
+                Text(text, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
+                    modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()))
+            },
+        )
+    }
 }
 
 // ------------------------------------------------------------------ componentes

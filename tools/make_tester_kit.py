@@ -9,9 +9,11 @@ Writes dist/TismaScanner-kit-<version>.zip:
     TismaScanner-<version>.apk
     LEEME - PROBAR.md, README - TESTING.md
     tapetes/tapete_<paper>.pdf   (A6 ... Tabloid; print at actual size)
-    LICENSE
+    LICENSE, THIRD_PARTY.md, SOURCE.txt   (AGPL-3.0: where the source of this exact build is; the notices of
+                                           the libraries inside the APK, e.g. Bouncy Castle and ONNX Runtime, MIT)
 """
 import argparse
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -19,6 +21,26 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+
+
+SOURCE_URL = "https://github.com/adriangrochi-code/openscanner"  # the same as About.SOURCE_URL in the app
+
+
+def commit() -> str:
+    """The commit this kit is built from (GITHUB_SHA on CI, else git), for SOURCE.txt."""
+    import os
+    sha = os.environ.get("GITHUB_SHA") or subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                                                         text=True).stdout.strip()
+    return sha or "unknown"
+
+
+def source_text(version: str, sha: str) -> str:
+    return (f"Tisma Scanner {version}\n"
+            f"Software libre bajo la GNU Affero General Public License 3.0, AGPL-3.0 (LICENSE), sin ninguna garantía.\n"
+            f"Free software under the GNU Affero General Public License 3.0, AGPL-3.0 (LICENSE), without any warranty.\n\n"
+            f"Código fuente de esta versión / source code of this build:\n"
+            f"  {SOURCE_URL}\n  commit {sha}\n  {SOURCE_URL}/archive/{sha}.zip\n\n"
+            f"Licencias de las bibliotecas que lleva la app / licences of the libraries in the app: THIRD_PARTY.md\n")
 
 
 def make_kit(apk: Path, version: str, out: Path) -> Path:
@@ -32,6 +54,8 @@ def make_kit(apk: Path, version: str, out: Path) -> Path:
         z.write(ROOT / "docs" / "PROBAR.md", "LEEME - PROBAR.md")
         z.write(ROOT / "docs" / "TESTING.md", "README - TESTING.md")
         z.write(ROOT / "LICENSE", "LICENSE")
+        z.write(ROOT / "THIRD_PARTY.md", "THIRD_PARTY.md")
+        z.writestr("SOURCE.txt", source_text(version, commit()))
         for paper in make_scan_mat.PAPERS_MM:
             canvas, meta = make_scan_mat.make_mat(paper)
             base = Path(tmp) / f"tapete_{paper}"

@@ -37,6 +37,9 @@ android {
     buildFeatures {
         compose = true
     }
+    // La licencia (AGPL-3.0) y las de terceros van dentro del APK, copiadas de la raíz del repo al compilar
+    // (assets/legal/), para mostrarlas en ⚙ → Registro → Acerca de: así nunca quedan distintas de las del repo.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/legal"))
     testOptions {
         unitTests {
             // Robolectric necesita los recursos para renderizar Compose en los tests de pantalla.
@@ -76,3 +79,9 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
+
+val copyLegal by tasks.registering(Copy::class) {
+    from(rootProject.file("LICENSE"), rootProject.file("THIRD_PARTY.md"))
+    into(layout.buildDirectory.dir("generated/legal/legal"))
+}
+tasks.named("preBuild") { dependsOn(copyLegal) }

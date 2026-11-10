@@ -206,6 +206,18 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 14:20 UTC (2026-11-10): licence notices
+
+- Missing: the app had no licence notice at all. AGPL-3.0 section 5(d) asks an interactive interface to show
+  Appropriate Legal Notices (licence, no warranty, how to see the licence). Now ⚙ → Registro → «Acerca de»:
+  version, AGPL-3.0, no warranty, where the source is, and buttons that show the full LICENSE and THIRD_PARTY.md,
+  which the build copies from the repo root into the APK (assets/legal/, so they never drift). AboutTest.
+- The tester kit now carries THIRD_PARTY.md (Bouncy Castle and ONNX Runtime are MIT: their notice must travel with
+  copies) and SOURCE.txt (repository, exact commit, source zip link). Test in test_tisma_scan.py.
+- **For the owner:** (1) the notice says «© 2026 los autores de Tisma Scanner»: no copyright holder is named
+  anywhere in the repo; say whose name goes there. (2) The source link is github.com/adriangrochi-code/openscanner:
+  testers can only follow it if that repository is public (or the source is offered another way). Not legal advice.
+
 ## Bug pass 13:20 UTC (2026-11-10)
 
 - The mat's 100 mm check bar was 3 mm from the bottom edge, where many printers cannot print (lasers 4-5 mm,
