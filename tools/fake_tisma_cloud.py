@@ -45,7 +45,8 @@ def result_zip() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("pieza.stl", "solid pieza\nendsolid pieza\n")
-        z.writestr("pieza_informe.json", json.dumps({"dimensions_mm_xyz": [40.2, 30.2, 20.3], "watertight": True}))
+        z.writestr("pieza_informe.json", json.dumps({"dimensions_mm_xyz": [40.2, 30.2, 20.3], "watertight": True,
+                                                    "area_mm2": 5226.4, "volume_mm3": 24646.9}))
         z.writestr("log.txt", "[hdr] ok\n")
     return buf.getvalue()
 

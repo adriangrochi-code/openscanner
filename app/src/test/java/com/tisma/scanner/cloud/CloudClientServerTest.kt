@@ -155,7 +155,8 @@ class CloudClientServerTest {
             val result = CloudSend(client, store, pollMs = 10).run(zip, onStatus = { t, _ -> texts += t })
             assertEquals(zip.length(), client.scanStatus(uploadId).getLong("received"))
             assertTrue(result.stl.readText().startsWith("solid"))
-            assertTrue(result.summary, result.summary.startsWith("40") && result.summary.endsWith("cerrada"))
+            assertTrue(result.summary, result.summary.startsWith("40") && "cerrada" in result.summary &&
+                result.summary.contains(Regex("área 52[.,]3 cm²")) && result.summary.contains(Regex("volumen 24[.,]6 cm³")))
             assertTrue(texts.any { it.startsWith("Procesando en la nube") })
             assertTrue("nada pendiente tras terminar", kept.isEmpty())
 

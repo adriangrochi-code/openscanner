@@ -85,9 +85,15 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
             // El informe bajado es el completo (con `watertight`); el resumen del trabajo, si no llegó.
             val r = runCatching { JSONObject(report.readText()) }.getOrNull()?.takeIf { it.has("dimensions_mm_xyz") }
                 ?: summary!!
+            // Lo que prometen las guías: tamaño (mm), área y, si la malla queda cerrada, el volumen.
             val d = r.getJSONArray("dimensions_mm_xyz")
+            val area = r.optDouble("area_mm2", Double.NaN)
+            val volume = r.optDouble("volume_mm3", Double.NaN)
+            val closed = r.optBoolean("watertight")
             "%.2f × %.2f × %.2f mm".format(d.getDouble(0), d.getDouble(1), d.getDouble(2)) +
-                (if (r.optBoolean("watertight")) " · cerrada" else "")
+                (if (area > 0) " · área %.1f cm²".format(area / 100) else "") +
+                (if (closed) " · cerrada" else " · abierta") +
+                (if (closed && volume > 0) " · volumen %.1f cm³".format(volume / 1000) else "")
         }.getOrDefault("")
     }
 }
