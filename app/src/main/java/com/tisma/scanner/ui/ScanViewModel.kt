@@ -1714,6 +1714,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         imu.startLogging(s.imuWriter())
         gps.startLogging(java.io.File(s.dir, "gps.csv").bufferedWriter())
         session = s
+        // Marcado desde ya: si la app se cierra de golpe grabando (o en los segundos del cierre, antes de que finish()
+        // anote los pasos), al volver a abrirla se rescata lo grabado. Antes quedaba en el teléfono sin zip ni forma
+        // de mandarlo, ocupando lugar.
+        savePending(s.dir, listOf(STEP_CAPTURE))
         _state.update {
             // Un escaneo nuevo no tiene pieza de la nube todavía: fuera la del anterior (y su «Imprimir»/«Publicar»).
             it.copy(scanning = true, images = 0, triggers = 0, lastZip = null, analyzed = 0, blurry = 0,
@@ -2195,6 +2199,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             // Sin prisa: primero que la app y la cámara terminen de arrancar.
             delay(RESUME_DELAY_MS)
             for (dir in pending) {
+                if (STEP_CAPTURE in pendingSteps(dir)) {
+                    // Cortado mientras se grababa: los archivos hasta la última línea completa, y a armar el zip (y la
+                    // malla rápida si llegó a guardarse el estado de la reconstrucción).
+                    val cut = com.tisma.scanner.session.ScanSession.repairTruncated(dir)
+                    savePending(dir, (if (File(dir, "recon_state.bin").exists()) listOf("malla_rapida") else emptyList()) + "zip")
+                    log("${dir.name} se cortó mientras se grababa: se guarda lo grabado" + if (cut > 0) " ($cut líneas a medias quitadas)" else "")
+                }
                 // Antibucle: si retomar este escaneo ya cerró la app dos veces, se deja lo pesado
                 // (malla con IA, nitidez) y sólo se termina lo seguro (el .zip).
                 val tries = resumeAttempts(dir) + 1
@@ -2313,6 +2324,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     companion object {
         val HDR_EV = listOf(-2, 0, 2)
+        /** Paso de pendiente.json mientras se graba: si queda al abrir la app, el escaneo se cortó grabando. */
+        const val STEP_CAPTURE = "captura"
         const val MIN_COVERAGE = 0.75
         const val MIN_IMAGES = 40
         const val MAX_BLUR_RATIO = 0.2

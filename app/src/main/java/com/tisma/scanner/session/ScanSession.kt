@@ -145,6 +145,30 @@ class ScanSession(baseDir: File) {
     fun zip(): File = zipDir(dir)
 
     companion object {
+        /**
+         * Un escaneo cortado mientras se grababa (la app se cerró de golpe): sus .csv y .jsonl pueden terminar en una
+         * línea a medias. Se dejan hasta la última línea completa (con su salto de línea y, en un .csv, con tantos
+         * campos como la cabecera; en un .jsonl, que sea un JSON). Devuelve cuántas líneas se quitaron.
+         */
+        fun repairTruncated(dir: File): Int {
+            var removed = 0
+            dir.listFiles { f -> f.isFile && (f.extension == "csv" || f.extension == "jsonl") }?.forEach { f ->
+                val text = f.readText()
+                if (text.isEmpty()) return@forEach
+                val lines = text.split('\n').toMutableList()
+                val tail = lines.removeAt(lines.size - 1)            // lo que sigue al último salto: incompleto
+                if (tail.isNotEmpty()) removed++
+                if (f.extension == "csv" && lines.size > 1) {
+                    val fields = lines[0].count { it == ',' }
+                    while (lines.size > 1 && lines.last().count { it == ',' } != fields) { lines.removeAt(lines.size - 1); removed++ }
+                } else if (f.extension == "jsonl") {
+                    while (lines.isNotEmpty() && runCatching { org.json.JSONObject(lines.last()) }.isFailure) { lines.removeAt(lines.size - 1); removed++ }
+                }
+                f.writeText(if (lines.isEmpty()) "" else lines.joinToString("\n") + "\n")
+            }
+            return removed
+        }
+
         /** Archivos del escaneo que nunca salen del teléfono: la posición absoluta (decisión del dueño, 04-11-2026). */
         val STAYS_ON_PHONE = setOf("gps.csv")
 
