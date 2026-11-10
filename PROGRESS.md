@@ -206,6 +206,41 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Coverage table (owner, 2026-11-10 21:00; worked through until 2026-11-12 03:10 UTC)
+
+«revisado» = read against what it must do, tested (unit/fake server/synthetic/CI), findings fixed with a test.
+«parcial» = some of it reviewed, the rest pending. Times are UTC, 2026-11-10 unless said.
+
+| Area | State | What was tested · findings |
+|---|---|---|
+| **App** | | |
+| Capture: Vídeo 360 | parcial | 17:15 instructions (no «detener» button → «botón rojo»); 11:45 thresholds 75 % / 40 photos / 20 % blurry match the guides. Pending: keyframe choice, blur rejection, coverage dome math. |
+| Capture: Fotos (passes, bursts, HDR, focus sweep) | pendiente | only texts (plurals, voseo). |
+| On-screen guides / instructions | revisado | 17:15 every «Toca/Pulsa» names a real control; GuideLabelsTest keeps guides and app in step. |
+| Processing on the phone, resume after the app is killed | parcial | 12:20 pendiente.json steps, attempt guard, only a complete zip is offered. Pending: killed DURING capture. |
+| Cloud send (upload, resume, retry, 507) | revisado | 05:15 status-check failure no longer restarts the upload; 11:15 resume ids on disk at once (commit); 18:15 result tied to its zip, no double send. |
+| Results: «Tu pieza», measures, STL | revisado | 11:45 area + volume shown; 18:15 previous scan's part no longer shown; two scans in a row: phone check by the owner. |
+| «Imprimir» / «Publicar» | revisado | 04:20 limits in characters; 11:45 thumbnail drew hidden faces; 19:05 author = account's library_name, licence picker. |
+| Account (login, logout, expired session, server texts) | revisado | 16:15 wrong password text; 16:22 all server texts in Spanish. |
+| Offline / back online | parcial | 20:30 network errors in Spanish. Pending: send queued offline then online (end to end). |
+| Settings (⚙ Captura, Cámaras, calibration, INS, sensors) | pendiente | |
+| About / licences | revisado | 14:20 AGPL notices in the app, licences in the APK. Owner: © name, repo public? |
+| Texts (plurals, tú) | revisado | 11:45, GuideLabelsTest + TextsTest. |
+| **Mat** | | |
+| Printable mat (sheets, margins, check bar) | revisado | 13:20 bar inside printer margins; every sheet tested. Already published mats must be made again. |
+| Mat detection and scale | parcial | 10:15 median of other scales; synthetic views per sheet within 0.2 %. Pending: mat partly hidden by the part, curled paper, shiny/low light. |
+| **Pipeline / nodes** | | |
+| Scan zip intake | revisado | 09:15 session.json folder, __MACOSX, zip bomb. |
+| Photo selection (blurry drop) | revisado | 10:15 fine. |
+| Scale (mat > focus > INS) | parcial | 10:15 mat vs median. Pending: focus and INS scale on their own. |
+| COLMAP SfM / OpenMVS dense | parcial | CI full CPU path green. Pending: failure modes (few photos, symmetric/featureless part), textura.zip. |
+| Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. |
+| Meshing and closing | revisado | 03:20-07:15 base skirt, pinches, open top; 20:00 nothing below the table. |
+| Report and measures | revisado | 12:20 NaN → null; 20:00 measures from measured points (thin plates +19 % → +1 %); 20:30 same scan, same measures. |
+| tisma_scan (node program) | revisado | 08:15 own work folder; summary contract with the server session. |
+| Windows node package | revisado | CI green on every push; licences checked. |
+| Tester kit and release workflow | revisado | 14:20 SOURCE.txt + THIRD_PARTY.md; 15:20 all pipeline tests on CI. Release waits for the owner's «sí». |
+
 ## Deep bug hunt (owner, 2026-11-10 20:00 → 11-12 03:10): hard shapes in postprocess
 
 Synthetic clouds of known parts on a table at real density (0.05-0.1 mm between points, as OpenMVS on CI):
