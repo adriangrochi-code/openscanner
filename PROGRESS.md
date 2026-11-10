@@ -206,6 +206,20 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## «Publicar»: the author is the account (owner's rule, 2026-11-10 18:45; spec 967f7a3, p2p_library 7 bis)
+
+- A scanned piece belongs to the person who scanned it. The dialog no longer has a free «Autor» field (it was
+  filled with the part of the e-mail before the @, which would have gone public): it shows «Autor: <name> (tu
+  cuenta)», the account's one public name in the library (GET /v1/me → library_name, never the e-mail), with the
+  licence picker as before. If the account has no name yet, it asks once («Nombre en la biblioteca») and sends it
+  as author_name; afterwards author_name is not sent (the server ignores it). CloudClient.libraryName /
+  setLibraryName; LibraryPublish.body with author optional (not in the signed manifest, unchanged).
+- Only registered accounts publish: login already needs a confirmed e-mail (server). New server texts translated:
+  «Elige el nombre con el que vas a publicar», «La publicación fue retirada de la biblioteca».
+- fake_tisma_cloud.py follows the rule (library_name, GET /v1/me, PUT /v1/me/library-name). CloudClientServerTest:
+  no name → 422 in Spanish; first publication sets it; later ones without author_name, another author_name ignored;
+  renaming. 131 app tests pass. The About «©» stays «los autores de Tisma Scanner» (owner via QA).
+
 ## Bug pass 18:15 UTC (2026-11-10): the cloud part of the previous scan
 
 - Starting a scan did not clear the cloud state: after a first cloud scan, the next scan's «Tu pieza» showed the

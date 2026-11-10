@@ -47,8 +47,13 @@ interface ScanActions {
     fun sendToCloud()
     /** «Imprimir»: la pieza de la nube queda en la cuenta (Mi biblioteca, en el teléfono y la PC). */
     fun keepInLibrary() {}
-    /** «Publicar»: la pieza a la biblioteca compartida de Tisma, con nombre, autor, licencia y descripción. */
-    fun publishToLibrary(name: String, author: String, license: String, description: String) {}
+    /** El nombre público de la cuenta en la biblioteca (el autor de lo que publica), al abrir «Publicar». */
+    fun loadLibraryName() {}
+    /**
+     * «Publicar»: la pieza a la biblioteca compartida de Tisma, con nombre, licencia y descripción. El autor es la
+     * cuenta: author sólo la primera vez, cuando la cuenta todavía no tiene nombre público (null si ya lo tiene).
+     */
+    fun publishToLibrary(name: String, author: String?, license: String, description: String) {}
     fun setAntiShakeBurst(v: Boolean)
     /** Vídeo 360 (una cámara, flujo continuo, fotogramas automáticos) o fotos sueltas. */
     fun setVideoMode(v: Boolean)

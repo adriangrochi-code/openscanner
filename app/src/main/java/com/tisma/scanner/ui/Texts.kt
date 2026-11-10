@@ -10,3 +10,6 @@ fun count(n: Int, one: String, many: String): String = "$n " + if (n == 1) one e
 fun sendHint(videoMode: Boolean): String =
     if (videoMode) "Haz un escaneo y, en «Tu pieza», toca «Crear modelo final en Tisma Cloud»."
     else "Haz un escaneo y pulsa ☁ Enviar en la pantalla de la cámara."
+
+/** El autor en «Publicar»: la cuenta, por su nombre público en la biblioteca (nunca el correo). */
+fun publishAuthorLine(libraryName: String): String = "Autor: $libraryName (tu cuenta)"

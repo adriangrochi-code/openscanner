@@ -129,10 +129,26 @@ class CloudClientServerTest {
             assertEquals(item.getString("id"), client.keepFile(jobId).getString("id"))
             // «Publicar»: sin la clave de par registrada, 409; con ella, la firma del manifiesto vale y sale lm_….
             val key = LibraryPublish.PeerKey.create()
-            val body = LibraryPublish.body(item, key, "Caja de prueba", "Tester", "CC-BY-4.0", "40 × 30 × 20 mm", ByteArray(100))
-            assertEquals(409, (runCatching { client.publishModel(body) }.exceptionOrNull() as CloudClient.HttpError).code)
+            // El autor es la cuenta (regla del dueño, spec 967f7a3): sin nombre público todavía, la primera vez se
+            // pide; sin él, el servidor lo reclama, y la app lo dice en español.
+            assertEquals(null, client.libraryName())
+            val unsigned = LibraryPublish.body(item, key, "Caja de prueba", "Tester", "CC-BY-4.0", "", null)
+            assertEquals(409, (runCatching { client.publishModel(unsigned) }.exceptionOrNull() as CloudClient.HttpError).code)
             client.registerPeerKey(key.publicB64)
-            assertTrue(client.publishModel(body).getString("id").startsWith("lm_"))
+            val noAuthor = LibraryPublish.body(item, key, "Caja de prueba", null, "CC-BY-4.0", "", null)
+            val missing = runCatching { client.publishModel(noAuthor) }.exceptionOrNull() as CloudClient.HttpError
+            assertEquals(422, missing.code)
+            assertEquals("Elige el nombre con el que vas a publicar", missing.message)
+            val body = LibraryPublish.body(item, key, "Caja de prueba", "Tester", "CC-BY-4.0", "40 × 30 × 20 mm", ByteArray(100))
+            val published = client.publishModel(body)
+            assertTrue(published.getString("id").startsWith("lm_"))
+            // Desde ahí la cuenta tiene su nombre: se publica sin author_name, y otro author_name se ignora.
+            assertEquals("Tester", client.libraryName())
+            assertEquals("Tester", client.publishModel(noAuthor).getString("author"))
+            assertEquals("Tester", client.publishModel(LibraryPublish.body(item, key, "Caja", "Otra persona", "MIT", "", null))
+                .getString("author"))
+            assertEquals("Ana Tester", client.setLibraryName(" Ana Tester "))
+            assertEquals("Ana Tester", client.libraryName())
             // Firmado con otra clave (o el manifiesto tocado): 422.
             val other = LibraryPublish.body(item, LibraryPublish.PeerKey.create(), "Caja", "Tester", "MIT", "", null)
             assertEquals(422, (runCatching { client.publishModel(other) }.exceptionOrNull() as CloudClient.HttpError).code)

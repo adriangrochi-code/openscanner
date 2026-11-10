@@ -88,8 +88,12 @@ data class UiState(
     val libraryBusy: Boolean = false,
     val libraryKept: Boolean = false,
     val libraryPublished: Boolean = false,
-    /** El autor que se propone al publicar: el último usado, o la parte del correo antes de la @. */
-    val libraryAuthor: String = "",
+    /**
+     * El nombre público de la cuenta en la biblioteca (`library_name`): el autor de lo que publica (la pieza es de
+     * quien la escaneó). null: todavía no tiene (se pide una vez) o no se leyó aún (libraryNameChecked).
+     */
+    val libraryName: String? = null,
+    val libraryNameChecked: Boolean = false,
     // --- Velocímetro de cámara (flujo óptico + enfoque) ---
     val cameraVelocity: Boolean = true,
     /** "12 medidas/s · 0,06 m/s" o "" si no mide. */
@@ -348,7 +352,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         _state.update { it.copy(cloudUrl = prefs.getString("cloud_url", DEFAULT_CLOUD_URL) ?: DEFAULT_CLOUD_URL,
             cloudKey = prefs.getString("cloud_token", "") ?: "",
             cloudEmail = prefs.getString("cloud_email", "") ?: "") }
-        _state.update { it.copy(libraryAuthor = prefs.getString("library_author", null) ?: it.cloudEmail.substringBefore('@')) }
         runCatching { watchCloudSend() }
         _state.update {
             it.copy(
@@ -592,12 +595,21 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * «Publicar»: la pieza a la biblioteca compartida de Tisma, desde el ítem de «Imprimir» (lo guarda si hace falta),
      * con la miniatura dibujada en el teléfono y el manifiesto firmado con la clave de par de esta instalación.
      */
-    override fun publishToLibrary(name: String, author: String, license: String, description: String) {
+    /** Lee el nombre público de la cuenta (al abrir «Publicar»): el autor es la cuenta, no un texto libre. */
+    override fun loadLibraryName() {
+        _state.update { it.copy(libraryNameChecked = false) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey).libraryName() }
+            _state.update { it.copy(libraryName = r.getOrNull(), libraryNameChecked = r.isSuccess,
+                libraryStatus = r.exceptionOrNull()?.let { e -> "✗ " + (e.message ?: "sin conexión") } ?: it.libraryStatus) }
+        }
+    }
+
+    /** author: null si la cuenta ya tiene nombre público; si no, el que la persona eligió (queda como el de su cuenta). */
+    override fun publishToLibrary(name: String, author: String?, license: String, description: String) {
         val job = _state.value.cloudJobId ?: return
         if (_state.value.libraryBusy) return
         _state.update { it.copy(libraryBusy = true, libraryStatus = "Publicando…") }
-        prefs.edit().putString("library_author", author.trim()).apply()
-        _state.update { it.copy(libraryAuthor = author.trim()) }
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching {
                 val client = com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey)
@@ -617,7 +629,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     client.publishModel(body)
                 }
             }
-            r.onSuccess { m -> prefs.edit().putString("library_model_$job", m.optString("id")).apply(); log("Publicada: ${m.optString("id")}") }
+            r.onSuccess { m ->
+                prefs.edit().putString("library_model_$job", m.optString("id")).apply(); log("Publicada: ${m.optString("id")}")
+                m.optString("author").takeIf { it.isNotBlank() }?.let { a -> _state.update { it.copy(libraryName = a, libraryNameChecked = true) } }
+            }
             _state.update { it.copy(libraryBusy = false, libraryPublished = r.isSuccess || it.libraryPublished,
                 libraryKept = r.isSuccess || it.libraryKept,
                 libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e -> "✗ " + (e.message ?: "No se pudo publicar") })) }

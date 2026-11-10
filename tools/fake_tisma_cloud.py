@@ -32,6 +32,7 @@ class State:
         self.chunk = chunk
         self.flaky_jobs = flaky_jobs
         self.full = 0
+        self.library_name: str | None = None   # the account's one public name in the library (spec 967f7a3)
         self.status_down = 0                   # next GET /v1/scans/{id} answered 503 (POST /test/status-down)
         self.files: dict[str, dict] = {}       # af_… -> item
         self.peer_keys: dict[str, str] = {}    # token -> public key (base64)
@@ -196,8 +197,17 @@ def handler(state: State):
                     or f.get("size") != kept[f["path"]]["size"] or f.get("sha256") != kept[f["path"]]["sha256"]
                     for f in files):
                 return self.send(422, {"detail": "The files do not match the kept file"})
-            if not (0 < len(j.get("name", "")) <= 120 and 0 < len(j.get("author_name", "")) <= 60):
-                return self.send(422, {"detail": "Bad name or author"})
+            if not 0 < len(j.get("name", "")) <= 120:
+                return self.send(422, {"detail": "Bad name"})
+            # The author is the account of the token: its library_name. The first publication takes it from
+            # author_name; afterwards author_name is ignored (nobody signs as someone else).
+            if state.library_name is None:
+                if not j.get("author_name"):
+                    return self.send(422, {"detail": "'author_name' is needed the first time the account publishes "
+                                                     "(or PUT /v1/me/library-name)"})
+                bad = self.bad_library_name(j["author_name"])
+                if bad:
+                    return self.send(422, {"detail": bad})
             try:
                 Ed25519PublicKey.from_public_bytes(base64.b64decode(state.peer_keys[token])).verify(
                     base64.b64decode(j.get("manifest_signature", "")), canonical(files))
@@ -205,9 +215,20 @@ def handler(state: State):
                 return self.send(422, {"detail": "Bad manifest signature"})
             if len(base64.b64decode(j.get("thumbnail_webp", "") or "")) > 64 * 1024:
                 return self.send(422, {"detail": "Thumbnail over 64 KB"})
+            if state.library_name is None:
+                state.library_name = j["author_name"]
             lm = "lm_" + uuid.uuid4().hex[:12]
             item["published_model"] = lm
-            return self.send(201, {"id": lm, "revision": 1, "name": j["name"], "license": j.get("license")})
+            return self.send(201, {"id": lm, "revision": 1, "name": j["name"], "license": j.get("license"),
+                                   "author": state.library_name})
+
+        @staticmethod
+        def bad_library_name(name) -> str | None:
+            if not isinstance(name, str) or not 0 < len(name) <= 60:
+                return "library_name is at most 60 characters"
+            if any(ord(c) < 32 or c in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069" for c in name):
+                return "library_name has control or direction characters"
+            return None
 
         def do_PUT(self) -> None:
             url = urlparse(self.path)
@@ -217,6 +238,13 @@ def handler(state: State):
             data = self.body()
             if not self.authed():
                 return
+            if url.path == "/v1/me/library-name":
+                name = json.loads(data or b"{}").get("name")
+                bad = self.bad_library_name(name)
+                if bad:
+                    return self.send(422, {"detail": bad})
+                state.library_name = name
+                return self.send(200, {"library_name": name})
             if len(parts) == 4 and parts[:2] == ["v1", "scans"] and parts[3] == "data":
                 scan = state.scans.get(parts[2])
                 if scan is None:
@@ -239,6 +267,8 @@ def handler(state: State):
                 return self.send(200, {"ok": True})
             if not self.authed():
                 return
+            if path == "/v1/me":
+                return self.send(200, {"email": EMAIL, "library_name": state.library_name})
             parts = path.strip("/").split("/")
             if len(parts) == 3 and parts[:2] == ["v1", "scans"]:
                 with state.lock:

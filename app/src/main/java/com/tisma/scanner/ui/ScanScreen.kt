@@ -1049,7 +1049,7 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
                     SecondaryButton(if (s.libraryKept) "✓ En Mi biblioteca" else "Imprimir", Modifier.weight(1f),
                         enabled = !s.libraryBusy && !s.libraryKept) { vm.keepInLibrary() }
                     SecondaryButton(if (s.libraryPublished) "✓ Publicada" else "Publicar", Modifier.weight(1f),
-                        enabled = !s.libraryBusy && !s.libraryPublished) { publishing = true }
+                        enabled = !s.libraryBusy && !s.libraryPublished) { vm.loadLibraryName(); publishing = true }
                 }
                 if (publishing) PublishDialog(s, onCancel = { publishing = false }) { name, author, license, description ->
                     publishing = false
@@ -1067,14 +1067,17 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
 
 /** «Publicar»: nombre, autor, licencia y descripción de la pieza para la biblioteca compartida de Tisma. */
 @Composable
-private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, String, String, String) -> Unit) {
+private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, String?, String, String) -> Unit) {
     val licenses = com.tisma.scanner.cloud.LibraryPublish.LICENSES
     var name by remember { mutableStateOf(s.cloudStl?.nameWithoutExtension?.removeSuffix("_pieza") ?: "") }
-    var author by remember { mutableStateOf(s.libraryAuthor) }
+    // El autor es la cuenta (la pieza es de quien la escaneó): su nombre público, que no se edita aquí. Sólo si la
+    // cuenta todavía no tiene uno se pide, una vez; nunca se propone el correo.
+    var firstName by remember { mutableStateOf("") }
+    val author: String? = if (s.libraryName == null) firstName else null
     var license by remember { mutableStateOf(licenses.first().first) }
     var description by remember { mutableStateOf("") }
     var choosing by remember { mutableStateOf(false) }
-    val ok = com.tisma.scanner.cloud.LibraryPublish.fieldsOk(name, author, description)
+    val ok = s.libraryNameChecked && com.tisma.scanner.cloud.LibraryPublish.fieldsOk(name, author, description)
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Tisma.Bar,
@@ -1083,7 +1086,18 @@ private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, 
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Cualquiera podrá verla e imprimirla, con la licencia que elijas.", color = Tisma.TextDim, fontSize = 13.sp)
                 TextSetting("Nombre", name, "Engranaje", false) { name = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_NAME) }
-                TextSetting("Autor", author, "Tu nombre", false) { author = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_AUTHOR) }
+                when {
+                    !s.libraryNameChecked -> Text("Autor: …", color = Tisma.TextDim, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
+                    s.libraryName != null -> Text(publishAuthorLine(s.libraryName), color = Tisma.Text, fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 8.dp))
+                    else -> {
+                        Text("Tu cuenta todavía no tiene nombre en la biblioteca: elígelo una vez. Será el autor de todo lo que publiques (no se muestra tu correo).",
+                            color = Tisma.TextDim, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                        TextSetting("Nombre en la biblioteca", firstName, "Tu nombre", false) {
+                            firstName = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_AUTHOR)
+                        }
+                    }
+                }
                 Box {
                     SecondaryButton("Licencia: " + licenses.first { it.first == license }.second, Modifier.fillMaxWidth()) { choosing = true }
                     androidx.compose.material3.DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {

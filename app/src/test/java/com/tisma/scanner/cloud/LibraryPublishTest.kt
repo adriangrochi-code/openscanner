@@ -49,6 +49,15 @@ class LibraryPublishTest {
         }
     }
 
+    @Test fun withTheAccountsNameTheBodyHasNoAuthor() {
+        // El autor es la cuenta: si ya tiene nombre público no se manda author_name, y lo firmado no cambia.
+        val key = LibraryPublish.PeerKey.create()
+        val body = LibraryPublish.body(item, key, "Engranaje", null, "CC-BY-4.0", "", null)
+        assertTrue(!body.has("author_name"))
+        assertTrue(LibraryPublish.fieldsOk("Engranaje", null, ""))
+        assertTrue(!LibraryPublish.fieldsOk("Engranaje", "  ", ""))   // la primera vez, un nombre de verdad
+    }
+
     @Test fun limitsCountWhatIsSentAndCharactersAsTheServerDoes() {
         val key = LibraryPublish.PeerKey.create()
         // 120 caracteres y un espacio al final: se envía sin el espacio, así que entra.

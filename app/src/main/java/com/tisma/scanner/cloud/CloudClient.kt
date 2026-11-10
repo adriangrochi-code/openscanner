@@ -65,6 +65,8 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 Triple(setOf(403), "This account cannot publish in the library", "Esta cuenta no puede publicar en la biblioteca"),
                 Triple(setOf(403), "Blocked in the library", "Esta cuenta no puede publicar en la biblioteca"),
                 Triple(setOf(422), "Removed from the library", "Este archivo fue retirado de la biblioteca de Tisma"),
+                Triple(setOf(422), "'author_name' is needed the first time", "Elige el nombre con el que vas a publicar"),
+                Triple(setOf(403), "The model was removed from the library", "La publicación fue retirada de la biblioteca"),
                 Triple(setOf(409), "The model is being changed at the same time", "Se está cambiando al mismo tiempo: prueba de nuevo"),
             )
 
@@ -265,6 +267,23 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     }
 
     /** «Publicar»: `POST /v1/library/models` con el cuerpo de LibraryPublish.body. Devuelve la entrada (`id` lm_…). */
+    /**
+     * El nombre público de la cuenta en la biblioteca (`library_name`), o null si todavía no tiene: la primera
+     * publicación lo toma de `author_name`. Nunca es el correo. (Regla del dueño: la pieza es de quien la escaneó.)
+     */
+    fun libraryName(): String? {
+        val (code, j) = request("GET", "/v1/me")
+        if (code != 200 || j == null) throw HttpError(code, j)
+        return if (j.isNull("library_name")) null else j.optString("library_name").takeIf { it.isNotBlank() }
+    }
+
+    /** Pone (o cambia) el nombre público de la cuenta; también renombra sus publicaciones. */
+    fun setLibraryName(name: String): String {
+        val (code, j) = request("PUT", "/v1/me/library-name", JSONObject().put("name", name.trim()).toString().toByteArray())
+        if (code != 200 || j == null) throw HttpError(code, j)
+        return j.getString("library_name")
+    }
+
     fun publishModel(body: JSONObject): JSONObject {
         val (code, j) = request("POST", "/v1/library/models", body.toString().toByteArray(), timeoutMs = 120_000)
         // Otro 422 al publicar es un fallo de la app (firma, tamaños, roles): «No se pudo publicar»; el detalle queda

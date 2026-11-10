@@ -63,9 +63,10 @@ object LibraryPublish {
     /** Los primeros `n` caracteres, sin partir un emoji en dos (take(n) puede dejar medio par UTF-16). */
     fun clip(s: String, n: Int): String = if (chars(s) <= n) s else s.substring(0, s.offsetByCodePoints(0, n))
 
-    /** Si el formulario de «Publicar» se puede enviar: lo mismo que exige body. */
-    fun fieldsOk(name: String, author: String, description: String) =
-        chars(name.trim()) in 1..MAX_NAME && chars(author.trim()) in 1..MAX_AUTHOR && chars(description.trim()) <= MAX_DESCRIPTION
+    /** Si el formulario de «Publicar» se puede enviar: lo mismo que exige body. author null = el de la cuenta. */
+    fun fieldsOk(name: String, author: String?, description: String) =
+        chars(name.trim()) in 1..MAX_NAME && (author == null || chars(author.trim()) in 1..MAX_AUTHOR) &&
+            chars(description.trim()) <= MAX_DESCRIPTION
 
     /** Los archivos del ítem guardado que se publican, con su rol: pieza.stl siempre, el informe si está. */
     fun files(item: JSONObject): JSONArray {
@@ -115,13 +116,17 @@ object LibraryPublish {
     }
 
     /** El cuerpo de `POST /v1/library/models` para publicar `item` (de «Imprimir»), firmado con `key`. */
-    fun body(item: JSONObject, key: PeerKey, name: String, author: String, license: String, description: String,
+    /**
+     * author: null cuando la cuenta ya tiene nombre público (Tisma Cloud pone el autor de la cuenta del token e ignora
+     * author_name); sólo la primera vez se manda, y queda como el nombre público de la cuenta. No va en lo firmado.
+     */
+    fun body(item: JSONObject, key: PeerKey, name: String, author: String?, license: String, description: String,
              thumbnailWebp: ByteArray?): JSONObject {
         // Se valida lo que se envía (sin espacios a los lados) y se cuentan caracteres como Python (len): un emoji
         // es 1, no 2 unidades UTF-16 como en String.length.
-        val name = name.trim(); val author = author.trim(); val description = description.trim()
+        val name = name.trim(); val author = author?.trim(); val description = description.trim()
         require(chars(name) in 1..MAX_NAME) { "el nombre tiene que tener entre 1 y 120 caracteres" }
-        require(chars(author) in 1..MAX_AUTHOR) { "el autor tiene que tener entre 1 y 60 caracteres" }
+        require(author == null || chars(author) in 1..MAX_AUTHOR) { "el nombre de autor tiene que tener entre 1 y 60 caracteres" }
         require(chars(description) <= MAX_DESCRIPTION) { "la descripción tiene como mucho 500 caracteres" }
         require(LICENSES.any { it.first == license }) { "licencia desconocida: $license" }
         require(thumbnailWebp == null || thumbnailWebp.size <= MAX_THUMBNAIL) { "la miniatura pasa de 64 KB" }
@@ -129,7 +134,7 @@ object LibraryPublish {
         return JSONObject()
             .put("from_file", item.getString("id"))
             .put("name", name)
-            .put("author_name", author)
+            .apply { if (author != null) put("author_name", author) }
             .put("license", license)
             .apply { if (description.isNotEmpty()) put("description", description) }
             .put("files", files)
