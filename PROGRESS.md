@@ -201,6 +201,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   against the median of the others: one bad scale neither vetoes the mat nor lets a mis-printed mat through.
   Tests: INS 30 % off with focus agreeing keeps the mat (fails on the old code); a 133 % print with one other
   scale near it is still refused. drop_blurry checked too: fine (each video keyframe is its own trigger).
+- Upload resume state on disk (hourly bug pass, 11:15 UTC): CloudSendWorker saved the upload and job ids with
+  apply(), which writes later; if the system killed the app right after the upload was created, the next try
+  found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
+  worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
 ## Open for the beta
 

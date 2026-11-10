@@ -39,12 +39,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         val token = prefs.getString("cloud_token", "") ?: ""
         val url = inputData.getString(KEY_URL) ?: ""
         if (token.isBlank()) return@withContext Result.failure(error("Entra con tu cuenta de Tisma Cloud (⚙ → Nube)", 401))
-        val store = object : CloudSend.Store {
-            override fun get(key: String) = prefs.getString(key, null)
-            override fun put(key: String, value: String?) {
-                prefs.edit().apply { if (value == null) remove(key) else putString(key, value) }.apply()
-            }
-        }
+        val store = prefsStore(prefs)
         runCatching { setForeground(foreground("Enviando a Tisma Cloud…", -1)) }
         // Por qué se está esperando, para mostrarlo mientras WorkManager tiene el envío en cola para reintentar.
         fun waitReason(text: String?) = prefs.edit().apply { if (text == null) remove(KEY_WAIT) else putString(KEY_WAIT, text) }.apply()
@@ -113,6 +108,20 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         private const val NOTIFICATION_ID = 43
         /** Cortes de red seguidos antes de rendirse (con esperas crecientes: varias horas en total). */
         const val MAX_ATTEMPTS = 20
+
+        /**
+         * Lo hecho del envío (id de la subida y del trabajo) en las preferencias, escrito en el disco en el momento
+         * (commit, en el hilo del trabajo): con apply() se escribe más tarde, y si el sistema cierra la app justo
+         * después de crear la subida, el próximo intento no la encuentra y vuelve a subir todo el escaneo.
+         */
+        fun prefsStore(prefs: android.content.SharedPreferences) = object : CloudSend.Store {
+            override fun get(key: String) = prefs.getString(key, null)
+            override fun put(key: String, value: String?) {
+                val e = prefs.edit()
+                if (value == null) e.remove(key) else e.putString(key, value)
+                if (!e.commit()) throw IOException("no se pudo guardar el avance del envío")
+            }
+        }
 
         /** Pone el envío en cola: uno a la vez; si ya hay uno en curso, sigue ése. */
         fun enqueue(ctx: Context, zip: File, url: String) {
