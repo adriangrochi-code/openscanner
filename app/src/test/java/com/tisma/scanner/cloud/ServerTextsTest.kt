@@ -22,6 +22,8 @@ class ServerTextsTest {
         assertEquals("Ya publicaste 20 modelos hoy", text(429, "Too many publications today"))
         assertEquals("El nombre tiene caracteres no permitidos", text(422, "name has control or direction characters"))
         assertEquals("El texto es demasiado largo", text(422, "description is at most 500 characters"))
+        assertEquals("Ya cambiaste el nombre muchas veces hoy: prueba mañana", text(429, "Too many name changes today"))
+        assertEquals("La publicación fue retirada de la biblioteca", text(403, "The model was removed from the library"))
     }
 
     @Test fun numbersAreKept() {

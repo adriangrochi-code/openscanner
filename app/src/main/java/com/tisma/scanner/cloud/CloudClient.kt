@@ -67,6 +67,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 Triple(setOf(422), "Removed from the library", "Este archivo fue retirado de la biblioteca de Tisma"),
                 Triple(setOf(422), "'author_name' is needed the first time", "Elige el nombre con el que vas a publicar"),
                 Triple(setOf(403), "The model was removed from the library", "La publicación fue retirada de la biblioteca"),
+                Triple(setOf(429), "Too many name changes today", "Ya cambiaste el nombre muchas veces hoy: prueba mañana"),
                 Triple(setOf(409), "The model is being changed at the same time", "Se está cambiando al mismo tiempo: prueba de nuevo"),
             )
 

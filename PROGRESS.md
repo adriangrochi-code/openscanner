@@ -219,6 +219,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - fake_tisma_cloud.py follows the rule (library_name, GET /v1/me, PUT /v1/me/library-name). CloudClientServerTest:
   no name → 422 in Spanish; first publication sets it; later ones without author_name, another author_name ignored;
   renaming. 131 app tests pass. The About «©» stays «los autores de Tisma Scanner» (owner via QA).
+  Server contract on tisma-cloud 717a5a3; PUT /v1/me/library-name is limited to 5 a day (fed260b): 429 translated.
 
 ## Bug pass 18:15 UTC (2026-11-10): the cloud part of the previous scan
 
