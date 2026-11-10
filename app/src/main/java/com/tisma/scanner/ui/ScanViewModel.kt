@@ -1217,7 +1217,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val stl = File(dir, "pieza_movil.stl")
         runCatching { model.writeStl(stl); model.writePly(File(dir, "pieza_movil.ply")) }
         log("$label: ${model.triangleCount} triángulos en %.1f s".format((SystemClock.uptimeMillis() - t0) / 1000.0) +
-            if (dense.isNotEmpty()) " · ${dense.size} vistas con IA" else "")
+            if (dense.isNotEmpty()) " · " + count(dense.size, "vista", "vistas") + " con IA" else "")
         _state.update { it.copy(localModel = model.asFragment(), localStl = stl, localAi = dense.isNotEmpty()) }
         return true
     }
@@ -2192,7 +2192,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val blurRatio = if (analyzedCount == 0) 0.0 else blurryCount.toDouble() / analyzedCount
         val problems = buildList {
             if (cov < MIN_COVERAGE) add("cobertura ${(cov * 100).toInt()} % (mín. ${(MIN_COVERAGE * 100).toInt()} %)")
-            if (analyzedCount < MIN_IMAGES) add("$analyzedCount fotos (mín. $MIN_IMAGES)")
+            if (analyzedCount < MIN_IMAGES) add(count(analyzedCount, "foto", "fotos") + " (mín. $MIN_IMAGES)")
             if (blurRatio > MAX_BLUR_RATIO) add("${(blurRatio * 100).toInt()} % movidas (máx. ${(MAX_BLUR_RATIO * 100).toInt()} %)")
         }
         val close = coverageMaps.getValue(ScanPass.CLOSE).coverage()

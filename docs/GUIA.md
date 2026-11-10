@@ -50,7 +50,7 @@ como se explica en el paso 4.
 2. Arriba a la derecha elige la pasada **Lejos**. Pulsa el botón de disparo para empezar.
 3. **Rodea la pieza despacio** a 2-3 alturas (unos 30°, 50° y 70° sobre la mesa), con la pieza entera
    en el encuadre a unas 2-3 veces su tamaño. La app dispara sola cada pocos grados.
-   - Si aparece **«¡DEMASIADO RÁPIDO!»**, ve más despacio.
+   - Si aparece **«Demasiado rápido: las fotos saldrán movidas»**, ve más despacio.
    - Párate un instante de vez en cuando: el móvil corrige sus sensores cuando está quieto.
 4. **Mira la cúpula** (abajo a la derecha). El centro es la vista desde arriba y el borde, las vistas a
    ras de mesa. Gris = falta, amarillo = una foto, verde = dos o más. Los avisos de debajo dicen qué

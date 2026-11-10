@@ -52,7 +52,8 @@ and resumes by itself as step 4 explains.
 2. At the top right, choose the **Lejos** (far) pass. Press the shutter button to start.
 3. **Walk slowly around the part** at 2-3 heights (about 30°, 50° and 70° above the table), with the whole
    part in the frame at about 2-3 times its size. The app takes the photos by itself every few degrees.
-   - If **"¡DEMASIADO RÁPIDO!"** (too fast) appears, slow down.
+   - If **"Demasiado rápido: las fotos saldrán movidas"** (too fast: the photos will be blurred) appears, slow
+     down.
    - Stop for a moment now and then: the phone corrects its sensors while it is still.
 4. **Watch the dome** (bottom right). Its centre is the view from above and its edge the views level with
    the table. Grey = missing, yellow = one photo, green = two or more. The hints below it say which sector

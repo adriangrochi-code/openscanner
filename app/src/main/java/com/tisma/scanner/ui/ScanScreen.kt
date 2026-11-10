@@ -149,7 +149,7 @@ private fun CameraScreen(
             val toasts = buildList {
                 if (s.rigWarning.isNotEmpty()) add(Triple("Esta pasada no puede usar su cámara · ver ⚙ Cámaras", true, false))
                 if (s.shotWarning.isNotEmpty()) add(Triple(s.shotWarning, true, false))
-                if (s.scanning && s.capturing) add(Triple("Capturando… mantené el móvil quieto", false, false))
+                if (s.scanning && s.capturing) add(Triple("Capturando… mantén el móvil quieto", false, false))
                 else if (s.scanning && s.waitingSteady) add(Triple("Quieto un momento…", false, false))
                 if (s.gyroRate > 0.6 && s.scanning) add(Triple("Demasiado rápido: las fotos saldrán movidas", true, false))
                 if (s.scanning && s.analyzed > 0 && s.textureRecent < ScanViewModel.LOW_TEXTURE) {
@@ -276,7 +276,7 @@ private fun RoundIcon(icon: String, label: String, onClick: () -> Unit) {
 private fun StatusLine(s: UiState) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         val left = if (s.scanning || s.images > 0)
-            "${s.images} fotos · %.0f MB · %d descartadas".format(s.storedMb, s.discarded)
+            count(s.images, "foto", "fotos") + " · %.0f MB · ".format(s.storedMb) + count(s.discarded, "descartada", "descartadas")
         else "${s.openedStreams.size} " + if (s.openedStreams.size == 1) "flujo de cámara" else "flujos de cámara"
         Text(left, color = Tisma.TextDim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
@@ -415,7 +415,7 @@ private fun ScanSettings(s: UiState, vm: ScanActions) {
         }
     }
     SettingSwitch("Disparo automático (INS)", s.autoTrigger, onChange = vm::setAutoTrigger)
-    Hint("Apagado (recomendado): sacás cada foto con el botón grande y la vista previa no se corta. " +
+    Hint("Apagado (recomendado): sacas cada foto con el botón grande y la vista previa no se corta. " +
         "Encendido: dispara solo al girar o desplazarte.")
     SettingSwitch("Medir distancia con el enfoque", s.focusDepth, onChange = vm::setFocusDepth)
     SettingSwitch("Velocímetro de cámara (frena la deriva)", s.cameraVelocity, onChange = vm::setCameraVelocity)
@@ -823,7 +823,7 @@ private fun VideoCaptureScreen(
                     BandBar(s)
                 }
                 Spacer(Modifier.height(6.dp))
-                if (s.scanning) Text("${s.videoFrames} fotogramas · ${(s.coveragePct * 100).toInt()} % cubierto" +
+                if (s.scanning) Text(count(s.videoFrames, "fotograma", "fotogramas") + " · ${(s.coveragePct * 100).toInt()} % cubierto" +
                     (if (s.prepText.isNotEmpty()) " · ${s.prepText}" else ""), color = Tisma.TextDim, fontSize = 12.sp, textAlign = TextAlign.Center)
                 else StatusLine(s)
             }
