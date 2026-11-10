@@ -43,6 +43,32 @@ def spacing_of(pcd):
     return float(np.median(d)) if len(d) else 1.0
 
 
+def refine_plane(P, model, thr, rounds=5):
+    """
+    El plano de RANSAC ajustado por mínimos cuadrados a sus puntos, y otra vez con los puntos de ese plano, hasta que
+    no cambia. RANSAC de Open3D corre en varios hilos y aun con semilla da planos algo distintos en cada corrida: el
+    mismo escaneo daba medidas y volumen distintos (24076-24130 mm³ en la caja de prueba; mucho más en una placa
+    delgada). Ajustado así, converge al mismo plano, y más exacto que tres puntos.
+    """
+    n = np.asarray(model[:3], float); d = float(model[3])
+    k = np.linalg.norm(n); n, d = n / k, d / k
+    inl = np.where(np.abs(P @ n + d) < thr)[0]
+    for _ in range(rounds):
+        if len(inl) < 3:
+            break
+        c = P[inl].mean(0)
+        n2 = np.linalg.svd(P[inl] - c, full_matrices=False)[2][-1]
+        if n2 @ n < 0:
+            n2 = -n2
+        d2 = -float(n2 @ c)
+        new = np.where(np.abs(P @ n2 + d2) < thr)[0]
+        n, d = n2, d2
+        if np.array_equal(new, inl):
+            break
+        inl = new
+    return [*n, d], inl
+
+
 def support_plane(pcd, thr, up=None, max_planes=8, min_share=0.005):
     """
     Plano de apoyo (mesa/tapete). Se buscan varios planos y se elige con cuidado, porque una
@@ -59,6 +85,7 @@ def support_plane(pcd, thr, up=None, max_planes=8, min_share=0.005):
         if len(rest.points) < 200:
             break
         model, inl = rest.segment_plane(distance_threshold=thr, ransac_n=3, num_iterations=3000)
+        model, inl = refine_plane(np.asarray(rest.points), model, thr)
         # Hasta planos chicos: con la pieza densa y cerca, la mesa puede tener el 1 % de los puntos (antes se paraba
         # en el 3 % y la mesa nunca era candidata; con gravedad, la tapa de una caja pasaba por mesa).
         if len(inl) < max(200, min_share * len(P_all)):

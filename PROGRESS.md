@@ -226,6 +226,12 @@ Fixes (tools/postprocess.py), each with a test that fails without it:
   points below it is never the table (it was the box's top with a sparse table).
   test_a_sparse_table_under_a_dense_part_is_still_the_table.
 - Nothing left above the table: a clear SystemExit instead of a NumPy error. test_a_part_thinner_than_….
+- Hour 2: the same cloud gave different measures and volume on each run: Open3D's RANSAC runs in threads and
+  picks a slightly different table plane each time, even seeded (0.22 % on the box; a 40x30x1 plate gave 1008 and
+  1154 mm³ on two runs). refine_plane fits each plane by least squares until it settles: 0.01 %, the rest is Poisson's
+  own threads. test_the_same_cloud_gives_the_same_measures. The 1 mm plate now closes; its volume -4 % (1154/1200).
+- Offline: sign-in, «Imprimir», «Publicar» and the upload's last failure showed Java's English network text
+  («Unable to resolve host…»). CloudClient.userMessage gives Spanish by kind. UserMessageTest. 133 app tests.
 
 ## «Publicar»: the author is the account (owner's rule, 2026-11-10 18:45; spec 967f7a3, p2p_library 7 bis)
 

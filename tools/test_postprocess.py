@@ -95,6 +95,23 @@ def test_a_sparse_table_under_a_dense_part_is_still_the_table():
         assert r["watertight"] and abs(r["volume_mm3"] / 24000 - 1) < 0.05, r
 
 
+def test_the_same_cloud_gives_the_same_measures():
+    """The same scan, the same measures: the table's plane is found with RANSAC, and without a seed the volume of the
+    same cloud changed from run to run (24076-24130 mm³, 0.22 %, on the test box; far more on a thin plate). The plane
+    is now refined by least squares until it settles."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(box_on_table())))
+        runs = [pp.postprocess(inp, Path(d) / f"pieza{i}", up=np.array([0, 0, 1.0]), max_triangles=8000) for i in range(5)]
+        vols = [r["volume_mm3"] for r in runs]
+        # Poisson runs in threads too and moves the third decimal; the plane was what moved the measures.
+        assert (max(vols) - min(vols)) / min(vols) < 0.0005, vols
+        for k in range(3):
+            v = [r["dimensions_mm_xyz"][k] for r in runs]
+            assert (max(v) - min(v)) / min(v) < 0.001, v
+
+
 def test_a_part_thinner_than_the_table_strip_says_so():
     """With a coarse cloud, a part thinner than the strip removed with the table (6 point spacings) left nothing, and
     the run ended in a NumPy error («zero-size array…»). Now it stops with a message that says what happened."""
