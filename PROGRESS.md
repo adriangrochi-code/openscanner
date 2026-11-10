@@ -163,6 +163,9 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   twice through a vertex; simple_loops splits those first. On the CI mesh the footprint is full from z = 0 up
   (40.6 x 30.6 at the bottom). Test: walls missing 2-13 mm along the base (fails on the old code, passes).
   scan-e2e.yml now asserts watertight with a volume within 15 % of 24000 mm³.
+  CI on bd0f85a (42749126710, green; Windows green too): **closed, volume 24308 mm³ (+1.3 %)**, measures
+  40.86 x 30.82 x 20.20 mm (+2.1 %, +2.7 %, +1.0 %), mat scale -0.2 %, mesh to points mean 0.019 mm. Area
+  6194 mm² against the box's 5200 (+19 %): surface roughness of the dense mesh, not a fault; worth a look later.
 
 ## Open for the beta
 
