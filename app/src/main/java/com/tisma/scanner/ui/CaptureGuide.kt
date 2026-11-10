@@ -24,7 +24,7 @@ fun captureInstruction(rings: List<CoverageMap.Ring>, guide: CoverageMap.Guidanc
         guide.gapStartDeg != null -> Instruction("↻", "Bien, sigue así", Instruction.Tone.OK)
         guide.nextRing != null && guide.nextRing > ring -> Instruction("↑", "Vuelta completa · sube el móvil y da otra", Instruction.Tone.INFO)
         guide.nextRing != null -> Instruction("↓", "Vuelta completa · baja el móvil y da otra", Instruction.Tone.INFO)
-        else -> Instruction("✓", "¡Listo! Toca detener", Instruction.Tone.DONE)
+        else -> Instruction("✓", "¡Listo! Toca el botón rojo para terminar", Instruction.Tone.DONE)
     }
 }
 

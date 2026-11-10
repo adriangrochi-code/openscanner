@@ -521,7 +521,7 @@ private fun CloudTab(s: UiState, vm: ScanActions) {
     }
     Section("Último escaneo")
     when {
-        s.lastZip == null -> Hint("Haz un escaneo y pulsa ☁ Enviar en la pantalla de la cámara.")
+        s.lastZip == null -> Hint(sendHint(s.videoMode))
         else -> {
             Mono(s.lastZip.name + " · %.0f MB".format(s.lastZip.length() / 1e6))
             if (s.cloudStatus.isNotEmpty()) Mono(s.cloudStatus, if (s.cloudStatus.startsWith("✗")) Tisma.Warn else Tisma.Text)

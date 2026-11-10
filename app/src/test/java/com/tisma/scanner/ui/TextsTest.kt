@@ -10,4 +10,11 @@ class TextsTest {
         assertEquals("2 fotogramas", count(2, "fotograma", "fotogramas"))
         assertEquals("1 descartada", count(1, "descartada", "descartadas"))
     }
+
+    @Test fun theSendHintNamesTheButtonOfEachMode() {
+        // En Vídeo 360 la cámara no tiene ☁ Enviar: el botón está en «Tu pieza».
+        assertEquals(true, "Crear modelo final en Tisma Cloud" in sendHint(videoMode = true))
+        assertEquals(false, "☁ Enviar" in sendHint(videoMode = true))
+        assertEquals(true, "☁ Enviar" in sendHint(videoMode = false))
+    }
 }

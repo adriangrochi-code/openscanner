@@ -206,6 +206,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 17:15 UTC (2026-11-10): instructions that name a button that is not there
+
+- Vídeo 360's last instruction said «¡Listo! Toca detener»; there is no «detener» button, you stop with the red
+  record button (as the guides say). Now «¡Listo! Toca el botón rojo para terminar». CaptureGuideTest.
+- The Nube tab said «pulsa ☁ Enviar en la pantalla de la cámara»; in Vídeo 360 (the default) the camera has no
+  ☁ Enviar, it is «Crear modelo final en Tisma Cloud» on «Tu pieza». The hint now follows the mode (sendHint,
+  TextsTest). Every other «Toca/Pulsa» text checked. 128 app tests pass.
+
 ## Bug pass 16:15 UTC (2026-11-10)
 
 - Sign-in with a wrong password said «La sesión venció o se cerró: entra de nuevo» (every 401 got that text).

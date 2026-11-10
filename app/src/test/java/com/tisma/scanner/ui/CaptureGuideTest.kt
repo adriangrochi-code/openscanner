@@ -16,6 +16,8 @@ class CaptureGuideTest {
         assertEquals("↑", captureInstruction(rings, Guidance(1, 1.0, 0, null, null, 2), 10, false).icon)
         assertEquals("↓", captureInstruction(rings, Guidance(1, 1.0, 0, null, null, 0), 10, false).icon)
         assertEquals(Instruction.Tone.DONE, captureInstruction(rings, Guidance(1, 1.0, 0, null, null, null), 10, false).tone)
+        // En Vídeo 360 no hay un botón «detener»: se termina con el botón rojo de grabar, como dicen las guías.
+        assertEquals("¡Listo! Toca el botón rojo para terminar", captureInstruction(rings, Guidance(1, 1.0, 0, null, null, null), 10, false).text)
         assertEquals(Instruction.Tone.WARN, captureInstruction(rings, Guidance(null, 0.0, 0, null, null, 0), 10, false).tone)
     }
 
