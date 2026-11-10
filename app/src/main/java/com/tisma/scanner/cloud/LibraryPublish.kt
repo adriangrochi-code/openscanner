@@ -53,6 +53,20 @@ object LibraryPublish {
         }
     }
 
+    const val MAX_NAME = 120
+    const val MAX_AUTHOR = 60
+    const val MAX_DESCRIPTION = 500
+
+    /** Caracteres como los cuenta el servidor (len de Python): un emoji es 1, no 2 como en String.length. */
+    fun chars(s: String): Int = s.codePointCount(0, s.length)
+
+    /** Los primeros `n` caracteres, sin partir un emoji en dos (take(n) puede dejar medio par UTF-16). */
+    fun clip(s: String, n: Int): String = if (chars(s) <= n) s else s.substring(0, s.offsetByCodePoints(0, n))
+
+    /** Si el formulario de «Publicar» se puede enviar: lo mismo que exige body. */
+    fun fieldsOk(name: String, author: String, description: String) =
+        chars(name.trim()) in 1..MAX_NAME && chars(author.trim()) in 1..MAX_AUTHOR && chars(description.trim()) <= MAX_DESCRIPTION
+
     /** Los archivos del ítem guardado que se publican, con su rol: pieza.stl siempre, el informe si está. */
     fun files(item: JSONObject): JSONArray {
         val out = JSONArray()
@@ -103,18 +117,21 @@ object LibraryPublish {
     /** El cuerpo de `POST /v1/library/models` para publicar `item` (de «Imprimir»), firmado con `key`. */
     fun body(item: JSONObject, key: PeerKey, name: String, author: String, license: String, description: String,
              thumbnailWebp: ByteArray?): JSONObject {
-        require(name.isNotBlank() && name.length <= 120) { "el nombre tiene que tener entre 1 y 120 caracteres" }
-        require(author.isNotBlank() && author.length <= 60) { "el autor tiene que tener entre 1 y 60 caracteres" }
-        require(description.length <= 500) { "la descripción tiene como mucho 500 caracteres" }
+        // Se valida lo que se envía (sin espacios a los lados) y se cuentan caracteres como Python (len): un emoji
+        // es 1, no 2 unidades UTF-16 como en String.length.
+        val name = name.trim(); val author = author.trim(); val description = description.trim()
+        require(chars(name) in 1..MAX_NAME) { "el nombre tiene que tener entre 1 y 120 caracteres" }
+        require(chars(author) in 1..MAX_AUTHOR) { "el autor tiene que tener entre 1 y 60 caracteres" }
+        require(chars(description) <= MAX_DESCRIPTION) { "la descripción tiene como mucho 500 caracteres" }
         require(LICENSES.any { it.first == license }) { "licencia desconocida: $license" }
         require(thumbnailWebp == null || thumbnailWebp.size <= MAX_THUMBNAIL) { "la miniatura pasa de 64 KB" }
         val files = files(item)
         return JSONObject()
             .put("from_file", item.getString("id"))
-            .put("name", name.trim())
-            .put("author_name", author.trim())
+            .put("name", name)
+            .put("author_name", author)
             .put("license", license)
-            .apply { if (description.isNotBlank()) put("description", description.trim()) }
+            .apply { if (description.isNotEmpty()) put("description", description) }
             .put("files", files)
             .put("manifest_signature", key.sign(canonical(files).toByteArray(Charsets.UTF_8)))
             .apply { thumbnailWebp?.let { put("thumbnail_webp", Base64.getEncoder().encodeToString(it)) } }

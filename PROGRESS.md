@@ -166,6 +166,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   CI on bd0f85a (42749126710, green; Windows green too): **closed, volume 24308 mm³ (+1.3 %)**, measures
   40.86 x 30.82 x 20.20 mm (+2.1 %, +2.7 %, +1.0 %), mat scale -0.2 %, mesh to points mean 0.019 mm. Area
   6194 mm² against the box's 5200 (+19 %): surface roughness of the dense mesh, not a fault; worth a look later.
+- «Publicar» limits (hourly bug pass, 04:20 UTC): name/author/description were checked before trimming but sent
+  trimmed, and counted in UTF-16 units while Tisma Cloud counts characters (Python len). A 120-character name
+  with a trailing space, or 31+ emojis as author, was refused; the dialog's take(n) could cut an emoji in half.
+  Now LibraryPublish.chars/clip/fieldsOk, shared by body and the dialog. Test: limitsCountWhatIsSent…
 
 ## Open for the beta
 

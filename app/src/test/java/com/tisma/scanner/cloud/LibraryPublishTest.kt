@@ -48,4 +48,24 @@ class LibraryPublishTest {
             assertTrue(runCatching(bad).isFailure)
         }
     }
+
+    @Test fun limitsCountWhatIsSentAndCharactersAsTheServerDoes() {
+        val key = LibraryPublish.PeerKey.create()
+        // 120 caracteres y un espacio al final: se envía sin el espacio, así que entra.
+        val body = LibraryPublish.body(item, key, "a".repeat(120) + " ", " Ana ", "MIT", " hola ", null)
+        assertEquals("a".repeat(120), body.getString("name"))
+        assertEquals("Ana", body.getString("author_name"))
+        assertEquals("hola", body.getString("description"))
+        // 60 emojis: 60 caracteres para el servidor (len de Python), 120 unidades UTF-16 en Kotlin.
+        val emoji = "\uD83D\uDD27".repeat(60)
+        assertEquals(emoji, LibraryPublish.body(item, key, "x", emoji, "MIT", "", null).getString("author_name"))
+        assertTrue(runCatching { LibraryPublish.body(item, key, "x", emoji + "a", "MIT", "", null) }.isFailure)
+        assertTrue(runCatching { LibraryPublish.body(item, key, "a".repeat(121), "Ana", "MIT", "", null) }.isFailure)
+        assertTrue(runCatching { LibraryPublish.body(item, key, "   ", "Ana", "MIT", "", null) }.isFailure)
+        // El formulario recorta sin partir un emoji, y acepta lo mismo que body.
+        assertEquals(emoji, LibraryPublish.clip(emoji + "\uD83D\uDD27", 60))
+        assertEquals("ab", LibraryPublish.clip("ab", 60))
+        assertTrue(LibraryPublish.fieldsOk("a".repeat(120) + " ", emoji, ""))
+        assertTrue(!LibraryPublish.fieldsOk(" ", "Ana", ""))
+    }
 }

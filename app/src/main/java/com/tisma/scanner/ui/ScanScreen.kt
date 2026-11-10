@@ -1044,7 +1044,7 @@ private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, 
     var license by remember { mutableStateOf(licenses.first().first) }
     var description by remember { mutableStateOf("") }
     var choosing by remember { mutableStateOf(false) }
-    val ok = name.isNotBlank() && name.length <= 120 && author.isNotBlank() && author.length <= 60 && description.length <= 500
+    val ok = com.tisma.scanner.cloud.LibraryPublish.fieldsOk(name, author, description)
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onCancel,
         containerColor = Tisma.Bar,
@@ -1052,8 +1052,8 @@ private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, 
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text("Cualquiera podrá verla e imprimirla, con la licencia que elijas.", color = Tisma.TextDim, fontSize = 13.sp)
-                TextSetting("Nombre", name, "Engranaje", false) { name = it.take(120) }
-                TextSetting("Autor", author, "Tu nombre", false) { author = it.take(60) }
+                TextSetting("Nombre", name, "Engranaje", false) { name = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_NAME) }
+                TextSetting("Autor", author, "Tu nombre", false) { author = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_AUTHOR) }
                 Box {
                     SecondaryButton("Licencia: " + licenses.first { it.first == license }.second, Modifier.fillMaxWidth()) { choosing = true }
                     androidx.compose.material3.DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
@@ -1062,7 +1062,7 @@ private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, 
                         }
                     }
                 }
-                TextSetting("Descripción (opcional)", description, "Medidas, material, para qué sirve…", false) { description = it.take(500) }
+                TextSetting("Descripción (opcional)", description, "Medidas, material, para qué sirve…", false) { description = com.tisma.scanner.cloud.LibraryPublish.clip(it, com.tisma.scanner.cloud.LibraryPublish.MAX_DESCRIPTION) }
             }
         },
         confirmButton = {
