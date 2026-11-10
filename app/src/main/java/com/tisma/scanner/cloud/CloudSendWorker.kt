@@ -123,12 +123,23 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             }
         }
 
+        /** La etiqueta del trabajo con el zip que manda: así la app sabe de qué escaneo es cada resultado. */
+        fun tagFor(zip: File) = "zip:" + zip.absolutePath
+
+        /**
+         * Si un trabajo (por sus etiquetas) es del escaneo `zip` que la app tiene ahora. Sin escaneo (la app recién
+         * abierta) vale cualquiera: es el último envío. Uno sin etiqueta de zip (de una versión anterior) sólo entonces.
+         */
+        fun isFor(tags: Set<String>, zip: File?): Boolean =
+            zip == null || tagFor(zip) in tags
+
         /** Pone el envío en cola: uno a la vez; si ya hay uno en curso, sigue ése. */
         fun enqueue(ctx: Context, zip: File, url: String) {
             val req = OneTimeWorkRequestBuilder<CloudSendWorker>()
                 .setInputData(workDataOf(KEY_ZIP to zip.path, KEY_URL to url))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+                .addTag(tagFor(zip))
                 .build()
             WorkManager.getInstance(ctx).enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.KEEP, req)
         }

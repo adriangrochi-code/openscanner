@@ -1024,10 +1024,13 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             if (s.cloudProgress >= 0f) LinearProgressIndicator(progress = { s.cloudProgress }, modifier = Modifier.fillMaxWidth().height(4.dp),
                 color = Tisma.Purple, trackColor = Tisma.Field)
             val zip = s.lastZip
+            // Con la pieza de este escaneo ya bajada, no se vuelve a mandar (otro trabajo, otro escaneo del plan).
+            val canSend = zip != null && !s.cloudBusy && !s.busy && s.cloudStl == null
             Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(10.dp))
-                .background(if (zip != null && !s.cloudBusy && !s.busy) Tisma.Purple else Tisma.Field)
-                .clickable(enabled = zip != null && !s.cloudBusy && !s.busy) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
-                Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Enviando a Tisma Cloud…"; else -> "Crear modelo final en Tisma Cloud" },
+                .background(if (canSend) Tisma.Purple else Tisma.Field)
+                .clickable(enabled = canSend) { vm.sendToCloud() }, contentAlignment = Alignment.Center) {
+                Text(when { s.progressText.isNotEmpty() -> s.progressText; s.busy -> "Guardando…"; s.cloudBusy -> "Enviando a Tisma Cloud…"
+                    s.cloudStl != null -> "✓ Modelo final listo"; else -> "Crear modelo final en Tisma Cloud" },
                     color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
             // Sin servidor: el modelo se calcula en el propio móvil (calidad media, escala real de la INS).

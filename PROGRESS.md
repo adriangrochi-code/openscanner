@@ -206,6 +206,18 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 18:15 UTC (2026-11-10): the cloud part of the previous scan
+
+- Starting a scan did not clear the cloud state: after a first cloud scan, the next scan's «Tu pieza» showed the
+  previous part («✓ Pieza lista», «Pieza STL») and its «Imprimir»/«Publicar» acted on the OLD job; in Fotos mode
+  the stale «⬢ Pieza STL» took the place of «☁ Enviar», so the new scan could not be sent from the camera. And
+  WorkManager's watcher could re-apply an old job's result at any time. Now each send is tagged with its zip
+  (CloudSendWorker.tagFor/isFor), the watcher skips jobs of another zip, and starting a scan clears the cloud and
+  library state. Also: with this scan's part back, «Crear modelo final» reads «✓ Modelo final listo» and does not
+  send again (it would spend another scan of the plan); sendToCloud refuses too.
+  Test: CloudSendWorkerTagTest. **Not unit-tested**: the reset in startScan and the disabled button (the view model
+  needs the camera); to check on a phone: two scans in a row with a cloud send each. 130 app tests pass.
+
 ## Bug pass 17:15 UTC (2026-11-10): instructions that name a button that is not there
 
 - Vídeo 360's last instruction said «¡Listo! Toca detener»; there is no «detener» button, you stop with the red

@@ -558,7 +558,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      */
     override fun sendToCloud() {
         val zip = _state.value.lastZip ?: return
-        if (_state.value.cloudBusy) return
+        // Ya enviándose, o con la pieza de este escaneo ya bajada: mandarlo otra vez gastaría otro escaneo del plan.
+        if (_state.value.cloudBusy || _state.value.cloudStl != null) return
         _state.update { it.copy(cloudStatus = "Conectando con ${it.cloudUrl}…", cloudProgress = -1f, cloudBusy = true) }
         com.tisma.scanner.cloud.CloudSendWorker.enqueue(getApplication(), zip, _state.value.cloudUrl)
     }
@@ -649,6 +650,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cloudJob = viewModelScope.launch {
             androidx.work.WorkManager.getInstance(getApplication()).getWorkInfosForUniqueWorkFlow(W.UNIQUE).collect { infos ->
                 val info = infos.lastOrNull() ?: return@collect
+                // El resultado de otro escaneo (el anterior) no es el de éste: ni su pieza, ni «Imprimir»/«Publicar».
+                if (!W.isFor(info.tags, _state.value.lastZip)) return@collect
                 // Un trabajo terminado sigue en el historial de WorkManager: lo que se hace una sola vez
                 // (cerrar la sesión vencida, el registro) se hace sólo la primera vez que se ve.
                 val first = prefs.getString("cloud_seen", null) != info.id.toString()
@@ -1687,7 +1690,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         gps.startLogging(java.io.File(s.dir, "gps.csv").bufferedWriter())
         session = s
         _state.update {
+            // Un escaneo nuevo no tiene pieza de la nube todavía: fuera la del anterior (y su «Imprimir»/«Publicar»).
             it.copy(scanning = true, images = 0, triggers = 0, lastZip = null, analyzed = 0, blurry = 0,
+                cloudStl = null, cloudJobId = null, cloudStatus = "", cloudProgress = -1f,
+                libraryKept = false, libraryPublished = false, libraryStatus = "",
                 coverage = coverage.snapshot(), coveragePct = 0.0, hints = coverage.hints(), ready = false)
         }
         log("Escaneo iniciado: ${s.dir.name} · bloqueo 3A=${cameras.lock3A} · foco fijo=${cameras.lockFocus} · auto=${_state.value.autoTrigger}")
