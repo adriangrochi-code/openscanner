@@ -85,6 +85,10 @@ jobs:
           for got, real in zip(dims, (40, 30, 20)):
               assert abs(got / real - 1) < 0.15, (dims, "far from 40 x 30 x 20 mm")
           print("measures", dims)
+          # Printable: closed, with the volume of the box (24000 mm³; the measures above allow 15 %).
+          assert s["watertight"] and s["volume_mm3"], ("not closed", s.get("watertight"), s.get("volume_mm3"))
+          assert abs(s["volume_mm3"] / 24000 - 1) < 0.15, ("volume", s["volume_mm3"])
+          print("closed, volume", s["volume_mm3"], "mm3")
           # The synthetic scan is on the printed mat (make_scan_mat.py, A5) and its poses are exact: the scale must
           # come from the mat, and the INS line ("% vs la elegida") is then the mat scale's error.
           import re

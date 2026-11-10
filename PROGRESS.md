@@ -153,9 +153,16 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   simplification opens holes and leaves crossed edges. Now it simplifies first, then closes and smooths.
   boundary_loops also follows a border through a pinched vertex and edges in crossed directions.
   tools/test_postprocess.py: a box on a table simplified to 8 k triangles stays closed, volume within 5 %.
-  To confirm on CI: scan-e2e should now print watertight with a volume.
-- Seen, not fixed yet: the reconstructed box narrows towards its base (filled 73 % at z = 0 against 96 % at the
-  top, in that pieza.ply): the zone the camera hardly sees against the mat. Worth a look at the plane removal.
+  CI on 159a8e9 (42743873886): all green, measures 40.63 x 30.63 x 20.05 mm, mat scale -0.2 %, but still not
+  closed: 3371 open edges in one border, and 10 edges in 4 faces.
+- Second fix (this pass): that border was the base. Near the mat the walls are missing up to 13 mm (the
+  "narrowing" seen before): the base border ran along the walls at 0-13.6 mm, 630 mm long, so it exceeded the
+  cap limit (4 x extent), and the lowest-border rule had flattened a small hole instead. Now the base is the
+  border with the widest footprint, and it goes straight down to Z = 0 (a vertical skirt, skirt_to_floor) and is
+  capped flat there, whatever its length. The 10 edges in 4 faces were fans over holes whose border passes
+  twice through a vertex; simple_loops splits those first. On the CI mesh the footprint is full from z = 0 up
+  (40.6 x 30.6 at the bottom). Test: walls missing 2-13 mm along the base (fails on the old code, passes).
+  scan-e2e.yml now asserts watertight with a volume within 15 % of 24000 mm³.
 
 ## Open for the beta
 

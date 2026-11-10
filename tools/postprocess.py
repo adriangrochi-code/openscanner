@@ -164,6 +164,52 @@ def boundary_loops(tris):
     return loops
 
 
+def simple_loops(loop):
+    """Parte un borde que pasa dos veces por un vértice (un pellizco) en bordes simples: un abanico sobre el borde
+    entero cubriría dos veces la arista de ese vértice al centro (4 caras en una arista: no queda cerrada)."""
+    out, path, at = [], [], {}
+    for v in loop:
+        if v in at:
+            i = at[v]
+            sub = path[i:]
+            for u in sub[1:]:
+                del at[u]
+            del path[i + 1:]
+            if len(sub) >= 3:
+                out.append(sub)
+        else:
+            at[v] = len(path)
+            path.append(v)
+    if len(path) >= 3:
+        out.append(path)
+    return out
+
+
+def skirt_to_floor(V, loop, new_v, new_t, snap=0.1):
+    """
+    Extiende el borde `loop` en vertical hasta Z = 0: por cada vértice, uno nuevo debajo (en new_v) y una pared
+    de dos triángulos por arista (en new_t), con el sentido del borde. Los vértices que ya están a menos de
+    `snap` mm del suelo se bajan a Z = 0 y no llevan pared. Devuelve el borde de abajo, para taparlo.
+    """
+    floor = []
+    for k in loop:                              # uno por paso, aunque el borde pase dos veces por un vértice
+        if V[k, 2] <= snap:
+            V[k, 2] = 0.0
+            floor.append(k)
+        else:
+            floor.append(len(V) + len(new_v))
+            new_v.append([V[k, 0], V[k, 1], 0.0])
+    n = len(loop)
+    for i in range(n):
+        a, b, a2, b2 = loop[i], loop[(i + 1) % n], floor[i], floor[(i + 1) % n]
+        # La cara de la malla tiene la arista a→b; la pared la recorre b→a y deja abajo b2→a2, como la tapa.
+        if a2 != a:
+            new_t.append([b, a, a2])
+        if b2 != b:
+            new_t.append([b, a2, b2])
+    return floor
+
+
 def cap_holes(mesh, max_perimeter, flatten_lowest=False):
     """
     Cierra cada agujero con un abanico desde su centro (la orientación sigue al borde).
@@ -173,19 +219,27 @@ def cap_holes(mesh, max_perimeter, flatten_lowest=False):
     V = np.asarray(mesh.vertices).copy(); T = np.asarray(mesh.triangles).copy()
     new_v, new_t, closed = [], [], 0
     loops = boundary_loops(T)
+    base = None
     if flatten_lowest and loops:
-        # El borde más bajo y largo es el contorno de la base (lo que no vio la cámara, sobre la
-        # mesa): se baja a Z = 0 para que la pieza apoye y se tapa plano.
-        base = min(loops, key=lambda l: V[l, 2].mean() - 1e-3 * len(l))
-        V[base, 2] = 0.0
-    for loop in loops:
-        P = V[loop]
-        if np.sum(np.linalg.norm(P - np.roll(P, -1, 0), axis=1)) > max_perimeter:
-            continue
-        c = len(V) + len(new_v)
-        new_v.append(P.mean(0))
-        for a, b in zip(loop, loop[1:] + loop[:1]):
-            new_t.append([b, a, c])             # sentido inverso al del borde: cara hacia fuera
+        # La base es el borde con el contorno más ancho en planta (lo que no vio la cámara, sobre la mesa). Cerca
+        # del tapete faltan a veces varios mm de pared (en CI, el borde subía hasta 13 mm por un lado): se baja
+        # en vertical hasta Z = 0 con una «falda» y se tapa plano allí, sea cual sea su largo.
+        def footprint(l):
+            P = V[l, :2]
+            return np.prod(P.max(0) - P.min(0))
+        base = max(range(len(loops)), key=lambda i: footprint(loops[i]))
+    for i, loop in enumerate(loops):
+        if i == base:
+            loop = skirt_to_floor(V, loop, new_v, new_t)
+        else:
+            P = V[loop]
+            if np.sum(np.linalg.norm(P - np.roll(P, -1, 0), axis=1)) > max_perimeter:
+                continue
+        for sub in simple_loops(loop):
+            c = len(V) + len(new_v)
+            new_v.append(np.mean([V[k] if k < len(V) else new_v[k - len(V)] for k in sub], axis=0))
+            for a, b in zip(sub, sub[1:] + sub[:1]):
+                new_t.append([b, a, c])         # sentido inverso al del borde: cara hacia fuera
         closed += 1
     if new_v:
         mesh.vertices = o3d.utility.Vector3dVector(np.vstack([V, new_v]))
