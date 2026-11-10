@@ -43,13 +43,29 @@ except ImportError:  # pragma: no cover
 
 # --------------------------------------------------------------------------- carga
 
+# Lo más que puede ocupar un escaneo descomprimido: las fotos (JPEG) casi no se comprimen, así que un zip que
+# crece más de 20 veces es otra cosa (una «bomba zip» llenaría el disco del servidor).
+UNZIP_MAX_RATIO = 20
+UNZIP_MAX_BYTES = 40 * 1024 ** 3
+
+
 def load_session(path: Path, work: Path) -> Path:
-    if path.suffix == ".zip":
-        with zipfile.ZipFile(path) as z:
-            z.extractall(work / "raw")
-        dirs = [d for d in (work / "raw").iterdir() if d.is_dir()]
-        return dirs[0]
-    return path
+    """La carpeta del escaneo: la de session.json (la menos profunda; sin __MACOSX, que agrega el Finder al volver a
+    comprimir). Antes se tomaba la primera carpeta del zip, que podía ser __MACOSX o no existir."""
+    if path.suffix != ".zip":
+        return path
+    with zipfile.ZipFile(path) as z:
+        total = sum(i.file_size for i in z.infolist())
+        limit = min(UNZIP_MAX_BYTES, UNZIP_MAX_RATIO * path.stat().st_size + 64 * 1024 ** 2)
+        if total > limit:
+            raise SystemExit(f"El zip se descomprime a {total / 1e9:.1f} GB, más de lo que puede ocupar un "
+                             f"escaneo ({limit / 1e9:.1f} GB): no es un escaneo de Tisma Scanner")
+        z.extractall(work / "raw")   # zipfile ya quita «..» y rutas absolutas de los nombres
+    found = sorted((p for p in (work / "raw").rglob("session.json") if "__MACOSX" not in p.parts),
+                   key=lambda p: (len(p.parts), str(p)))
+    if not found:
+        raise SystemExit("El zip no trae session.json: no es un escaneo de Tisma Scanner")
+    return found[0].parent
 
 
 def read_frames(scan: Path):

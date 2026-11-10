@@ -1,5 +1,6 @@
 """Pruebas rápidas de reconstruct.py que no necesitan COLMAP:  python3 tools/test_reconstruct.py"""
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -215,6 +216,40 @@ def test_every_paper_size_has_the_same_chessboard():
         # The same chessboard on every sheet: same squares and markers, more of them on a bigger sheet.
         assert (meta["marker_mm"], meta["dictionary"]) == (rc.STANDARD_MAT["marker_mm"], rc.STANDARD_MAT["dictionary"])
         assert meta["square_mm"] == 20.0 and len(meta["markers_mm"]) >= 12, paper
+
+def test_load_session_finds_the_scan_folder_and_refuses_a_zip_bomb():
+    """La carpeta del escaneo es la de session.json, aunque el zip traiga __MACOSX (Finder) o no tenga carpeta; un
+    zip que se descomprime a mucho más de lo que ocupa (bomba zip) se rechaza antes de descomprimir."""
+    import zipfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        cases = {"mac.zip": ["__MACOSX/scan_1/._session.json", "__MACOSX/scan_1/session.json",
+                             "scan_1/session.json", "scan_1/frames.csv"],
+                 "plano.zip": ["session.json", "frames.csv"]}
+        for name, entries in cases.items():
+            with zipfile.ZipFile(d / name, "w") as z:
+                for e in entries:
+                    z.writestr(e, "{}")
+            scan = rc.load_session(d / name, d / ("w_" + name))
+            assert (scan / "session.json").exists() and (scan / "frames.csv").exists(), (name, scan)
+            assert "__MACOSX" not in scan.parts
+        with zipfile.ZipFile(d / "nada.zip", "w") as z:
+            z.writestr("otra/cosa.txt", "x")
+        try:
+            rc.load_session(d / "nada.zip", d / "w_nada")
+            assert False, "sin session.json"
+        except SystemExit as e:
+            assert "session.json" in str(e)
+        with zipfile.ZipFile(d / "bomba.zip", "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("scan/session.json", "{}")
+            z.writestr("scan/ceros.bin", bytes(200 * 1024 ** 2))   # 200 MB de ceros: unos 200 KB comprimidos
+        try:
+            rc.load_session(d / "bomba.zip", d / "w_bomba")
+            assert False, "bomba aceptada"
+        except SystemExit as e:
+            assert "no es un escaneo" in str(e)
+        assert not (d / "w_bomba" / "raw").exists()
+
 
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:

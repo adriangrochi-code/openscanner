@@ -188,6 +188,12 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   Command line and summary unchanged. Test: two jobs side by side (fails on the old code). 21 pipeline tests pass.
   Server session (08:20): Tisma Cloud's nodes give -o <work>/<job>/scan-out and delete each job's folder, so the
   mix-up could not happen there; the fix matters for tisma_scan run by hand or by other nodes.
+- Opening the scan zip (hourly bug pass, 09:15 UTC): load_session took the first folder in the zip as the scan.
+  A scan zipped again on a Mac (__MACOSX first) or zipped without a folder failed or took the wrong folder. Now
+  it is the folder of session.json (the shallowest, never __MACOSX), and a zip without one is a clear error.
+  Also no limit on what a zip expands to: a zip bomb could fill the node's disk. Now refused before extracting
+  if it expands to more than 20 x its size + 64 MB (photos barely compress) or 40 GB. Test with all four cases
+  (fails on the old code). 22 pipeline tests pass. (zipfile already strips ".." and absolute paths.)
 
 ## Open for the beta
 
