@@ -91,7 +91,7 @@ class CloudClientServerTest {
             assertEquals(401, (wrong as CloudClient.HttpError).code)
             val bad = runCatching { CloudClient(base, "tu_malo").create(10, "x") }.exceptionOrNull()
             assertEquals(401, (bad as CloudClient.HttpError).code)
-            assertTrue(bad.message!!.contains("entrá de nuevo"))
+            assertTrue(bad.message!!.contains("entra de nuevo"))
 
             val client = CloudClient(base, login!!.first, retryBaseMs = 50)
             val (id, size) = client.create(zip.length(), "e2e.zip")

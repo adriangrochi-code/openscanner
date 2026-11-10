@@ -134,16 +134,33 @@ def boundary_loops(tris):
     nxt = {}
     for a, b in border:
         nxt.setdefault(a, []).append(b)
-    loops, used = [], set()
+    # Se sigue arista por arista (no vértice por vértice): un borde puede pasar dos veces por el mismo vértice
+    # (un «pellizco», que deja la simplificación de la malla), y seguirlo por vértices lo dejaba abierto.
+    loops, failed = [], []
     for start in list(nxt):
-        if start in used:
-            continue
-        loop, v = [], start
-        while v in nxt and nxt[v] and v not in used:
-            used.add(v); loop.append(v)
-            v = nxt[v].pop()
-        if len(loop) >= 3:
-            loops.append(loop)
+        while nxt.get(start):
+            loop, v = [start], nxt[start].pop()
+            while v != start and nxt.get(v):
+                loop.append(v)
+                v = nxt[v].pop()
+            if v == start and len(loop) >= 3:
+                loops.append(loop)
+            elif v != start:
+                failed += list(zip(loop, loop[1:] + [v]))  # aristas de un recorrido que no cerró
+    # Lo que queda: bordes con aristas en sentidos cruzados (un triángulo dado vuelta). Se siguen sin sentido.
+    left = {}
+    for a, b in failed + [(a, b) for a, bs in nxt.items() for b in bs]:
+        left.setdefault(a, []).append(b); left.setdefault(b, []).append(a)
+    for start in list(left):
+        while left.get(start):
+            loop, prev, v = [start], start, left[start][0]
+            left[start].remove(v); left[v].remove(start)
+            while v != start and left.get(v):
+                loop.append(v)
+                prev, v = v, left[v][0]
+                left[prev].remove(v); left[v].remove(prev)
+            if v == start and len(loop) >= 3:
+                loops.append(loop)
     return loops
 
 
@@ -299,6 +316,14 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     tri_clusters = np.asarray(tri_clusters); counts = np.asarray(counts)
     if len(counts):
         mesh.remove_triangles_by_mask(tri_clusters != counts.argmax()); mesh.remove_unreferenced_vertices()
+    # Simplificar antes de cerrar: la simplificación abre agujeritos y deja aristas cruzadas en una malla ya
+    # cerrada (en la prueba de CI, 1,3 M → 500 k triángulos: 278 aristas abiertas, sin volumen).
+    if len(mesh.triangles) > max_triangles:
+        mesh = mesh.simplify_quadric_decimation(max_triangles)
+        mesh.remove_degenerate_triangles(); mesh.remove_duplicated_triangles()
+        mesh.remove_duplicated_vertices(); mesh.remove_unreferenced_vertices()
+        if not mesh.is_edge_manifold():
+            mesh.remove_non_manifold_edges()
     # Cerrar los agujeros que deja el recorte (la base y huecos pequeños) para que sea imprimible.
     # (El fill_holes de Open3D creaba vértices a metros de la pieza con bordes no limpios.)
     if closed_base:
@@ -306,8 +331,6 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         log(f"base plana en Z = 0 y agujeros cerrados: {n_capped}")
     if smooth > 0:
         mesh = mesh.filter_smooth_taubin(number_of_iterations=smooth)
-    if len(mesh.triangles) > max_triangles:
-        mesh = mesh.simplify_quadric_decimation(max_triangles)
     mesh.compute_vertex_normals(); mesh.compute_triangle_normals()
 
     # Alinear la pieza con sus ejes en el plano (rectángulo de área mínima de la huella), lado

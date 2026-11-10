@@ -621,7 +621,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 libraryKept = r.isSuccess || it.libraryKept,
                 libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e ->
                     val code = (e as? com.tisma.scanner.cloud.CloudClient.HttpError)?.code
-                    "✗ " + if (code == 429) "Llegaste al límite de publicaciones de hoy (20): probá mañana" else (e.message ?: "no se pudo publicar") })) }
+                    "✗ " + if (code == 429) "Llegaste al límite de publicaciones de hoy (20): prueba mañana" else (e.message ?: "no se pudo publicar") })) }
         }
     }
 

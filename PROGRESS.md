@@ -144,6 +144,19 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   certified; a test master needs TISMA_LIBRARY_UNCERTIFIED=on. No G-code in the library (the app only publishes
   pieza.stl and its report).
 
+## Bug pass (owner's rule: part of every 3 h on bugs and optimizing; 2026-11-10)
+
+- Texts: the app talked to the person as tú except 8 messages (mostly the new cloud ones) in voseo
+  ("Entrá", "probá", "escaneá", "borrá"); now all tú, as the docs. tisma_scan's error_es too ("Prueba con…").
+- Measures: the CPU e2e part came out not closed, without volume (pieza.ply from run 42650053332: 278 open edges,
+  27 boundaries). Postprocess simplified the mesh (1.3 M → 500 k triangles) after closing it, and the
+  simplification opens holes and leaves crossed edges. Now it simplifies first, then closes and smooths.
+  boundary_loops also follows a border through a pinched vertex and edges in crossed directions.
+  tools/test_postprocess.py: a box on a table simplified to 8 k triangles stays closed, volume within 5 %.
+  To confirm on CI: scan-e2e should now print watertight with a volume.
+- Seen, not fixed yet: the reconstructed box narrows towards its base (filled 73 % at z = 0 against 96 % at the
+  top, in that pieza.ply): the zone the camera hardly sees against the mat. Worth a look at the plane removal.
+
 ## Open for the beta
 
 - "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the

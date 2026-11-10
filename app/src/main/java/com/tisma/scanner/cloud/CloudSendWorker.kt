@@ -38,7 +38,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         val prefs = applicationContext.getSharedPreferences("tisma", Context.MODE_PRIVATE)
         val token = prefs.getString("cloud_token", "") ?: ""
         val url = inputData.getString(KEY_URL) ?: ""
-        if (token.isBlank()) return@withContext Result.failure(error("Entrá con tu cuenta de Tisma Cloud (⚙ → Nube)", 401))
+        if (token.isBlank()) return@withContext Result.failure(error("Entra con tu cuenta de Tisma Cloud (⚙ → Nube)", 401))
         val store = object : CloudSend.Store {
             override fun get(key: String) = prefs.getString(key, null)
             override fun put(key: String, value: String?) {

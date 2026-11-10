@@ -24,7 +24,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     private val base = normalize(baseUrl)
 
     init {
-        require(token.isNotBlank()) { "Entrá con tu cuenta de Tisma Cloud (⚙ → Nube)" }
+        require(token.isNotBlank()) { "Entra con tu cuenta de Tisma Cloud (⚙ → Nube)" }
     }
 
     /** Un error del servidor, con su texto (`detail`) para mostrar. */
@@ -33,11 +33,11 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
             fun describe(code: Int, body: JSONObject?): String {
                 val detail = body?.optString("detail")?.takeIf { it.isNotBlank() }
                 return when {
-                    code == 401 -> "La sesión venció o se cerró: entrá de nuevo"
+                    code == 401 -> "La sesión venció o se cerró: entra de nuevo"
                     code == SERVER_FULL -> "Tisma Cloud no tiene lugar ahora: el envío se reintenta solo más tarde"
-                    code == 410 -> "La pieza ya no está en la nube (se guarda 72 h): escaneá de nuevo"
-                    code == 413 && detail == null -> "Tu cuenta llegó al límite de archivos: borrá alguno de Mi biblioteca"
-                    code == 429 && detail == null -> "Demasiados pedidos seguidos: probá más tarde"
+                    code == 410 -> "La pieza ya no está en la nube (se guarda 72 h): escanea de nuevo"
+                    code == 413 && detail == null -> "Tu cuenta llegó al límite de archivos: borra alguno de Mi biblioteca"
+                    code == 429 && detail == null -> "Demasiados pedidos seguidos: prueba más tarde"
                     detail != null -> detail
                     else -> "HTTP $code"
                 }

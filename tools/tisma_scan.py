@@ -245,7 +245,7 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
             if isinstance(ex, KeyboardInterrupt):
                 raise
             raise Failed("reconstruction_failed", f"The part could not be rebuilt from these photos: {ex}"[:500],
-                         "No se pudo armar la pieza con estas fotos. Probá con más fotos, más textura en la pieza "
+                         "No se pudo armar la pieza con estas fotos. Prueba con más fotos, más textura en la pieza "
                          "o el tapete de escaneo.") from ex
     collect(work, out)
     if not (out / "pieza.stl").exists():
