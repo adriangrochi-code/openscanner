@@ -213,6 +213,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 - Found while fixing it: no workflow ran test_postprocess.py (all of today's mesh fixes) or the kit test, and only
   the Windows job ran test_reconstruct.py and test_tisma_scan.py. scan-e2e.yml now runs `pytest tools/` before
   the full scan (pillow and pytest added there).
+  CI on 4f3cfcb: Windows green again (42842917880); scan-e2e's «Pruebas del pipeline» step green on Linux.
 
 ## Bug pass 14:20 UTC (2026-11-10): licence notices
 
