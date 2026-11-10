@@ -67,7 +67,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
     }
 
     private fun retryOrFail(e: Exception): Result =
-        if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure(error(e.message ?: "sin conexión"))
+        if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure(error(CloudClient.userMessage(e)))
 
     private fun error(text: String, code: Int = 0): Data = workDataOf(KEY_ERROR to text, KEY_CODE to code)
 

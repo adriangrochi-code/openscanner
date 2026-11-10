@@ -101,6 +101,22 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     }
 
     companion object {
+        /**
+         * Lo que se le muestra a la persona de un fallo al hablar con Tisma Cloud: los errores de red de Java llegan en
+         * inglés («Unable to resolve host…», «failed to connect…», «timeout»), y sin red era eso lo que se veía al
+         * entrar, en «Imprimir» o «Publicar». Los mensajes propios (ya en español) pasan tal cual.
+         */
+        fun userMessage(e: Throwable): String = when (e) {
+            is HttpError -> e.message ?: "HTTP ${e.code}"
+            is java.net.UnknownHostException, is java.net.ConnectException, is java.net.NoRouteToHostException,
+            is java.net.PortUnreachableException -> "Sin conexión con Tisma Cloud: revisa la red e inténtalo de nuevo"
+            is java.net.SocketTimeoutException -> "Tisma Cloud tarda en responder: inténtalo de nuevo en un rato"
+            is javax.net.ssl.SSLException -> "No se pudo hacer una conexión segura con Tisma Cloud (¿están bien la fecha y la hora del teléfono?)"
+            is java.io.EOFException, is java.net.ProtocolException, is java.net.SocketException ->
+                "Se cortó la conexión con Tisma Cloud: inténtalo de nuevo"
+            else -> e.message?.takeIf { it.isNotBlank() } ?: "No se pudo hablar con Tisma Cloud"
+        }
+
         /** Tisma Cloud sin lugar en disco (507, con Retry-After): la subida se guarda y se sigue más tarde. */
         const val SERVER_FULL = 507
 

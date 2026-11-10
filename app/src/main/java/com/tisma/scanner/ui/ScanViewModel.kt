@@ -540,7 +540,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 prefs.edit().putString("cloud_token", token).putString("cloud_email", mail).apply()
                 _state.update { it.copy(cloudKey = token, cloudEmail = mail, cloudStatus = "✓ Sesión iniciada", cloudBusy = false) }
             } catch (e: Exception) {
-                _state.update { it.copy(cloudStatus = "✗ ${e.message ?: e.javaClass.simpleName}", cloudBusy = false) }
+                _state.update { it.copy(cloudStatus = "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(e), cloudBusy = false) }
             }
         }
     }
@@ -578,7 +578,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { keptItem(job, _state.value.cloudStl?.nameWithoutExtension?.removeSuffix("_pieza")) }
             _state.update { it.copy(libraryBusy = false, libraryKept = r.isSuccess || it.libraryKept,
-                libraryStatus = r.fold({ "✓ En Mi biblioteca: «${it.optString("name")}»" }, { "✗ ${it.message}" })) }
+                libraryStatus = r.fold({ "✓ En Mi biblioteca: «${it.optString("name")}»" }, { "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(it) })) }
             r.onSuccess { log("Mi biblioteca: ${it.optString("id")}") }
         }
     }
@@ -601,7 +601,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         viewModelScope.launch(Dispatchers.IO) {
             val r = runCatching { com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey).libraryName() }
             _state.update { it.copy(libraryName = r.getOrNull(), libraryNameChecked = r.isSuccess,
-                libraryStatus = r.exceptionOrNull()?.let { e -> "✗ " + (e.message ?: "sin conexión") } ?: it.libraryStatus) }
+                libraryStatus = r.exceptionOrNull()?.let { e -> "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(e) } ?: it.libraryStatus) }
         }
     }
 
@@ -635,7 +635,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             }
             _state.update { it.copy(libraryBusy = false, libraryPublished = r.isSuccess || it.libraryPublished,
                 libraryKept = r.isSuccess || it.libraryKept,
-                libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e -> "✗ " + (e.message ?: "No se pudo publicar") })) }
+                libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e -> "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(e) })) }
             r.onFailure { e ->
                 (e as? com.tisma.scanner.cloud.CloudClient.HttpError)?.body?.optString("detail")?.takeIf { it.isNotBlank() }
                     ?.let { log("Publicar: HTTP ${e.code} ${it}") }
