@@ -45,6 +45,10 @@ interface ScanActions {
     fun cloudLogout()
     /** Enviar el último escaneo a Tisma Cloud y traer la pieza. */
     fun sendToCloud()
+    /** «Imprimir»: la pieza de la nube queda en la cuenta (Mi biblioteca, en el teléfono y la PC). */
+    fun keepInLibrary() {}
+    /** «Publicar»: la pieza a la biblioteca compartida de Tisma, con nombre, autor, licencia y descripción. */
+    fun publishToLibrary(name: String, author: String, license: String, description: String) {}
     fun setAntiShakeBurst(v: Boolean)
     /** Vídeo 360 (una cámara, flujo continuo, fotogramas automáticos) o fotos sueltas. */
     fun setVideoMode(v: Boolean)

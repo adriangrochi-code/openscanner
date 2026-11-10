@@ -81,6 +81,15 @@ data class UiState(
     val cloudBusy: Boolean = false,
     /** Pieza descargada del servidor (STL en mm). */
     val cloudStl: File? = null,
+    /** El trabajo de escaneo de esa pieza en la nube (para «Imprimir» y «Publicar»). */
+    val cloudJobId: String? = null,
+    /** «Imprimir» / «Publicar»: lo que pasa ("" = nada), si está en curso, y si ya está en la cuenta / publicada. */
+    val libraryStatus: String = "",
+    val libraryBusy: Boolean = false,
+    val libraryKept: Boolean = false,
+    val libraryPublished: Boolean = false,
+    /** El autor que se propone al publicar: el último usado, o la parte del correo antes de la @. */
+    val libraryAuthor: String = "",
     // --- Velocímetro de cámara (flujo óptico + enfoque) ---
     val cameraVelocity: Boolean = true,
     /** "12 medidas/s · 0,06 m/s" o "" si no mide. */
@@ -339,6 +348,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         _state.update { it.copy(cloudUrl = prefs.getString("cloud_url", DEFAULT_CLOUD_URL) ?: DEFAULT_CLOUD_URL,
             cloudKey = prefs.getString("cloud_token", "") ?: "",
             cloudEmail = prefs.getString("cloud_email", "") ?: "") }
+        _state.update { it.copy(libraryAuthor = prefs.getString("library_author", null) ?: it.cloudEmail.substringBefore('@')) }
         runCatching { watchCloudSend() }
         _state.update {
             it.copy(
@@ -553,6 +563,84 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         com.tisma.scanner.cloud.CloudSendWorker.enqueue(getApplication(), zip, _state.value.cloudUrl)
     }
 
+    /**
+     * «Imprimir»: guarda en la cuenta la pieza del último trabajo de escaneo (sin subir nada: Tisma Cloud la toma del
+     * resultado). Queda en «Mi biblioteca» del teléfono y de la PC para imprimirla.
+     */
+    override fun keepInLibrary() {
+        val job = _state.value.cloudJobId ?: return
+        if (_state.value.libraryBusy) return
+        _state.update { it.copy(libraryBusy = true, libraryStatus = "Guardando en Mi biblioteca…") }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { keptItem(job, _state.value.cloudStl?.nameWithoutExtension?.removeSuffix("_pieza")) }
+            _state.update { it.copy(libraryBusy = false, libraryKept = r.isSuccess || it.libraryKept,
+                libraryStatus = r.fold({ "✓ En Mi biblioteca: «${it.optString("name")}»" }, { "✗ ${it.message}" })) }
+            r.onSuccess { log("Mi biblioteca: ${it.optString("id")}") }
+        }
+    }
+
+    /** El ítem guardado en la cuenta para ese trabajo (lo guarda si hace falta; repetirlo devuelve el mismo). */
+    private fun keptItem(job: String, name: String?): JSONObject {
+        val client = com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey)
+        val item = client.keepFile(job, name)
+        prefs.edit().putString("library_item_$job", item.toString()).apply()
+        return item
+    }
+
+    /**
+     * «Publicar»: la pieza a la biblioteca compartida de Tisma, desde el ítem de «Imprimir» (lo guarda si hace falta),
+     * con la miniatura dibujada en el teléfono y el manifiesto firmado con la clave de par de esta instalación.
+     */
+    override fun publishToLibrary(name: String, author: String, license: String, description: String) {
+        val job = _state.value.cloudJobId ?: return
+        if (_state.value.libraryBusy) return
+        _state.update { it.copy(libraryBusy = true, libraryStatus = "Publicando…") }
+        prefs.edit().putString("library_author", author.trim()).apply()
+        _state.update { it.copy(libraryAuthor = author.trim()) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching {
+                val client = com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey)
+                val item = keptItem(job, name)
+                val key = prefs.getString("peer_key", null)?.let { com.tisma.scanner.cloud.LibraryPublish.PeerKey.fromB64(it) }
+                    ?: com.tisma.scanner.cloud.LibraryPublish.PeerKey.create().also { prefs.edit().putString("peer_key", it.seedB64).apply() }
+                val boundFor = "peer_key_bound_" + _state.value.cloudEmail
+                if (!prefs.getBoolean(boundFor, false)) { client.registerPeerKey(key.publicB64); prefs.edit().putBoolean(boundFor, true).apply() }
+                val thumb = _state.value.cloudStl?.let { runCatching { thumbnailWebp(it) }.getOrNull() }
+                val body = com.tisma.scanner.cloud.LibraryPublish.body(item, key, name, author, license, description, thumb)
+                try {
+                    client.publishModel(body)
+                } catch (e: com.tisma.scanner.cloud.CloudClient.HttpError) {
+                    if (e.code != 409) throw e
+                    // La clave no está registrada en esta cuenta (otra sesión, la borraron): registrarla y repetir.
+                    client.registerPeerKey(key.publicB64); prefs.edit().putBoolean(boundFor, true).apply()
+                    client.publishModel(body)
+                }
+            }
+            r.onSuccess { m -> prefs.edit().putString("library_model_$job", m.optString("id")).apply(); log("Publicada: ${m.optString("id")}") }
+            _state.update { it.copy(libraryBusy = false, libraryPublished = r.isSuccess || it.libraryPublished,
+                libraryKept = r.isSuccess || it.libraryKept,
+                libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e ->
+                    val code = (e as? com.tisma.scanner.cloud.CloudClient.HttpError)?.code
+                    "✗ " + if (code == 429) "Llegaste al límite de publicaciones de hoy (20): probá mañana" else (e.message ?: "no se pudo publicar") })) }
+        }
+    }
+
+    /** Miniatura WebP (≤ 64 KB) de la pieza, dibujada en el teléfono. */
+    private fun thumbnailWebp(stl: File): ByteArray {
+        val size = 256
+        val px = com.tisma.scanner.cloud.Thumbnail.render(com.tisma.scanner.cloud.Thumbnail.readStl(stl), size)
+        val bmp = android.graphics.Bitmap.createBitmap(px, size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        @Suppress("DEPRECATION")
+        val format = if (android.os.Build.VERSION.SDK_INT >= 30) android.graphics.Bitmap.CompressFormat.WEBP_LOSSY
+            else android.graphics.Bitmap.CompressFormat.WEBP
+        for (q in listOf(85, 70, 50, 30)) {
+            val out = java.io.ByteArrayOutputStream()
+            bmp.compress(format, q, out)
+            if (out.size() <= com.tisma.scanner.cloud.LibraryPublish.MAX_THUMBNAIL) return out.toByteArray()
+        }
+        error("la miniatura no entra en 64 KB")
+    }
+
     /** Lo que muestra la app del envío a la nube, desde el trabajo de WorkManager (también tras reabrirla). */
     private fun watchCloudSend() {
         val W = com.tisma.scanner.cloud.CloudSendWorker
@@ -575,8 +663,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     androidx.work.WorkInfo.State.SUCCEEDED -> {
                         val stl = info.outputData.getString(W.KEY_STL)?.let(::File)?.takeIf { it.exists() }
                         val summary = info.outputData.getString(W.KEY_SUMMARY) ?: ""
+                        val job = info.outputData.getString(W.KEY_JOB)
                         _state.update { it.copy(cloudStatus = if (stl != null) "✓ Pieza lista $summary" else "",
-                            cloudProgress = -1f, cloudBusy = false, cloudStl = stl) }
+                            cloudProgress = -1f, cloudBusy = false, cloudStl = stl, cloudJobId = job,
+                            libraryKept = job != null && prefs.contains("library_item_$job"),
+                            libraryPublished = job != null && prefs.contains("library_model_$job")) }
                         if (first && stl != null) { log("Pieza descargada: ${stl.name} $summary"); seen() }
                     }
                     androidx.work.WorkInfo.State.FAILED -> {

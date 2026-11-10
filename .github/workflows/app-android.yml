@@ -27,6 +27,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The tests run tools/fake_tisma_cloud.py, which checks the library's Ed25519 signatures with `cryptography`.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Python del servidor de prueba
+        run: pip install -q cryptography
+
       - name: Compilar y pruebas de unidad
         run: |
           chmod +x gradlew
@@ -39,10 +47,6 @@ jobs:
           retention-days: 14
 
       # The kit for testers: the APK, the short instructions and the mat as PDF in every paper size.
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
       - name: Kit para testers
         run: |
           pip install -q numpy opencv-contrib-python-headless pillow

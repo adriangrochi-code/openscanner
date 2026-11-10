@@ -35,6 +35,9 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 return when {
                     code == 401 -> "La sesión venció o se cerró: entrá de nuevo"
                     code == SERVER_FULL -> "Tisma Cloud no tiene lugar ahora: el envío se reintenta solo más tarde"
+                    code == 410 -> "La pieza ya no está en la nube (se guarda 72 h): escaneá de nuevo"
+                    code == 413 && detail == null -> "Tu cuenta llegó al límite de archivos: borrá alguno de Mi biblioteca"
+                    code == 429 && detail == null -> "Demasiados pedidos seguidos: probá más tarde"
                     detail != null -> detail
                     else -> "HTTP $code"
                 }
@@ -185,6 +188,33 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 failures = backoff(failures)
             }
         }
+    }
+
+    // --- Mi biblioteca y biblioteca compartida (p2p_library.md, regla 7 bis) ---
+
+    /**
+     * «Imprimir»: guarda la pieza de un trabajo de escaneo terminado en la cuenta (privada; aparece en «Mi
+     * biblioteca» del teléfono y de la PC). Sin subir nada: el servidor la toma del resultado del trabajo. Repetirlo
+     * devuelve el mismo ítem (200). 410: el resultado ya no está (se guarda 72 h); 413: sin cuota de archivos.
+     */
+    fun keepFile(scanJob: String, name: String? = null): JSONObject {
+        val body = JSONObject().put("scan_job", scanJob).apply { if (!name.isNullOrBlank()) put("name", name.trim()) }
+        val (code, j) = request("POST", "/v1/files", body.toString().toByteArray())
+        if ((code != 200 && code != 201) || j == null) throw HttpError(code, j)
+        return j
+    }
+
+    /** Registra en la cuenta la clave de par de esta instalación (una vez), para firmar lo que publica. */
+    fun registerPeerKey(publicKeyB64: String) {
+        val (code, j) = request("POST", "/v1/library/peer-key", JSONObject().put("public_key", publicKeyB64).toString().toByteArray())
+        if (code != 200 && code != 201) throw HttpError(code, j)
+    }
+
+    /** «Publicar»: `POST /v1/library/models` con el cuerpo de LibraryPublish.body. Devuelve la entrada (`id` lm_…). */
+    fun publishModel(body: JSONObject): JSONObject {
+        val (code, j) = request("POST", "/v1/library/models", body.toString().toByteArray(), timeoutMs = 120_000)
+        if (code != 201 || j == null) throw HttpError(code, j)
+        return j
     }
 
     private fun backoff(failures: Int): Int {

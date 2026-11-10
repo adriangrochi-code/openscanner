@@ -55,7 +55,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
                 setProgressAsync(workDataOf(KEY_TEXT to text, KEY_PROGRESS to p))
                 runCatching { setForegroundAsync(foreground(text, percent)) }
             }, isCancelled = { isStopped })
-            Result.success(workDataOf(KEY_STL to result.stl.path, KEY_SUMMARY to result.summary))
+            Result.success(workDataOf(KEY_STL to result.stl.path, KEY_SUMMARY to result.summary, KEY_JOB to result.jobId))
         } catch (e: CloudClient.HttpError) {
             // Un error de la petición (sesión vencida, plan sin escaneos…): reintentar no lo arregla.
             if (e.code in 400..499 && e.code != 408 && e.code != 429) Result.failure(error(e.message ?: "error", e.code))
@@ -103,6 +103,8 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         const val KEY_PROGRESS = "progreso"
         const val KEY_STL = "stl"
         const val KEY_SUMMARY = "medidas"
+        /** El trabajo de escaneo en la nube: «Imprimir» guarda su resultado en la cuenta. */
+        const val KEY_JOB = "trabajo"
         const val KEY_ERROR = "error"
         const val KEY_CODE = "codigo"
         /** En las preferencias: por qué el envío espera para reintentar (sin red, servidor sin lugar…). */

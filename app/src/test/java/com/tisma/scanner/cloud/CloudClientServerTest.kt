@@ -121,6 +121,20 @@ class CloudClientServerTest {
             // Nada más del zip se escribe (log.txt no se pidió).
             assertTrue(!File(dir, "log.txt").exists())
 
+            // «Imprimir»: la pieza del trabajo queda en la cuenta, sin subir nada; repetirlo da el mismo ítem.
+            val item = client.keepFile(jobId, "Caja de prueba")
+            assertTrue(item.getString("id").startsWith("af_"))
+            assertEquals(item.getString("id"), client.keepFile(jobId).getString("id"))
+            // «Publicar»: sin la clave de par registrada, 409; con ella, la firma del manifiesto vale y sale lm_….
+            val key = LibraryPublish.PeerKey.create()
+            val body = LibraryPublish.body(item, key, "Caja de prueba", "Tester", "CC-BY-4.0", "40 × 30 × 20 mm", ByteArray(100))
+            assertEquals(409, (runCatching { client.publishModel(body) }.exceptionOrNull() as CloudClient.HttpError).code)
+            client.registerPeerKey(key.publicB64)
+            assertTrue(client.publishModel(body).getString("id").startsWith("lm_"))
+            // Firmado con otra clave (o el manifiesto tocado): 422.
+            val other = LibraryPublish.body(item, LibraryPublish.PeerKey.create(), "Caja", "Tester", "MIT", "", null)
+            assertEquals(422, (runCatching { client.publishModel(other) }.exceptionOrNull() as CloudClient.HttpError).code)
+
             // El envío entero (CloudSend, lo que corre en CloudSendWorker): cortado tras el primer trozo…
             val kept = mutableMapOf<String, String>()
             val store = object : CloudSend.Store {

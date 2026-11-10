@@ -16,6 +16,7 @@ licence, before it is used; non-commercial or research-only licences are not acc
 | androidx.core:core-ktx | 1.15.0 | Apache-2.0 | Android APIs |
 | kotlinx-coroutines-android | 1.9.0 | Apache-2.0 | concurrency |
 | androidx.work:work-runtime-ktx (WorkManager) | 2.10.0 | Apache-2.0 | cloud upload in the background |
+| Bouncy Castle (org.bouncycastle:bcprov-jdk18on) | 1.78.1 | MIT (Bouncy Castle Licence) | Ed25519 signature of library publications |
 | Kotlin standard library | 2.1.21 | Apache-2.0 | language |
 | ONNX Runtime for Android (com.microsoft.onnxruntime:onnxruntime-android) | 1.19.2 | MIT | on-device AI inference |
 | Depth Anything 3 Small, as ONNX (`app/src/main/assets/models/da3_small.*`) | DA3-SMALL | Apache-2.0 | depth model (model weights) |
@@ -35,6 +36,7 @@ The larger Depth Anything 3 models (Large, Giant, Nested) are CC BY-NC (non-comm
 | OpenCV (opencv-contrib-python) | Apache-2.0 | images, ArUco, SIFT |
 | Open3D | MIT | point cloud, mesh, STL (`postprocess.py`) |
 | Pillow | MIT-CMU (HPND) | mat PNG/PDF (`make_scan_mat.py`) |
+| cryptography (tests only, `fake_tisma_cloud.py`) | Apache-2.0 or BSD-3-Clause | checks library signatures in the tests |
 | COLMAP 3.9 (separate program) | BSD-3-Clause | photogrammetry |
 | GLOMAP (separate program, optional) | BSD-3-Clause | global SfM |
 | OpenMVS 2.x (separate program, unmodified) | AGPL-3.0 | dense cloud and mesh on the processor |

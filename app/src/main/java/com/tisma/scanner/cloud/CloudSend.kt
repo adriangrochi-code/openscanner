@@ -21,7 +21,7 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
     }
 
     /** La pieza bajada, su informe y las medidas para mostrar («40.20 × 30.20 × 20.30 mm · cerrada»). */
-    data class Result(val stl: File, val report: File, val summary: String)
+    data class Result(val stl: File, val report: File, val summary: String, val jobId: String)
 
     /** El trabajo terminó mal en el servidor (no es un corte de red: reintentar no lo arregla). */
     class JobFailed(message: String) : IOException(message)
@@ -72,7 +72,7 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
         client.downloadResult(jobId, mapOf("pieza.stl" to stl, "pieza_informe.json" to report))
         if (!stl.exists()) throw IOException("el resultado no trae la pieza (pieza.stl)")
         store.put(jobKey, null)
-        return Result(stl, report, summaryOf(job.optJSONObject("summary"), report))
+        return Result(stl, report, summaryOf(job.optJSONObject("summary"), report), jobId)
     }
 
     companion object {

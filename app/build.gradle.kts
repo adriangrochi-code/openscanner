@@ -65,6 +65,8 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
     // El envío a Tisma Cloud en segundo plano, que se retoma solo al volver la red (Apache-2.0).
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+    // Firma Ed25519 de lo que se publica en la biblioteca de Tisma (Android la trae recién desde la 13; MIT).
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation("junit:junit:4.13.2")
     // Capturas de pantalla de la UI en la JVM (sin emulador).

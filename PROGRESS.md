@@ -126,6 +126,21 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   "Fotos" mode (Lejos, dome, "Listo para enviar", ☁ Enviar). PROBAR.md/TESTING.md now follow Vídeo 360, GUIA/GUIDE
   describe both; the review button said "Tisma Server", now "Tisma Cloud".
 
+## «Imprimir» and «Publicar» (owner's request, 2026-11-10; Tisma Cloud contract from the server session)
+
+- On «Tu pieza», once the cloud part is there: «Imprimir» = POST /v1/files {"scan_job"} (the part stays in the
+  account, Mi biblioteca on phone and PC; nothing uploaded, results kept 72 h); «Publicar» = a form (name, author,
+  licence from the library's list, description) → POST /v1/library/models "from_file", with the files of the kept
+  item (pieza.stl "project", pieza_informe.json "analysis"), the canonical manifest signed in Ed25519 with this
+  install's peer key (POST /v1/library/peer-key once per account; 409 → register and retry), and a WebP thumbnail
+  (≤ 64 KB) drawn on the phone from the STL (cloud/Thumbnail.kt).
+- Ed25519 via Bouncy Castle (Android has it only from 13; minSdk 30): +11 MB on the debug APK until a release build
+  with R8. The peer key's seed lives in the app's private preferences.
+- Tested: CloudClientServerTest against fake_tisma_cloud.py (keep, keep again = same item, publish without key 409,
+  with key 201, other key 422; the fake checks the signature with Python's cryptography); LibraryPublishTest
+  (canonical JSON = Python's json.dumps(sort_keys, separators); signature verifies; limits); ThumbnailTest
+  (binary/ASCII STL, render). 111 unit tests. **Not tried** against the real Tisma Cloud or on a phone.
+
 ## Open for the beta
 
 - "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the

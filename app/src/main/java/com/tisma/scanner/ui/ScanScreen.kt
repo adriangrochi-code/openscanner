@@ -1010,6 +1010,22 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             } else s.localStl?.let { stl ->
                 SecondaryButton("Compartir STL del móvil (mm)", Modifier.fillMaxWidth()) { onShare(stl) }
             }
+            // La pieza de la nube: «Imprimir» la deja en la cuenta (Mi biblioteca, teléfono y PC); «Publicar», en la
+            // biblioteca compartida de Tisma.
+            if (s.cloudStl != null && s.cloudJobId != null) {
+                var publishing by remember { mutableStateOf(false) }
+                if (s.libraryStatus.isNotEmpty()) Toast(s.libraryStatus, error = s.libraryStatus.startsWith("✗"), ok = s.libraryStatus.startsWith("✓"))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SecondaryButton(if (s.libraryKept) "✓ En Mi biblioteca" else "Imprimir", Modifier.weight(1f),
+                        enabled = !s.libraryBusy && !s.libraryKept) { vm.keepInLibrary() }
+                    SecondaryButton(if (s.libraryPublished) "✓ Publicada" else "Publicar", Modifier.weight(1f),
+                        enabled = !s.libraryBusy && !s.libraryPublished) { publishing = true }
+                }
+                if (publishing) PublishDialog(s, onCancel = { publishing = false }) { name, author, license, description ->
+                    publishing = false
+                    vm.publishToLibrary(name, author, license, description)
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 SecondaryButton("Compartir", Modifier.weight(1f), enabled = zip != null) { zip?.let(onShare) }
                 s.cloudStl?.let { stl -> SecondaryButton("Pieza STL", Modifier.weight(1f)) { onShare(stl) } }
@@ -1017,4 +1033,44 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
             }
         }
     }
+}
+
+/** «Publicar»: nombre, autor, licencia y descripción de la pieza para la biblioteca compartida de Tisma. */
+@Composable
+private fun PublishDialog(s: UiState, onCancel: () -> Unit, onPublish: (String, String, String, String) -> Unit) {
+    val licenses = com.tisma.scanner.cloud.LibraryPublish.LICENSES
+    var name by remember { mutableStateOf(s.cloudStl?.nameWithoutExtension?.removeSuffix("_pieza") ?: "") }
+    var author by remember { mutableStateOf(s.libraryAuthor) }
+    var license by remember { mutableStateOf(licenses.first().first) }
+    var description by remember { mutableStateOf("") }
+    var choosing by remember { mutableStateOf(false) }
+    val ok = name.isNotBlank() && name.length <= 120 && author.isNotBlank() && author.length <= 60 && description.length <= 500
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onCancel,
+        containerColor = Tisma.Bar,
+        title = { Text("Publicar en la biblioteca de Tisma", color = Tisma.Text, fontSize = 17.sp) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Cualquiera podrá verla e imprimirla, con la licencia que elijas.", color = Tisma.TextDim, fontSize = 13.sp)
+                TextSetting("Nombre", name, "Engranaje", false) { name = it.take(120) }
+                TextSetting("Autor", author, "Tu nombre", false) { author = it.take(60) }
+                Box {
+                    SecondaryButton("Licencia: " + licenses.first { it.first == license }.second, Modifier.fillMaxWidth()) { choosing = true }
+                    androidx.compose.material3.DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
+                        licenses.forEach { (id, label) ->
+                            androidx.compose.material3.DropdownMenuItem(text = { Text(label) }, onClick = { license = id; choosing = false })
+                        }
+                    }
+                }
+                TextSetting("Descripción (opcional)", description, "Medidas, material, para qué sirve…", false) { description = it.take(500) }
+            }
+        },
+        confirmButton = {
+            Text("Publicar", color = if (ok) Tisma.PurpleText else Tisma.TextOff, fontWeight = FontWeight.Medium,
+                modifier = Modifier.clickable(enabled = ok) { onPublish(name, author, license, description) }.padding(12.dp))
+        },
+        dismissButton = {
+            Text("Cancelar", color = Tisma.TextDim, modifier = Modifier.clickable { onCancel() }.padding(12.dp))
+        },
+    )
 }

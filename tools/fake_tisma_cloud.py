@@ -32,6 +32,8 @@ class State:
         self.chunk = chunk
         self.flaky_jobs = flaky_jobs
         self.full = 0
+        self.files: dict[str, dict] = {}       # af_… -> item
+        self.peer_keys: dict[str, str] = {}    # token -> public key (base64)
         self.tokens: set[str] = set()
         self.scans: dict[str, dict] = {}
         self.jobs: dict[str, dict] = {}
@@ -45,6 +47,19 @@ def result_zip() -> bytes:
         z.writestr("pieza_informe.json", json.dumps({"dimensions_mm_xyz": [40.2, 30.2, 20.3], "watertight": True}))
         z.writestr("log.txt", "[hdr] ok\n")
     return buf.getvalue()
+
+
+def result_files() -> list[dict]:
+    """The files of a scan result kept in the account: path, size and sha256, as in POST /v1/files."""
+    import hashlib
+    with zipfile.ZipFile(io.BytesIO(result_zip())) as z:
+        return [{"path": n, "size": len(z.read(n)), "sha256": hashlib.sha256(z.read(n)).hexdigest()}
+                for n in ("pieza.stl", "pieza_informe.json")]
+
+
+def canonical(files: list[dict]) -> bytes:
+    keep = [{k: f[k] for k in ("path", "role", "sha256", "size")} for f in sorted(files, key=lambda f: f["path"])]
+    return json.dumps({"files": keep}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 
 
 def handler(state: State):
@@ -123,6 +138,28 @@ def handler(state: State):
                 state.scans[sid] = {"id": sid, "size": int(j["size"]), "data": bytearray(), "job_id": None}
                 return self.send(201, {"id": sid, "size": int(j["size"]), "received": 0, "chunk_size": state.chunk,
                                        "job_id": None})
+            token = self.headers["Authorization"][7:]
+            if path == "/v1/files":
+                j = json.loads(data or b"{}")
+                job = state.jobs.get(j.get("scan_job", ""))
+                if job is None:
+                    return self.send(404, {"detail": "No such scan job"})
+                if job["polls"] < 4:
+                    return self.send(409, {"detail": "The scan is not done"})
+                for item in state.files.values():
+                    if item["source_job"] == job["id"]:
+                        return self.send(200, item)
+                fid = "af_" + uuid.uuid4().hex[:12]
+                item = {"id": fid, "name": j.get("name") or "scan", "kind": "scan", "source_job": job["id"],
+                        "created_at": "2026-11-10T00:00:00Z", "size": sum(f["size"] for f in result_files()),
+                        "files": result_files(), "published_model": None}
+                state.files[fid] = item
+                return self.send(201, item)
+            if path == "/v1/library/peer-key":
+                state.peer_keys[token] = json.loads(data)["public_key"]
+                return self.send(201, {"ok": True})
+            if path == "/v1/library/models":
+                return self.publish(token, json.loads(data or b"{}"))
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["v1", "scans"] and parts[3] == "complete":
                 scan = state.scans.get(parts[2])
@@ -136,6 +173,36 @@ def handler(state: State):
                     scan["job_id"] = jid
                 return self.send(201, {"id": scan["job_id"], "kind": "scan", "status": "queued"})
             self.send(404, {"detail": "Not Found"})
+
+        def publish(self, token: str, j: dict) -> None:
+            import base64
+            from cryptography.exceptions import InvalidSignature
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            if token not in state.peer_keys:
+                return self.send(409, {"detail": "The peer key is not bound to this account"})
+            item = state.files.get(j.get("from_file", ""))
+            if item is None:
+                return self.send(422, {"detail": "No such file"})
+            kept = {f["path"]: f for f in item["files"]}
+            files = j.get("files") or []
+            roles = {"pieza.stl": "project", "pieza_informe.json": "analysis"}
+            if not any(f.get("path") == "pieza.stl" for f in files) or any(
+                    f.get("path") not in kept or f.get("role") != roles.get(f.get("path"))
+                    or f.get("size") != kept[f["path"]]["size"] or f.get("sha256") != kept[f["path"]]["sha256"]
+                    for f in files):
+                return self.send(422, {"detail": "The files do not match the kept file"})
+            if not (0 < len(j.get("name", "")) <= 120 and 0 < len(j.get("author_name", "")) <= 60):
+                return self.send(422, {"detail": "Bad name or author"})
+            try:
+                Ed25519PublicKey.from_public_bytes(base64.b64decode(state.peer_keys[token])).verify(
+                    base64.b64decode(j.get("manifest_signature", "")), canonical(files))
+            except (InvalidSignature, ValueError):
+                return self.send(422, {"detail": "Bad manifest signature"})
+            if len(base64.b64decode(j.get("thumbnail_webp", "") or "")) > 64 * 1024:
+                return self.send(422, {"detail": "Thumbnail over 64 KB"})
+            lm = "lm_" + uuid.uuid4().hex[:12]
+            item["published_model"] = lm
+            return self.send(201, {"id": lm, "revision": 1, "name": j["name"], "license": j.get("license")})
 
         def do_PUT(self) -> None:
             url = urlparse(self.path)
