@@ -837,11 +837,14 @@ def choose_mat_scale(work, cams, imgs, mat_json, others):
     if rel > STANDARD_MAT_MAX_SPREAD:
         print(f"[scale] {label}: no se usa, los bordes no concuerdan (¿otro tapete? pásalo con --mat)")
         return None
-    far = [o for o in others if abs(s / o - 1) > STANDARD_MAT_MAX_DIFF]
-    if far:
-        print(f"[scale] {label}: no se usa, {(s / far[0] - 1) * 100:+.0f} % de las otras escalas "
-              "(¿otros marcadores o no impreso al 100 %? pásalo con --mat)")
-        return None
+    # Contra la mediana de las otras: una sola mala (la INS con movimientos bruscos) no tira el tapete, que es la
+    # más exacta; uno impreso a otro tamaño queda lejos de todas. Antes bastaba con estar lejos de una.
+    if others:
+        ref = float(np.median(others))
+        if abs(s / ref - 1) > STANDARD_MAT_MAX_DIFF:
+            print(f"[scale] {label}: no se usa, {(s / ref - 1) * 100:+.0f} % de las otras escalas "
+                  "(¿otros marcadores o no impreso al 100 %? pásalo con --mat)")
+            return None
     return s, label
 
 

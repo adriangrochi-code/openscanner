@@ -194,6 +194,13 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   Also no limit on what a zip expands to: a zip bomb could fill the node's disk. Now refused before extracting
   if it expands to more than 20 x its size + 64 MB (photos barely compress) or 40 GB. Test with all four cases
   (fails on the old code). 22 pipeline tests pass. (zipfile already strips ".." and absolute paths.)
+  Server session: the master already refuses scans over TISMA_MAX_SCAN_UNZIPPED_GB (12 GB) from the zip's
+  directory; the 20x ratio here also catches small bombs under that. Both kept.
+- Mat scale check (hourly bug pass, 10:15 UTC): the standard mat was dropped if it was 20 % from ANY other scale,
+  so one bad INS scale (jerky moves) threw away the most accurate one even with the focus scale agreeing. Now
+  against the median of the others: one bad scale neither vetoes the mat nor lets a mis-printed mat through.
+  Tests: INS 30 % off with focus agreeing keeps the mat (fails on the old code); a 133 % print with one other
+  scale near it is still refused. drop_blurry checked too: fine (each video keyframe is its own trigger).
 
 ## Open for the beta
 

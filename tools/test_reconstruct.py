@@ -193,6 +193,10 @@ def test_standard_mat_scale_without_mat_json_on_every_paper():
             # Chosen without --mat, close to the INS scale (8 % off, as the INS can be).
             got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.08])
             assert got and abs(got[0] * 7.3 - 1) < 0.01 and "tapete estándar" in got[1]
+            # One bad other scale (the INS 30 % off after jerky moves) does not throw the mat away while the focus
+            # scale agrees: it is checked against the median of the others, not against each one.
+            got = rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3 * 1.30, 1 / 7.3 * 0.98, 1 / 7.3 * 1.03])
+            assert got and abs(got[0] * 7.3 - 1) < 0.01, got
 
 
 def test_a_mat_not_printed_at_100_percent_is_not_trusted():
@@ -201,6 +205,8 @@ def test_a_mat_not_printed_at_100_percent_is_not_trusted():
         # Printed at 133 %: its 15 mm markers measure 20 mm, the scale would be 25 % off.
         cams, imgs = mat_views(Path(d), "a4", print_scale=4 / 3)
         assert rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3]) is None
+        # Not even when one bad other scale happens to be near it: the median of the others is not.
+        assert rc.choose_mat_scale(Path(d), cams, imgs, None, [1 / 7.3, 1 / 7.3 * 0.75, 1 / 7.3 * 1.02]) is None
         # With its .json (--mat), saying 20 mm, it is right.
         mat = Path(d) / "tapete.json"
         mat.write_text('{"dictionary": "DICT_4X4_250", "marker_mm": 20.0}')
