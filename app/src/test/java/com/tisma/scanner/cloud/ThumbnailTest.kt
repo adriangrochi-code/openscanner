@@ -48,4 +48,12 @@ class ThumbnailTest {
         assertEquals(Thumbnail.BACKGROUND, px[0])  // esquina vacía
         assertTrue(px[64 * 128 + 64] != Thumbnail.BACKGROUND)  // centro con pieza
     }
+
+    @Test fun showsTheFacesTowardsTheCameraNotTheHiddenOnes() {
+        // La cámara mira desde arriba y del lado de +x/+y (girada 35° en Z): se ven la tapa (triángulos 2 y 3),
+        // la cara x = 40 (6, 7) y la cara y = 30 (8, 9); nunca la base ni las caras de atrás.
+        val ids = Thumbnail.visibleTriangles(box(), 128).filter { it >= 0 }.toSet()
+        assertEquals("sólo las caras de delante: $ids", setOf(2, 3, 6, 7, 8, 9), ids)
+        assertTrue("el centro es la tapa", Thumbnail.visibleTriangles(box(), 128)[60 * 128 + 64] in setOf(2, 3))
+    }
 }

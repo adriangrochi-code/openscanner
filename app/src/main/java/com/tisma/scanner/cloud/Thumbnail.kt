@@ -40,9 +40,15 @@ object Thumbnail {
     }
 
     /** Píxeles ARGB (size × size) de la pieza. */
-    fun render(tris: FloatArray, size: Int = 256): IntArray {
+    fun render(tris: FloatArray, size: Int = 256): IntArray = draw(tris, size).first
+
+    /** Qué triángulo se ve en cada píxel (-1: fondo): para comprobar que se dibuja la cara de delante. */
+    fun visibleTriangles(tris: FloatArray, size: Int = 256): IntArray = draw(tris, size).second
+
+    private fun draw(tris: FloatArray, size: Int): Pair<IntArray, IntArray> {
         val px = IntArray(size * size) { BACKGROUND }
-        if (tris.size < 9) return px
+        val ids = IntArray(size * size) { -1 }
+        if (tris.size < 9) return px to ids
         // Vista: girar 35° alrededor de Z y mirar 30° desde arriba (Z arriba en el STL de Tisma).
         val (ca, sa) = Math.cos(Math.toRadians(35.0)).toFloat() to Math.sin(Math.toRadians(35.0)).toFloat()
         val (ce, se) = Math.cos(Math.toRadians(60.0)).toFloat() to Math.sin(Math.toRadians(60.0)).toFloat()
@@ -53,7 +59,9 @@ object Thumbnail {
             val xr = ca * x - sa * y; val yr = sa * x + ca * y
             sx[i] = xr                       // pantalla: x a la derecha
             sy[i] = -(ce * z - se * yr)      // y hacia abajo
-            sz[i] = se * z + ce * yr         // profundidad: mayor = más lejos de la cámara
+            // Profundidad, mayor = más lejos. La cámara está arriba y del lado de +yr: lo más alto y lo de +yr está
+            // más cerca. (Antes iba con el signo al revés y se veían las caras de atrás y la base.)
+            sz[i] = -(se * z + ce * yr)
         }
         val minX = sx.min(); val maxX = sx.max(); val minY = sy.min(); val maxY = sy.max()
         val span = max(maxX - minX, maxY - minY).coerceAtLeast(1e-6f)
@@ -77,15 +85,15 @@ object Thumbnail {
             val lambert = abs(nx * lx + ny * ly + nz * lz) / ll
             val shade = (0.28f + 0.72f * lambert).coerceIn(0f, 1f)
             val colour = (0xFF shl 24) or (channel(0x6B, shade) shl 16) or (channel(0x4E, shade) shl 8) or channel(0xD6, shade)
-            fill(sx[a], sy[a], sz[a], sx[b], sy[b], sz[b], sx[c], sy[c], sz[c], colour, px, depth, size)
+            fill(sx[a], sy[a], sz[a], sx[b], sy[b], sz[b], sx[c], sy[c], sz[c], colour, t, px, ids, depth, size)
         }
-        return px
+        return px to ids
     }
 
     private fun channel(base: Int, shade: Float) = (base * shade + 30 * (1 - shade)).toInt().coerceIn(0, 255)
 
     private fun fill(x0: Float, y0: Float, z0: Float, x1: Float, y1: Float, z1: Float, x2: Float, y2: Float, z2: Float,
-                     colour: Int, px: IntArray, depth: FloatArray, size: Int) {
+                     colour: Int, id: Int, px: IntArray, ids: IntArray, depth: FloatArray, size: Int) {
         val area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
         if (abs(area) < 1e-9f) return
         val xa = max(0, min(x0, min(x1, x2)).toInt()); val xb = min(size - 1, max(x0, max(x1, x2)).toInt() + 1)
@@ -100,7 +108,7 @@ object Thumbnail {
                 if (w0 < 0 || w1 < 0 || w2 < 0) continue
                 val z = w0 * z0 + w1 * z1 + w2 * z2
                 val i = y * size + x
-                if (z < depth[i]) { depth[i] = z; px[i] = colour }
+                if (z < depth[i]) { depth[i] = z; px[i] = colour; ids[i] = id }
             }
         }
     }
