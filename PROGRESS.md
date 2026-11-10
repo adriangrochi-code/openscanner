@@ -175,6 +175,10 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   again and the old one left half-done on the server. Now only 404/410 start over; anything else is an error
   for the worker to retry the same upload. fake_tisma_cloud.py: POST /test/status-down {"n"} answers the next
   n status checks with 503. CloudClientServerTest checks the same upload stays (fails on the old code).
+- Base choice (hourly bug pass, 07:15 UTC): the base was the border with the widest footprint at any height, so
+  a part with an open top wider than its base (a cup, a flared tray) would have had its rim pulled down to the
+  floor (76 % volume error in the test). Now only borders reaching the lowest quarter of the part's height are
+  candidates. Test: a flared open tube, volume within 1 % (fails on the old code). 20 pipeline tests pass.
 
 ## Open for the beta
 

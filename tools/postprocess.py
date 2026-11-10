@@ -224,10 +224,14 @@ def cap_holes(mesh, max_perimeter, flatten_lowest=False):
         # La base es el borde con el contorno más ancho en planta (lo que no vio la cámara, sobre la mesa). Cerca
         # del tapete faltan a veces varios mm de pared (en CI, el borde subía hasta 13 mm por un lado): se baja
         # en vertical hasta Z = 0 con una «falda» y se tapa plano allí, sea cual sea su largo.
+        # Sólo bordes que llegan cerca de lo más bajo: una boca abierta arriba, más ancha que la base (un vaso,
+        # una bandeja), no es la base y no se baja al suelo.
         def footprint(l):
             P = V[l, :2]
             return np.prod(P.max(0) - P.min(0))
-        base = max(range(len(loops)), key=lambda i: footprint(loops[i]))
+        low = min(V[l, 2].min() for l in loops)
+        near = low + 0.25 * (V[:, 2].max() - low)
+        base = max((i for i, l in enumerate(loops) if V[l, 2].min() <= near), key=lambda i: footprint(loops[i]))
     for i, loop in enumerate(loops):
         if i == base:
             loop = skirt_to_floor(V, loop, new_v, new_t)

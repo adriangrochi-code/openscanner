@@ -62,6 +62,31 @@ def test_walls_missing_near_the_mat_go_down_to_the_floor():
         assert np.ptp(low[:, 0]) > 38 and np.ptp(low[:, 1]) > 28, (np.ptp(low[:, 0]), np.ptp(low[:, 1]))
 
 
+def flared_tube(bottom=20.0, top=24.0, z0=1.0, z1=20.0, k=4):
+    """Paredes de un tronco de pirámide cuadrado, abierto arriba y abajo (mm): la base, de `bottom` de lado a z0
+    (sin llegar al suelo), y la boca, más ancha, de `top` a z1. Caras hacia fuera."""
+    def ring(side, z):
+        h = side / 2; c = [(-h, -h), (h, -h), (h, h), (-h, h)]
+        return [(c[i][0] + (c[(i + 1) % 4][0] - c[i][0]) * j / k, c[i][1] + (c[(i + 1) % 4][1] - c[i][1]) * j / k, z)
+                for i in range(4) for j in range(k)]
+    V = np.array(ring(bottom, z0) + ring(top, z1)); n = 4 * k
+    T = [t for i in range(n) for t in ([i, (i + 1) % n, n + (i + 1) % n], [i, n + (i + 1) % n, n + i])]
+    return V, np.array(T)
+
+
+def test_a_wide_open_top_is_not_taken_as_the_base():
+    """La base es el borde de abajo aunque haya uno más ancho arriba (una boca abierta, más ancha que la base):
+    sólo ése baja al suelo. Antes se tomaba el más ancho y la boca bajaba hasta Z = 0, con un volumen sin sentido."""
+    import open3d as o3d
+    V, T = flared_tube()
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(T))
+    assert pp.cap_holes(mesh, max_perimeter=4 * 24, flatten_lowest=True) == 2
+    closed, vol = pp.closed_volume(mesh)
+    expected = 20 * 20 * 1 + 19 / 3 * (400 + 576 + 480)   # el pie hasta el suelo + el tronco
+    assert closed and abs(vol / expected - 1) < 0.01, (closed, vol, expected)
+    assert np.asarray(mesh.vertices)[:, 2].min() == 0
+
+
 def test_simple_loops_split_a_pinched_border():
     assert pp.simple_loops([1, 2, 3, 0, 4, 5, 0, 6]) == [[0, 4, 5], [1, 2, 3, 0, 6]]
     assert pp.simple_loops([0, 1, 2, 0, 3, 4]) == [[0, 1, 2], [0, 3, 4]]
@@ -84,4 +109,5 @@ if __name__ == "__main__":
     test_a_simplified_part_stays_closed_with_its_volume()
     test_walls_missing_near_the_mat_go_down_to_the_floor()
     test_simple_loops_split_a_pinched_border()
+    test_a_wide_open_top_is_not_taken_as_the_base()
     print("ok")
