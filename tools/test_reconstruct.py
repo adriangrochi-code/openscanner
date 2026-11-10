@@ -223,6 +223,27 @@ def test_every_paper_size_has_the_same_chessboard():
         assert (meta["marker_mm"], meta["dictionary"]) == (rc.STANDARD_MAT["marker_mm"], rc.STANDARD_MAT["dictionary"])
         assert meta["square_mm"] == 20.0 and len(meta["markers_mm"]) >= 12, paper
 
+def test_everything_on_the_mat_prints_inside_a_printers_margins():
+    """Nothing within 5 mm of an edge, where many printers cannot print (lasers about 4-5 mm, inkjets at the bottom 5 mm
+    and more). The 100 mm check bar was 3 mm from the bottom: clipped or gone, and it is what the tester measures.
+    The bar also has to measure what it says, inside its strip under the board."""
+    import make_scan_mat as msm
+    dpi = 200
+    for paper, (pw, ph) in msm.PAPERS_MM.items():
+        canvas, meta = msm.make_mat(paper, dpi=dpi)
+        g = canvas if canvas.ndim == 2 else canvas.min(axis=2)
+        ink = np.argwhere(g < 128)
+        mm = ink[:, ::-1] * 25.4 / dpi              # (x, y) in mm
+        assert mm[:, 0].min() >= 5 and mm[:, 0].max() <= pw - 5, (paper, mm[:, 0].min(), mm[:, 0].max())
+        assert mm[:, 1].min() >= 5 and mm[:, 1].max() <= ph - 5, (paper, mm[:, 1].min(), mm[:, 1].max())
+        # The bar: the longest dark run on a row under the board.
+        board_bottom = max(c[1] for m in meta["markers_mm"].values() for c in m)
+        rows = [r for r in range(g.shape[0]) if r * 25.4 / dpi > board_bottom + 3]
+        longest = max(max((len(run) for run in np.split(np.arange(g.shape[1]), np.where(g[r] >= 128)[0]) if len(run)),
+                          default=0) for r in rows)
+        assert abs(longest * 25.4 / dpi - meta["check_bar_mm"]) < 1, (paper, longest * 25.4 / dpi)
+
+
 def test_load_session_finds_the_scan_folder_and_refuses_a_zip_bomb():
     """La carpeta del escaneo es la de session.json, aunque el zip traiga __MACOSX (Finder) o no tenga carpeta; un
     zip que se descomprime a mucho más de lo que ocupa (bomba zip) se rechaza antes de descomprimir."""

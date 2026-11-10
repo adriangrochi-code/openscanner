@@ -206,6 +206,15 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 13:20 UTC (2026-11-10)
+
+- The mat's 100 mm check bar was 3 mm from the bottom edge, where many printers cannot print (lasers 4-5 mm,
+  inkjets 5 mm and more at the bottom): clipped or missing, and it is the check the guides ask testers to make.
+  Now at the 8 mm margin like the rest. Test: on every sheet nothing printed within 5 mm of an edge, and the bar
+  measures check_bar_mm (fails on the old code). 24 pipeline tests pass. **Mats generated before this commit (any
+  already published) should be made again** (`python3 tools/make_scan_mat.py --all --out-dir tapetes`); the kit
+  makes them fresh.
+
 ## Bug pass 12:20 UTC (2026-11-10)
 
 - A non-finite measure (NaN/inf: e.g. the mesh-to-points distance over an empty cloud) was written as NaN /

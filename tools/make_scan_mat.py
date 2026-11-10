@@ -99,7 +99,9 @@ def make_mat(paper, dpi=300, seed=7):
 
     # Barra de verificación de 100 mm (o de 50 mm donde no cabe) y cómo imprimir.
     bar_mm = 100 if pw - 2 * MARGIN_MM >= 100 else 50
-    bx, by = px(MARGIN_MM), px(ph - 3)
+    # Abajo de todo pero dentro del margen (8 mm): a 3 mm del borde, muchas impresoras la cortaban o no la imprimían,
+    # y es lo que el tester mide. Hay lugar: el tablero termina al menos 17 mm antes del borde.
+    bx, by = px(MARGIN_MM), px(ph - MARGIN_MM)
     cv2.rectangle(canvas, (bx, by - px(1.2)), (bx + px(bar_mm), by), 0, -1)
     text = f"{bar_mm} mm - {PAPER_NAMES[paper]} - imprimir a tamano real / 100 %"
     cv2.putText(canvas, text, (bx, by - px(2)), cv2.FONT_HERSHEY_SIMPLEX, 0.065 * px_per_mm * (0.8 if pw < 150 else 1),
