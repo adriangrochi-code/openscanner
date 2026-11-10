@@ -33,7 +33,12 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
         if (jobId == null) {
             var id = store.get(uploadKey)
             var chunk = 16 * 1024 * 1024
-            val existing = id?.let { runCatching { client.scanStatus(it) }.getOrNull() }
+            // Sólo se empieza otra subida si el servidor dice que ésta ya no existe (404/410). Un corte de red o un
+            // 5xx al preguntar sale como error, para reintentar luego la misma: antes se volvía a subir todo.
+            val existing = id?.let {
+                try { client.scanStatus(it) }
+                catch (e: CloudClient.HttpError) { if (e.code == 404 || e.code == 410) null else throw e }
+            }
             jobId = existing?.optString("job_id")?.takeIf { it.isNotBlank() && it != "null" }
             if (jobId == null) {
                 if (existing == null) {

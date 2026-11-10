@@ -170,6 +170,11 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   trimmed, and counted in UTF-16 units while Tisma Cloud counts characters (Python len). A 120-character name
   with a trailing space, or 31+ emojis as author, was refused; the dialog's take(n) could cut an emoji in half.
   Now LibraryPublish.chars/clip/fieldsOk, shared by body and the dialog. Test: limitsCountWhatIsSent…
+- Upload resume (hourly bug pass, 05:15 UTC): CloudSend asked the server how far a pending upload had got and,
+  on any error (a network drop, a 5xx), took it as gone and started a new upload from zero: the whole scan sent
+  again and the old one left half-done on the server. Now only 404/410 start over; anything else is an error
+  for the worker to retry the same upload. fake_tisma_cloud.py: POST /test/status-down {"n"} answers the next
+  n status checks with 503. CloudClientServerTest checks the same upload stays (fails on the old code).
 
 ## Open for the beta
 

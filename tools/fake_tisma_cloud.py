@@ -32,6 +32,7 @@ class State:
         self.chunk = chunk
         self.flaky_jobs = flaky_jobs
         self.full = 0
+        self.status_down = 0                   # next GET /v1/scans/{id} answered 503 (POST /test/status-down)
         self.files: dict[str, dict] = {}       # af_… -> item
         self.peer_keys: dict[str, str] = {}    # token -> public key (base64)
         self.tokens: set[str] = set()
@@ -115,6 +116,9 @@ def handler(state: State):
         def do_POST(self) -> None:
             path = urlparse(self.path).path
             data = self.body()
+            if path == "/test/status-down":
+                state.status_down = int(json.loads(data or b"{}").get("n", 1))
+                return self.send(200, {"status_down": state.status_down})
             if path == "/test/full":
                 state.full = int(json.loads(data or b"{}").get("n", 1))
                 return self.send(200, {"full": state.full})
@@ -236,6 +240,10 @@ def handler(state: State):
                 return
             parts = path.strip("/").split("/")
             if len(parts) == 3 and parts[:2] == ["v1", "scans"]:
+                with state.lock:
+                    down, state.status_down = state.status_down, max(0, state.status_down - 1)
+                if down:
+                    return self.send(503, {"detail": "Service unavailable"})
                 scan = state.scans.get(parts[2])
                 if scan is None:
                     return self.send(404, {"detail": "No such scan"})

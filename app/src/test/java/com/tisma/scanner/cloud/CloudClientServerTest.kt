@@ -167,6 +167,15 @@ class CloudClientServerTest {
                 isCancelled = { n2 >= 1 }) }
             val id2 = kept.values.single()
             val got2 = client.scanStatus(id2).getLong("received")
+            // El servidor no contesta al preguntar por la subida (503): error para reintentar, y la misma subida
+            // sigue guardada (antes se empezaba otra y se volvía a subir todo).
+            sh("python3", "-c", "import json,ssl,urllib.request;ctx=ssl.create_default_context(cafile='cert.pem');" +
+                "urllib.request.urlopen(urllib.request.Request('$base/test/status-down',data=json.dumps({'n':1}).encode()),context=ctx)",
+                dir = dir)
+            val down = runCatching { CloudSend(client, store, 10).run(zip2, onStatus = { _, _ -> }) }.exceptionOrNull()
+            assertEquals(503, (down as CloudClient.HttpError).code)
+            assertEquals("la misma subida", id2, kept.values.single())
+            assertEquals(got2, client.scanStatus(id2).getLong("received"))
             sh("python3", "-c", "import json,ssl,urllib.request;ctx=ssl.create_default_context(cafile='cert.pem');" +
                 "urllib.request.urlopen(urllib.request.Request('$base/test/full',data=json.dumps({'n':1}).encode()),context=ctx)",
                 dir = dir)
