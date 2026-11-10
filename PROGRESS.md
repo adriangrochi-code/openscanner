@@ -179,6 +179,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   a part with an open top wider than its base (a cup, a flared tray) would have had its rim pulled down to the
   floor (76 % volume error in the test). Now only borders reaching the lowest quarter of the part's height are
   candidates. Test: a flared open tube, volume within 1 % (fails on the old code). 20 pipeline tests pass.
+  CI on 7c8a265 (42773889929, green; Windows green): closed, volume 24333 mm³ (+1.4 %), 40.74 x 30.69 x 20.13 mm, mat scale -0.2 %.
 
 ## Open for the beta
 
