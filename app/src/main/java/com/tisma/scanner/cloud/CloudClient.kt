@@ -28,7 +28,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
     }
 
     /** Un error del servidor, con su texto (`detail`) para mostrar. */
-    class HttpError(val code: Int, val body: JSONObject?) : IOException(describe(code, body)) {
+    class HttpError(val code: Int, val body: JSONObject?, text: String = describe(code, body)) : IOException(text) {
         companion object {
             fun describe(code: Int, body: JSONObject?): String {
                 val detail = body?.optString("detail")?.takeIf { it.isNotBlank() }
@@ -59,6 +59,8 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
         fun login(baseUrl: String, email: String, password: String, device: String): Pair<String, String> {
             val body = JSONObject().put("email", email.trim()).put("password", password).put("device", device)
             val (code, j) = call(normalize(baseUrl), "POST", "/v1/auth/login", null, body.toString().toByteArray())
+            // Al entrar, 401 es correo o contraseña mal, no «la sesión venció» (que es lo que significa en lo demás).
+            if (code == 401) throw HttpError(code, j, "Correo o contraseña incorrectos")
             if (code != 200 || j == null) throw HttpError(code, j)
             return j.getString("token") to j.optString("email", email.trim())
         }

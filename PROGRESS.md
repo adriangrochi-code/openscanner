@@ -206,6 +206,14 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 16:15 UTC (2026-11-10)
+
+- Sign-in with a wrong password said «La sesión venció o se cerró: entra de nuevo» (every 401 got that text).
+  CloudClient.login now says «Correo o contraseña incorrectos». CloudClientServerTest checks the text (fails on
+  the old code). 123 app tests pass.
+- Asked the server session whether its `detail` texts are Spanish: the app shows them as they come for codes it
+  does not map itself, and the fake server's are English.
+
 ## Bug pass 15:20 UTC (2026-11-10): pipeline tests on CI
 
 - Windows CI went red on e89bc97: the new kit test was in test_tisma_scan.py, which the Windows job runs without

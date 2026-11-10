@@ -89,6 +89,8 @@ class CloudClientServerTest {
             // Contraseña o token incorrectos: rechazados, con el texto para la persona.
             val wrong = runCatching { CloudClient.login(base, "e2e@tisma.test", "otra", "prueba") }.exceptionOrNull()
             assertEquals(401, (wrong as CloudClient.HttpError).code)
+            // Al entrar, no «la sesión venció»: lo que pasó es la contraseña.
+            assertEquals("Correo o contraseña incorrectos", wrong.message)
             val bad = runCatching { CloudClient(base, "tu_malo").create(10, "x") }.exceptionOrNull()
             assertEquals(401, (bad as CloudClient.HttpError).code)
             assertTrue(bad.message!!.contains("entra de nuevo"))
