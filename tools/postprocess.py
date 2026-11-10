@@ -424,11 +424,15 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         "flat_base": bool(flat_base and plane is not None),
         "poisson_depth": depth,
     })
-    out.with_name(out.name + "_informe.json").write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    # NaN/infinito no son JSON (la app y los lectores estrictos rechazan el informe entero): van como null.
+    report = {k: (None if isinstance(v, float) and not np.isfinite(v) else v) for k, v in report.items()}
+    out.with_name(out.name + "_informe.json").write_text(json.dumps(report, indent=2, ensure_ascii=False,
+                                                                    allow_nan=False))
     log(f"medidas {dims[0]:.2f} × {dims[1]:.2f} × {dims[2]:.2f} mm · "
         f"{'cerrada' if report['watertight'] else 'NO cerrada'}"
         + (f" · volumen {report['volume_mm3'] / 1000:.2f} cm³" if report['volume_mm3'] else ""))
-    log(f"ruido de la nube {report['noise_mm']:.3f} mm · malla↔puntos: media {fit_mean:.3f} mm, p95 {fit_p95:.3f} mm")
+    noise = f"{report['noise_mm']:.3f} mm" if report.get("noise_mm") is not None else "sin medir"
+    log(f"ruido de la nube {noise} · malla↔puntos: media {fit_mean:.3f} mm, p95 {fit_p95:.3f} mm")
     log(f"guardado: {out.with_suffix('.stl')} (+ .ply, _nube.ply, _informe.json)")
     return report
 

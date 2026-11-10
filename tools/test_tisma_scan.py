@@ -208,6 +208,36 @@ def test_bundled_programs_next_to_it():
         assert ts.bundled_programs(d / "nothing") == {}
 
 
+def test_a_measure_that_is_not_a_number_is_null_in_the_summary():
+    """NaN or infinity in the report (a distance over an empty cloud) is not JSON: the app's org.json and strict parsers
+    refuse the whole summary. It goes as null."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "colmap").write_text("")
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"
+
+        def fake_main(argv):
+            work = Path(argv[argv.index("--work") + 1])
+            work.mkdir(parents=True, exist_ok=True)
+            (work / "pieza.stl").write_text("solid pieza\nendsolid pieza\n")
+            (work / "pieza_informe.json").write_text(json.dumps({"dimensions_mm_xyz": [40.0, 30.0, 20.0],
+                "noise_mm": float("nan"), "mesh_vs_points_p95_mm": float("inf"), "volume_mm3": 24000.0}))
+
+        old = rc.COLMAP_EXE, rc.main
+        rc.COLMAP_EXE, rc.main = str(d / "colmap"), fake_main
+        try:
+            code = ts.main([str(d / "scan.zip"), "-o", str(d / "out"), "--summary", str(d / "s.json")])
+        finally:
+            rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
+
+        def strict(c):
+            raise ValueError(f"not JSON: {c}")
+        summary = json.loads((d / "s.json").read_text(encoding="utf-8"), parse_constant=strict)
+        assert code == 0 and summary["noise_mm"] is None and summary["mesh_vs_points_p95_mm"] is None
+        assert summary["volume_mm3"] == 24000.0 and summary["dimensions_mm_xyz"] == [40.0, 30.0, 20.0]
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

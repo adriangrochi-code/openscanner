@@ -206,6 +206,17 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Bug pass 12:20 UTC (2026-11-10)
+
+- A non-finite measure (NaN/inf: e.g. the mesh-to-points distance over an empty cloud) was written as NaN /
+  Infinity into pieza_informe.json and tisma_scan's summary: not JSON, so the app's org.json and strict parsers
+  refuse the whole report. Now null, written with allow_nan=False (summary and report); the log says "sin medir".
+  Test: test_a_measure_that_is_not_a_number_is_null_in_the_summary (fails on the old code). 23 pipeline tests.
+  Server session told (a summary value may now be null).
+- Checked, fine: the on-phone resume (pendiente.json, attempts guard), only a completed zip is offered.
+  Not changed: the zip also carries imu.csv and the phone's preview meshes, which the server does not read
+  (documented scan format; to agree with the server session before leaving them out).
+
 ## Missing and wrong outputs (owner's request via QA, 2026-11-10 11:45 UTC)
 
 Checked against the guides (GUIA/GUIDE, PROBAR/TESTING), the beta notes and the owner's requests. Each fix has its

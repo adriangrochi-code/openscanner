@@ -24,6 +24,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -195,12 +196,24 @@ def collect(work: Path, out: Path) -> None:
                 z.write(p, p.name)
 
 
+def finite(v):
+    """The value with NaN and infinity as None (null): they are not JSON, and the app's org.json or a strict parser
+    refuses the whole summary for one of them."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, list):
+        return [finite(x) for x in v]
+    if isinstance(v, dict):
+        return {k: finite(x) for k, x in v.items()}
+    return v
+
+
 def summary_of(out: Path) -> dict:
     try:
         report = json.loads((out / "pieza_informe.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {k: report[k] for k in SUMMARY_KEYS if k in report} if isinstance(report, dict) else {}
+    return finite({k: report[k] for k in SUMMARY_KEYS if k in report}) if isinstance(report, dict) else {}
 
 
 def load_pipeline():
@@ -315,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         code = 0
     except Failed as ex:
         summary, code = {"error": str(ex), "code": ex.code, "error_es": ex.error_es}, 1
-    a.summary.write_text(json.dumps(summary, ensure_ascii=False), encoding="utf-8")
+    a.summary.write_text(json.dumps(finite(summary), ensure_ascii=False, allow_nan=False), encoding="utf-8")
     return code
 
 
