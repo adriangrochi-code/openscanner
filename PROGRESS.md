@@ -206,6 +206,24 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   found nothing and sent the whole scan again. Now CloudSendWorker.prefsStore writes with commit() on the
   worker's thread (an IOException if it fails, so the worker retries). Test: CloudSendStoreTest. 114 app tests.
 
+## Missing and wrong outputs (owner's request via QA, 2026-11-10 11:45 UTC)
+
+Checked against the guides (GUIA/GUIDE, PROBAR/TESTING), the beta notes and the owner's requests. Each fix has its
+test; GuideLabelsTest now keeps the guides' quoted labels and the tú form in step with the app.
+
+| What | Found | Fix |
+|---|---|---|
+| Library thumbnail | depth sign reversed: thumbnails showed the base and back faces | 4b361f7, ThumbnailTest |
+| Measures with the STL | guides promise size, area and volume; app showed size + «cerrada» only | eaae3ac, CloudSendSummaryTest |
+| Singular/plural | «1 fotos», «1 descartadas», «1 fotogramas», «1 vistas con IA» | eaf242a, TextsTest |
+| Guides vs app | «¡DEMASIADO RÁPIDO!» in GUIA/GUIDE, never shown by the app | eaf242a, GuideLabelsTest |
+| Voseo | «mantené el móvil quieto», «sacás cada foto» | eaf242a, GuideLabelsTest |
+| Imprimir / Publicar, Nube, Registro, Enviar, Pieza STL, Terminar, «% cubierto», «Listo para enviar» | present | - |
+| 75 % / 40 photos / 20 % blurry in the guides | match MIN_COVERAGE, MIN_IMAGES, MAX_BLUR_RATIO | - |
+| Privacy: location stays on the phone | gps.csv left out of the zip; no GPS tag in the photos | - |
+| Mesh holes, scale | closed (CI volume +1.4 %), mat scale -0.2 % (fixed earlier today) | - |
+| Beta notes: «error de alrededor del 0,1 %» | CI through COLMAP gives -0.2 %: should say «entre 0,1 y 0,2 %» | **not edited**: a change to docs/releases/*.md publishes the pre-release, which waits for the owner's «sí» |
+
 ## Open for the beta
 
 - "Listo para enviar" counts a dome sector with 1 photo as covered (>= 75 % of the Lejos pass, coverage(1)); the
