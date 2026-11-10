@@ -140,6 +140,9 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   with key 201, other key 422; the fake checks the signature with Python's cryptography); LibraryPublishTest
   (canonical JSON = Python's json.dumps(sort_keys, separators); signature verifies; limits); ThumbnailTest
   (binary/ASCII STL, render). 111 unit tests. **Not tried** against the real Tisma Cloud or on a phone.
+- Tisma Cloud has it on main (its 50307c1, same contract). Library lists answer 503 until the library key is
+  certified; a test master needs TISMA_LIBRARY_UNCERTIFIED=on. No G-code in the library (the app only publishes
+  pieza.stl and its report).
 
 ## Open for the beta
 
