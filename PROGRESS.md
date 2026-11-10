@@ -186,6 +186,8 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   zip its texture, or, with no part of its own, hand over the previous person's pieza.stl as a success. Now each
   job has its own folder (tempfile.mkdtemp next to the output), removed at the end (also frees the node's disk).
   Command line and summary unchanged. Test: two jobs side by side (fails on the old code). 21 pipeline tests pass.
+  Server session (08:20): Tisma Cloud's nodes give -o <work>/<job>/scan-out and delete each job's folder, so the
+  mix-up could not happen there; the fix matters for tisma_scan run by hand or by other nodes.
 
 ## Open for the beta
 
