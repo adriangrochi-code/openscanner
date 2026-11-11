@@ -40,7 +40,8 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         val url = inputData.getString(KEY_URL) ?: ""
         if (token.isBlank()) return@withContext Result.failure(error("Entra con tu cuenta de Tisma Cloud (⚙ → Nube)", 401))
         val store = prefsStore(prefs)
-        runCatching { setForeground(foreground("Enviando a Tisma Cloud…", -1)) }
+        val notification = notificationId(zip)
+        runCatching { setForeground(foreground("Enviando a Tisma Cloud…", -1, notification)) }
         // Por qué se está esperando, para mostrarlo mientras WorkManager tiene el envío en cola para reintentar.
         fun waitReason(text: String?) = prefs.edit().apply { if (text == null) remove(KEY_WAIT) else putString(KEY_WAIT, text) }.apply()
         waitReason(null)
@@ -48,7 +49,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             val result = CloudSend(CloudClient(url, token), store).run(zip, onStatus = { text, p ->
                 val percent = if (p >= 0f) (p * 100).toInt() else -1
                 setProgressAsync(workDataOf(KEY_TEXT to text, KEY_PROGRESS to p))
-                runCatching { setForegroundAsync(foreground(text, percent)) }
+                runCatching { setForegroundAsync(foreground(text, percent, notification)) }
             }, isCancelled = { isStopped })
             Result.success(workDataOf(KEY_STL to result.stl.path, KEY_SUMMARY to result.summary, KEY_JOB to result.jobId))
         } catch (e: CloudClient.HttpError) {
@@ -71,7 +72,7 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
 
     private fun error(text: String, code: Int = 0): Data = workDataOf(KEY_ERROR to text, KEY_CODE to code)
 
-    private fun foreground(text: String, percent: Int): ForegroundInfo {
+    private fun foreground(text: String, percent: Int, id: Int): ForegroundInfo {
         val nm = applicationContext.getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "Envío a Tisma Cloud", NotificationManager.IMPORTANCE_LOW))
@@ -87,10 +88,11 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             .setContentIntent(open)
             .apply { if (percent in 0..100) setProgress(100, percent, false) else setProgress(0, 0, true) }
             .build()
-        return ForegroundInfo(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        return ForegroundInfo(id, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
     }
 
     companion object {
+        /** The tag every send carries; each scan's send is unique work of its own (uniqueFor). */
         const val UNIQUE = "envio_nube"
         const val KEY_ZIP = "zip"
         const val KEY_URL = "url"
@@ -133,15 +135,37 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         fun isFor(tags: Set<String>, zip: File?): Boolean =
             zip == null || tagFor(zip) in tags
 
-        /** Pone el envío en cola: uno a la vez; si ya hay uno en curso, sigue ése. */
+        /**
+         * One unique work per scan: sending the same scan again while it is on its way does nothing (it would spend
+         * another scan of the plan), but another scan is not dropped. With a single name for every send, a second
+         * scan sent while the first one waited for the network or the server was silently thrown away, and the app
+         * stayed on «Conectando…» for it.
+         */
+        fun uniqueFor(zip: File) = "$UNIQUE:" + zip.absolutePath
+
+        /** Each send its own notification: two at once would otherwise share one, taken down when the first ends. */
+        fun notificationId(zip: File) = NOTIFICATION_ID + (zip.absolutePath.hashCode() and 0xffff)
+
+        /** Preferences: the last scan sent, the one shown when the app opens with no scan of its own. */
+        const val KEY_LAST_SENT = "cloud_last_zip"
+
+        /** Of all the sends, the one the app shows: its scan's, or with none, the last one sent. */
+        fun shown(infos: List<androidx.work.WorkInfo>, zip: File?, lastSent: String?): androidx.work.WorkInfo? {
+            val target = zip ?: lastSent?.let(::File)
+            return infos.lastOrNull { isFor(it.tags, target) }
+        }
+
+        /** Pone el envío en cola; si ese escaneo ya se está enviando, sigue ése. */
         fun enqueue(ctx: Context, zip: File, url: String) {
             val req = OneTimeWorkRequestBuilder<CloudSendWorker>()
                 .setInputData(workDataOf(KEY_ZIP to zip.path, KEY_URL to url))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .addTag(tagFor(zip))
+                .addTag(UNIQUE)
                 .build()
-            WorkManager.getInstance(ctx).enqueueUniqueWork(UNIQUE, ExistingWorkPolicy.KEEP, req)
+            ctx.getSharedPreferences("tisma", Context.MODE_PRIVATE).edit().putString(KEY_LAST_SENT, zip.path).apply()
+            WorkManager.getInstance(ctx).enqueueUniqueWork(uniqueFor(zip), ExistingWorkPolicy.KEEP, req)
         }
     }
 }

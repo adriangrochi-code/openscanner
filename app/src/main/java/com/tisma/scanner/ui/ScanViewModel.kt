@@ -692,10 +692,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     private fun watchCloudSend() {
         val W = com.tisma.scanner.cloud.CloudSendWorker
         cloudJob = viewModelScope.launch {
-            androidx.work.WorkManager.getInstance(getApplication()).getWorkInfosForUniqueWorkFlow(W.UNIQUE).collect { infos ->
-                val info = infos.lastOrNull() ?: return@collect
+            androidx.work.WorkManager.getInstance(getApplication()).getWorkInfosByTagFlow(W.UNIQUE).collect { infos ->
                 // El resultado de otro escaneo (el anterior) no es el de éste: ni su pieza, ni «Imprimir»/«Publicar».
-                if (!W.isFor(info.tags, _state.value.lastZip)) return@collect
+                val info = W.shown(infos, _state.value.lastZip, prefs.getString(W.KEY_LAST_SENT, null)) ?: return@collect
                 // Un trabajo terminado sigue en el historial de WorkManager: lo que se hace una sola vez
                 // (cerrar la sesión vencida, el registro) se hace sólo la primera vez que se ve.
                 val first = prefs.getString("cloud_seen", null) != info.id.toString()
