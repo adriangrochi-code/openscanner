@@ -13,3 +13,9 @@ fun sendHint(videoMode: Boolean): String =
 
 /** El autor en «Publicar»: la cuenta, por su nombre público en la biblioteca (nunca el correo). */
 fun publishAuthorLine(libraryName: String): String = "Autor: $libraryName (tu cuenta)"
+
+/**
+ * El código de una publicación (su id en la biblioteca de Tisma, p2p_library.md 3 quater y 3 novies): se muestra en
+ * su ficha y en «Mis publicaciones», y con él se la encuentra o se la bloquea sola, sin tocar las demás de la cuenta.
+ */
+fun publishedCodeLine(modelId: String): String = "Código de la publicación: $modelId"

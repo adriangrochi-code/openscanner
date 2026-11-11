@@ -1051,6 +1051,9 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
                     SecondaryButton(if (s.libraryPublished) "✓ Publicada" else "Publicar", Modifier.weight(1f),
                         enabled = !s.libraryBusy && !s.libraryPublished) { vm.loadLibraryName(); publishing = true }
                 }
+                s.libraryModelId?.let { id ->
+                    Text(publishedCodeLine(id), color = Tisma.TextDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                }
                 if (publishing) PublishDialog(s, onCancel = { publishing = false }) { name, author, license, description ->
                     publishing = false
                     vm.publishToLibrary(name, author, license, description)

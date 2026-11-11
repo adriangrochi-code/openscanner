@@ -91,6 +91,8 @@ data class UiState(
     val libraryBusy: Boolean = false,
     val libraryKept: Boolean = false,
     val libraryPublished: Boolean = false,
+    /** El código de la publicación (su id en la biblioteca, lm_…): con él se la encuentra o se la bloquea sola. */
+    val libraryModelId: String? = null,
     /**
      * El nombre público de la cuenta en la biblioteca (`library_name`): el autor de lo que publica (la pieza es de
      * quien la escaneó). null: todavía no tiene (se pide una vez) o no se leyó aún (libraryNameChecked).
@@ -644,6 +646,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                 m.optString("author").takeIf { it.isNotBlank() }?.let { a -> _state.update { it.copy(libraryName = a, libraryNameChecked = true) } }
             }
             _state.update { it.copy(libraryBusy = false, libraryPublished = r.isSuccess || it.libraryPublished,
+                libraryModelId = r.getOrNull()?.optString("id")?.takeIf { id -> id.isNotBlank() } ?: it.libraryModelId,
                 libraryKept = r.isSuccess || it.libraryKept,
                 libraryStatus = r.fold({ "✓ Publicada en la biblioteca de Tisma" }, { e -> "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(e) })) }
             r.onFailure { e ->
@@ -697,7 +700,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                         _state.update { it.copy(cloudStatus = if (stl != null) "✓ Pieza lista $summary" else "",
                             cloudProgress = -1f, cloudBusy = false, cloudStl = stl, cloudJobId = job,
                             libraryKept = job != null && prefs.contains("library_item_$job"),
-                            libraryPublished = job != null && prefs.contains("library_model_$job")) }
+                            libraryPublished = job != null && prefs.contains("library_model_$job"),
+                            libraryModelId = job?.let { j -> prefs.getString("library_model_$j", null) }) }
                         if (first && stl != null) { log("Pieza descargada: ${stl.name} $summary"); seen() }
                     }
                     androidx.work.WorkInfo.State.FAILED -> {
@@ -1722,7 +1726,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             // Un escaneo nuevo no tiene pieza de la nube todavía: fuera la del anterior (y su «Imprimir»/«Publicar»).
             it.copy(scanning = true, images = 0, triggers = 0, lastZip = null, analyzed = 0, blurry = 0,
                 cloudStl = null, cloudJobId = null, cloudStatus = "", cloudProgress = -1f,
-                libraryKept = false, libraryPublished = false, libraryStatus = "",
+                libraryKept = false, libraryPublished = false, libraryStatus = "", libraryModelId = null,
                 coverage = coverage.snapshot(), coveragePct = 0.0, hints = coverage.hints(), ready = false)
         }
         log("Escaneo iniciado: ${s.dir.name} · bloqueo 3A=${cameras.lock3A} · foco fijo=${cameras.lockFocus} · auto=${_state.value.autoTrigger}")

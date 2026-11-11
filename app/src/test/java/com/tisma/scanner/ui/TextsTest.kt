@@ -17,4 +17,8 @@ class TextsTest {
         assertEquals(false, "☁ Enviar" in sendHint(videoMode = true))
         assertEquals(true, "☁ Enviar" in sendHint(videoMode = false))
     }
+
+    @Test fun thePublicationsCodeIsShown() {
+        assertEquals("Código de la publicación: lm_0a1b2c3d4e5f", publishedCodeLine("lm_0a1b2c3d4e5f"))
+    }
 }
