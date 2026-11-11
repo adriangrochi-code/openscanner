@@ -55,12 +55,14 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
             store.put(jobKey, jobId)
             store.put(uploadKey, null)
         }
-        val job = client.waitForJob(jobId!!, pollMs, onStatus = { j ->
-            when (j.optString("status")) {
-                "queued" -> onStatus("En cola en Tisma Cloud…", -1f)
-                "running" -> j.optInt("progress").let { onStatus("Procesando en la nube: $it %", it / 100f) }
-            }
-        }, isCancelled = isCancelled)
+        val job = gone(jobKey, uploadKey) {
+            client.waitForJob(jobId!!, pollMs, onStatus = { j ->
+                when (j.optString("status")) {
+                    "queued" -> onStatus("En cola en Tisma Cloud…", -1f)
+                    "running" -> j.optInt("progress").let { onStatus("Procesando en la nube: $it %", it / 100f) }
+                }
+            }, isCancelled = isCancelled)
+        }
         when (job.optString("status")) {
             "failed" -> {
                 store.put(jobKey, null)  // el próximo envío empieza de nuevo
@@ -74,13 +76,29 @@ class CloudSend(private val client: CloudClient, private val store: Store, priva
         val dir = zip.parentFile!!
         val stl = File(dir, zip.nameWithoutExtension + "_pieza.stl")
         val report = File(dir, zip.nameWithoutExtension + "_informe.json")
-        client.downloadResult(jobId, mapOf("pieza.stl" to stl, "pieza_informe.json" to report))
+        gone(jobKey, uploadKey) { client.downloadResult(jobId, mapOf("pieza.stl" to stl, "pieza_informe.json" to report)) }
         if (!stl.exists()) throw IOException("el resultado no trae la pieza (pieza.stl)")
         store.put(jobKey, null)
         return Result(stl, report, summaryOf(job.optJSONObject("summary"), report), jobId)
     }
 
+    /**
+     * The saved job no longer exists in Tisma Cloud (404/410: removed, or its result expired). Its id stayed saved, so
+     * every later «Enviar» of this scan asked again for the same job and failed the same way: the scan could never be
+     * sent again. Now what was saved is dropped and the next send starts afresh (the person decides: it is another
+     * scan of the plan).
+     */
+    private fun <T> gone(jobKey: String, uploadKey: String, call: () -> T): T = try {
+        call()
+    } catch (e: CloudClient.HttpError) {
+        if (e.code != 404 && e.code != 410) throw e
+        store.put(jobKey, null); store.put(uploadKey, null)
+        throw JobFailed(JOB_GONE)
+    }
+
     companion object {
+        const val JOB_GONE = "Ese envío ya no está en Tisma Cloud: toca «Enviar» para mandarlo de nuevo"
+
         fun summaryOf(summary: JSONObject?, report: File): String = runCatching {
             // El informe bajado es el completo (con `watertight`); el resumen del trabajo, si no llegó.
             val r = runCatching { JSONObject(report.readText()) }.getOrNull()?.takeIf { it.has("dimensions_mm_xyz") }

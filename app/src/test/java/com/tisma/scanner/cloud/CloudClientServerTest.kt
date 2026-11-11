@@ -214,6 +214,17 @@ class CloudClientServerTest {
             val result2 = CloudSend(client, store, 10).run(zip2, onStatus = { _, _ -> })
             assertEquals(zip2.length(), client.scanStatus(id2).getLong("received"))
             assertTrue(result2.stl.exists() && kept.isEmpty())
+
+            // The saved job is gone from Tisma Cloud (removed, or its result expired: 404). It used to stay saved, and
+            // every later «Enviar» of the scan asked for it again and failed: the scan could not be sent any more.
+            val zip3 = File(dir, "scan_viejo.zip").also { zip.copyTo(it) }
+            kept["scan_" + zip3.name + "_" + zip3.length() + ".job"] = "job_que_ya_no_esta"
+            val goneJob = runCatching { CloudSend(client, store, 10).run(zip3, onStatus = { _, _ -> }) }.exceptionOrNull()
+            assertTrue(goneJob is CloudSend.JobFailed)
+            assertEquals(CloudSend.JOB_GONE, goneJob!!.message)
+            assertTrue("nada viejo guardado", kept.isEmpty())
+            val result3 = CloudSend(client, store, 10).run(zip3, onStatus = { _, _ -> })
+            assertTrue("mandado de nuevo, llega la pieza", result3.stl.exists() && kept.isEmpty())
         } finally {
             server.destroy()
             HttpsURLConnection.setDefaultSSLSocketFactory(previous)
