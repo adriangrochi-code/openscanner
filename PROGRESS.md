@@ -239,7 +239,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | Report and measures | revisado | 12:20 NaN → null; 20:00 measures from measured points (thin plates +19 % → +1 %); 20:30 same scan, same measures. |
 | tisma_scan (node program) | revisado | 08:15 own work folder; summary contract with the server session. |
 | Windows node package | revisado | CI green on every push; licences checked. |
-| Tester kit and release workflow | revisado | 14:20 SOURCE.txt + THIRD_PARTY.md; 15:20 all pipeline tests on CI. Release waits for the owner's «sí». |
+| Tester kit and release workflow | revisado | 14:20 SOURCE.txt + THIRD_PARTY.md; 15:20 all pipeline tests on CI. 01:30 (11-11) notes updated in docs/releases/borradores/0.1.0-beta.1.md (scale 0.1-0.2 %, author = account, measures, rescue, settings, licence): outside the workflow's path filter, so nothing is published. **On the owner's «sí»:** `git mv` it over docs/releases/0.1.0-beta.1.md and push to scanner/next: the workflow builds, tests and publishes scanner-v0.1.0-beta.1. |
 
 **Open (01:20, 11-11):** Open3D's Poisson segfaulted once on CI (7c63b75, inside test_the_same_cloud_gives_the_same_
 measures, five reconstructions in a row; the next run passed). A native crash cannot be caught in Python: on a node
