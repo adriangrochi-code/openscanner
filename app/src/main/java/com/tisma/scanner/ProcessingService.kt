@@ -34,12 +34,14 @@ class ProcessingService : Service() {
             wake = (getSystemService(POWER_SERVICE) as PowerManager)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tisma:procesado").apply { acquire(3 * 60 * 60 * 1000L) }
         }
-        running = true
+        // Stopped before it got here (a quick job): stopService then would have crashed the app
+        // (ForegroundServiceDidNotStartInTimeException), so stop() left it to this point.
+        if (holders.started()) stopSelf()
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        running = false
+        holders.destroyed()
         wake?.let { if (it.isHeld) it.release() }; wake = null
         super.onDestroy()
     }
@@ -48,7 +50,7 @@ class ProcessingService : Service() {
         private const val ID = 42
         private const val CHANNEL = "procesado"
         private const val EXTRA_TEXT = "text"
-        @Volatile var running = false; private set
+        val running get() = holders.isStarted()
 
         private fun channel(ctx: Context) {
             val nm = ctx.getSystemService(NotificationManager::class.java)
@@ -87,6 +89,8 @@ class ProcessingService : Service() {
 
         /** Este trabajo ya no lo necesita; el servicio se para cuando ninguno lo necesita. */
         fun stop(ctx: Context, holder: String = PROCESSING) {
+            // Only once it is in the foreground: stopping it before onStartCommand crashes the app; then
+            // onStartCommand sees nobody needs it and stops itself.
             if (holders.remove(holder)) runCatching { ctx.stopService(Intent(ctx, ProcessingService::class.java)) }
         }
 
@@ -94,11 +98,20 @@ class ProcessingService : Service() {
         const val CLOUD = "nube"
     }
 
-    /** Los trabajos que tienen el servicio pedido. remove() dice si ya no queda ninguno. */
+    /**
+     * Los trabajos que tienen el servicio pedido, y si el servicio ya está en primer plano (bajo el mismo cerrojo:
+     * así un stop() y un onStartCommand a la vez no dejan el servicio encendido para siempre).
+     * remove() dice si hay que pararlo: no queda ninguno y ya arrancó.
+     */
     class Holders {
         private val names = mutableSetOf<String>()
+        private var started = false
         @Synchronized fun add(name: String) { names += name }
-        @Synchronized fun remove(name: String): Boolean { names -= name; return names.isEmpty() }
+        @Synchronized fun remove(name: String): Boolean { names -= name; return names.isEmpty() && started }
         @Synchronized fun isEmpty() = names.isEmpty()
+        /** El servicio llegó a primer plano; dice si ya nadie lo necesita (hay que pararlo). */
+        @Synchronized fun started(): Boolean { started = true; return names.isEmpty() }
+        @Synchronized fun destroyed() { started = false }
+        @Synchronized fun isStarted() = started
     }
 }

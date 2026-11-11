@@ -10,6 +10,7 @@ class ProcessingServiceHoldersTest {
         val h = ProcessingService.Holders()
         h.add(ProcessingService.PROCESSING)
         h.add(ProcessingService.CLOUD)
+        assertFalse(h.started())
         assertFalse("el procesado sigue: no se para", h.remove(ProcessingService.CLOUD))
         assertTrue("ya nadie lo necesita: se para", h.remove(ProcessingService.PROCESSING))
     }
@@ -19,7 +20,15 @@ class ProcessingServiceHoldersTest {
         val h = ProcessingService.Holders()
         h.add(ProcessingService.PROCESSING)
         h.add(ProcessingService.PROCESSING)
+        h.started()
         assertTrue(h.remove(ProcessingService.PROCESSING))
         assertTrue(h.isEmpty())
+    }
+
+    @Test fun aStopBeforeTheServiceStartedLeavesItToTheService() {
+        val h = ProcessingService.Holders()
+        h.add(ProcessingService.PROCESSING)
+        assertFalse("aún no está en primer plano: stopService tiraría la app", h.remove(ProcessingService.PROCESSING))
+        assertTrue("al llegar a primer plano, nadie lo necesita: se para solo", h.started())
     }
 }
