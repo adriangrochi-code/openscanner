@@ -264,7 +264,15 @@ class MultiCameraController(context: Context, private val listener: Listener) {
         for (g in groups) {
             val device = openDevice(g.deviceId)
             if (device == null) { listener.onLog("No se pudo abrir la cámara ${g.deviceId}"); continue }
-            val result = configure(device, g, if (g.primary) preview else null, previewSize)
+            // The preview can be destroyed while the device opens (the app closed, the view torn
+            // down): its Surface is then "abandoned" and the session cannot be built. Stop here;
+            // the next onPreviewAvailable opens again.
+            val result = try {
+                configure(device, g, if (g.primary) preview else null, previewSize)
+            } catch (e: IllegalArgumentException) {
+                DiagLog.event("cam", "vista previa perdida al abrir #${g.deviceId}: ${e.message}")
+                device.close(); return
+            }
             if (result == null) {
                 listener.onLog("Ninguna configuración válida para ${g.deviceId}")
                 device.close(); continue

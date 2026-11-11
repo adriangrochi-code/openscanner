@@ -1540,6 +1540,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             // Una sola Surface por textura: crear una nueva en cada apertura las filtraba.
             val surface = previewSurface ?: Surface(tex).also { previewSurface = it }
             cameras.open(groups, surface, previewSize)
+            if (previewTexture !== tex) {
+                // The preview went away while opening: close what was opened after onPreviewDestroyed.
+                cameras.close(); _state.update { it.copy(busy = false) }; return@withLock
+            }
             stabilizer.reset()
             if (cameras.openedStreams.isEmpty()) {
                 // Una cámara oculta puede aparecer al probar su número pero negarse a abrir:
