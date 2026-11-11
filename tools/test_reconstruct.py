@@ -122,7 +122,8 @@ def test_mapper_prefers_glomap_and_falls_back_to_colmap():
     def fake_colmap(*args):
         calls.append(("colmap", args[0]))
         if args[0] == "mapper":
-            (Path(args[args.index("--output_path") + 1]) / "0").mkdir(parents=True, exist_ok=True)
+            m = Path(args[args.index("--output_path") + 1]) / "0"; m.mkdir(parents=True, exist_ok=True)
+            (m / "images.bin").write_bytes((10).to_bytes(8, "little"))          # as a real mapper: 10 photos placed
 
     def run_with(glomap_ok, glomap_present=True):
         calls.clear()
@@ -131,7 +132,8 @@ def test_mapper_prefers_glomap_and_falls_back_to_colmap():
             calls.append(("glomap", cmd[1]))
             if not glomap_ok:
                 raise RuntimeError("glomap terminó con código 1")
-            (Path(cmd[cmd.index("--output_path") + 1]) / "0").mkdir(parents=True, exist_ok=True)
+            m = Path(cmd[cmd.index("--output_path") + 1]) / "0"; m.mkdir(parents=True, exist_ok=True)
+            (m / "images.bin").write_bytes((10).to_bytes(8, "little"))
 
         old = rc.colmap, rc.run_tool, rc.find_glomap
         rc.colmap, rc.run_tool = fake_colmap, fake_run_tool
@@ -316,6 +318,30 @@ def test_ins_scale_uses_only_frames_inside_the_trajectory():
         (Path(d) / "ins_trajectory.csv").write_text("t_ns,px,py,pz,vx,vy,vz,stationary\n" + "\n".join(rows) + "\n")
         s = rc.scale_from_ins(imgs, records, Path(d))
     assert s is not None and abs(s / true - 1) < 0.01, (s, true)
+
+
+def test_the_largest_colmap_model_is_the_one_with_most_photos():
+    """COLMAP can split a scan into several models (sparse/0, 1, …). The largest was chosen by the number of FILES in
+    each folder, the same for all (cameras, images, points3D): a sub-model of 8 photos could be the part. It is the one
+    with most registered photos; none at all is a clear error."""
+    import struct
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sparse = Path(d) / "sparse"
+        for name, n in (("0", 8), ("1", 31), ("2", 3)):
+            m = sparse / name; m.mkdir(parents=True)
+            (m / "images.bin").write_bytes(struct.pack("<Q", n) + bytes(16))
+            (m / "cameras.bin").write_bytes(bytes(8)); (m / "points3D.bin").write_bytes(bytes(8))
+        t = sparse / "3"; t.mkdir()                                   # a text model
+        (t / "images.txt").write_text("# comment\n" + "".join(f"{i} 1 0 0 0 0 0 0 1 img{i}.jpg\n\n" for i in range(12)))
+        assert rc.largest_model(sparse).name == "1"
+        assert rc.registered_images(t) == 12
+        empty = Path(d) / "vacío"; empty.mkdir()
+        try:
+            rc.largest_model(empty)
+            assert False, "no model, no error"
+        except SystemExit as e:
+            assert "fotos" in str(e)
 
 
 if __name__ == "__main__":

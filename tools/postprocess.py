@@ -43,6 +43,13 @@ def spacing_of(pcd):
     return float(np.median(d)) if len(d) else 1.0
 
 
+
+def for_person(text: str) -> SystemExit:
+    """Como reconstruct.for_person: un final con texto para la persona, que tisma_scan muestra en error_es."""
+    e = SystemExit(text)
+    e.for_person = True
+    return e
+
 def refine_plane(P, model, thr, rounds=5):
     """
     El plano de RANSAC ajustado por mínimos cuadrados a sus puntos, y otra vez con los puntos de ese plano, hasta que
@@ -380,7 +387,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     # Nada sobre la mesa: la pieza es más delgada que la franja que se quita con el plano (o la nube es muy rala).
     # Antes seguía y terminaba en un error de NumPy («zero-size array»), sin decir qué pasó.
     if plane is not None and not keep_plane and len(pcd.points) < 200:
-        raise SystemExit(f"No queda pieza sobre la mesa: con esta nube (un punto cada {sp:.2f} mm) se quita la franja "
+        raise for_person(f"No queda pieza sobre la mesa: con esta nube (un punto cada {sp:.2f} mm) se quita la franja "
                          f"de {2 * thr:.1f} mm junto a la mesa, y la pieza parece más delgada que eso. Escanea más cerca "
                          "o con más fotos para una nube más densa.")
 
@@ -396,7 +403,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         pcd = pcd.select_by_index(np.where(labels == big)[0])
     log(f"pieza: {len(pcd.points)} puntos")
     if len(pcd.points) < 200:
-        raise SystemExit("Muy pocos puntos en la pieza tras limpiar: revisa la nube densa.")
+        raise for_person("Quedaron muy pocos puntos de la pieza: prueba con más fotos, más cerca, y el tapete de escaneo.")
     # (La mesa ya está en Z = 0: no se desplaza la pieza, o perdería la franja quitada con el plano.)
     report["noise_mm"] = cloud_noise(pcd, sp)
 

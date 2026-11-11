@@ -268,9 +268,12 @@ def rebuild(reconstruct, scan: Path, out: Path, work: Path, dense: str, real_std
             traceback.print_exc(file=log)
             if isinstance(ex, KeyboardInterrupt):
                 raise
+            # Si el pipeline terminó con un texto escrito para la persona (qué pasó y qué hacer), ése; si no, el genérico.
+            es = str(ex) if getattr(ex, "for_person", False) and str(ex) else (
+                "No se pudo armar la pieza con estas fotos. Prueba con más fotos, más textura en la pieza "
+                "o el tapete de escaneo.")
             raise Failed("reconstruction_failed", f"The part could not be rebuilt from these photos: {ex}"[:500],
-                         "No se pudo armar la pieza con estas fotos. Prueba con más fotos, más textura en la pieza "
-                         "o el tapete de escaneo.") from ex
+                         es[:500]) from ex
     collect(work, out)
     if not (out / "pieza.stl").exists():
         raise Failed("no_part", "The scan gave no part (no STL)",

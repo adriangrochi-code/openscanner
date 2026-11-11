@@ -214,8 +214,8 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | Area | State | What was tested · findings |
 |---|---|---|
 | **App** | | |
-| Capture: Vídeo 360 | parcial | 17:15 instructions (no «detener» button → «botón rojo»); 11:45 thresholds 75 % / 40 photos / 20 % blurry match the guides. Pending: keyframe choice, blur rejection, coverage dome math. |
-| Capture: Fotos (passes, bursts, HDR, focus sweep) | pendiente | only texts (plurals, voseo). |
+| Capture: Vídeo 360 | revisado | 17:15 instructions; 11:45 thresholds match the guides. 00:15 (11-11) frame choice (moved enough, not too fast, max rate), counters and last pose reset per scan: fine. Coverage dome: its own tests (CoverageMapTest, CoverageGuidanceTest). |
+| Capture: Fotos (passes, bursts, HDR, focus sweep) | parcial | 00:15 (11-11) automatic shot (KeyframeSelector: 8°/3 cm, never > 0.6 rad/s, every 3 s), fire(): marks before and after the burst, HDR and focus sweep only when still: fine. Pending: the camera side (needs a phone). |
 | On-screen guides / instructions | revisado | 17:15 every «Toca/Pulsa» names a real control; GuideLabelsTest keeps guides and app in step. |
 | Processing on the phone, resume after the app is killed | revisado | 12:20 pendiente.json steps, attempt guard, only a complete zip is offered. 23:15 killed DURING capture, or in the 1-9 s after «Terminar» before finish() wrote the steps: the scan stayed on the phone with no zip, no way to send it, taking space. Now marked «captura» from the start; on reopen its files are cut to the last whole line (ScanSession.repairTruncated, RepairTruncatedTest) and it gets its zip (+ quick mesh if saved). Phone check: kill the app mid-scan, reopen. |
 | Cloud send (upload, resume, retry, 507) | revisado | 05:15 status-check failure no longer restarts the upload; 11:15 resume ids on disk at once (commit); 18:15 result tied to its zip, no double send. |
@@ -233,7 +233,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | Scan zip intake | revisado | 09:15 session.json folder, __MACOSX, zip bomb. |
 | Photo selection (blurry drop) | revisado | 10:15 fine. |
 | Scale (mat > focus > INS) | revisado | 10:15 mat vs median. 21:15 INS: frames outside the trajectory's time span were all put at its first/last point (np.interp clamps): -27 % scale with 40 % of frames outside; now skipped, test (real: photos saved while «stopping» come after the trajectory ends). Focus scale read: per-point ratio, median, MAD rejection: fine. |
-| COLMAP SfM / OpenMVS dense | parcial | CI full CPU path green. Pending: failure modes (few photos, symmetric/featureless part), textura.zip. |
+| COLMAP SfM / OpenMVS dense | revisado | CI full CPU path green. 00:15 (11-11) when COLMAP splits a scan into several models, the «largest» was picked by number of FILES (same for all): a sub-model could become the part. Now by photos placed (largest_model). No model at all: clear message instead of IndexError. The pipeline's own reasons now reach the person (error_es). Tests. Pending: textura.zip. |
 | Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. |
 | Meshing and closing | revisado | 03:20-07:15 base skirt, pinches, open top; 20:00 nothing below the table. |
 | Report and measures | revisado | 12:20 NaN → null; 20:00 measures from measured points (thin plates +19 % → +1 %); 20:30 same scan, same measures. |

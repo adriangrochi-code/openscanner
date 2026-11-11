@@ -238,6 +238,30 @@ def test_a_measure_that_is_not_a_number_is_null_in_the_summary():
         assert summary["volume_mm3"] == 24000.0 and summary["dimensions_mm_xyz"] == [40.0, 30.0, 20.0]
 
 
+def test_a_reason_written_for_the_person_reaches_error_es():
+    """The pipeline's own reasons («COLMAP no pudo ubicar las fotos…», «No queda pieza sobre la mesa…») only went to the
+    English `error`; the person always got the same generic sentence. Now error_es carries them; other failures keep
+    the generic one."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "colmap").write_text("")
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"
+        old = rc.COLMAP_EXE, rc.main
+        try:
+            rc.COLMAP_EXE = str(d / "colmap")
+            rc.main = lambda argv: (_ for _ in ()).throw(rc.for_person("COLMAP no pudo ubicar las fotos entre sí."))
+            ts.main([str(d / "a.zip"), "-o", str(d / "a"), "--summary", str(d / "a.json")])
+            rc.main = lambda argv: (_ for _ in ()).throw(RuntimeError("colmap terminó con código 1"))
+            ts.main([str(d / "b.zip"), "-o", str(d / "b"), "--summary", str(d / "b.json")])
+        finally:
+            rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
+        a = json.loads((d / "a.json").read_text(encoding="utf-8"))
+        b = json.loads((d / "b.json").read_text(encoding="utf-8"))
+        assert a["code"] == "reconstruction_failed" and a["error_es"] == "COLMAP no pudo ubicar las fotos entre sí."
+        assert b["error_es"].startswith("No se pudo armar la pieza con estas fotos")
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

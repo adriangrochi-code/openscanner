@@ -49,6 +49,14 @@ UNZIP_MAX_RATIO = 20
 UNZIP_MAX_BYTES = 40 * 1024 ** 3
 
 
+
+def for_person(text: str) -> SystemExit:
+    """Un final con un texto escrito para la persona (qué pasó y qué hacer): tisma_scan lo muestra tal cual en
+    error_es, en vez del genérico «No se pudo armar la pieza…»."""
+    e = SystemExit(text)
+    e.for_person = True
+    return e
+
 def load_session(path: Path, work: Path) -> Path:
     """La carpeta del escaneo: la de session.json (la menos profunda; sin __MACOSX, que agrega el Finder al volver a
     comprimir). Antes se tomaba la primera carpeta del zip, que podía ser __MACOSX o no existir."""
@@ -58,13 +66,13 @@ def load_session(path: Path, work: Path) -> Path:
         total = sum(i.file_size for i in z.infolist())
         limit = min(UNZIP_MAX_BYTES, UNZIP_MAX_RATIO * path.stat().st_size + 64 * 1024 ** 2)
         if total > limit:
-            raise SystemExit(f"El zip se descomprime a {total / 1e9:.1f} GB, más de lo que puede ocupar un "
+            raise for_person(f"El zip se descomprime a {total / 1e9:.1f} GB, más de lo que puede ocupar un "
                              f"escaneo ({limit / 1e9:.1f} GB): no es un escaneo de Tisma Scanner")
         z.extractall(work / "raw")   # zipfile ya quita «..» y rutas absolutas de los nombres
     found = sorted((p for p in (work / "raw").rglob("session.json") if "__MACOSX" not in p.parts),
                    key=lambda p: (len(p.parts), str(p)))
     if not found:
-        raise SystemExit("El zip no trae session.json: no es un escaneo de Tisma Scanner")
+        raise for_person("El zip no trae session.json: no es un escaneo de Tisma Scanner")
     return found[0].parent
 
 
@@ -634,8 +642,38 @@ def run_sfm(work, session, records, matcher, scan=None, features="aliked", mappe
             shutil.rmtree(sparse); sparse.mkdir()
     if not done:
         colmap("mapper", "--database_path", db, "--image_path", work / "images_feat", "--output_path", sparse)
-    models = sorted(sparse.iterdir(), key=lambda p: -sum(1 for _ in p.iterdir()))
-    return models[0]
+    return largest_model(sparse)
+
+
+def registered_images(model: Path) -> int:
+    """Fotos ubicadas en un modelo de COLMAP: el primer uint64 de images.bin, o las entradas de images.txt."""
+    b = model / "images.bin"
+    if b.exists():
+        data = b.read_bytes()[:8]
+        return int.from_bytes(data, "little") if len(data) == 8 else 0
+    t = model / "images.txt"
+    if t.exists():
+        # Cada foto: una línea de pose de 10 campos y otra de puntos (3 por punto, o vacía): se cuentan las de pose.
+        return sum(1 for l in t.read_text().splitlines() if not l.startswith("#") and len(l.split()) == 10)
+    return 0
+
+
+def largest_model(sparse: Path) -> Path:
+    """
+    El modelo de COLMAP con más fotos ubicadas. COLMAP puede partir un escaneo en varios (sparse/0, 1, …) cuando el
+    registro se corta; se elegía por la cantidad de ARCHIVOS de cada carpeta, la misma en todos, y un trozo de pocas
+    fotos podía quedar como la pieza. Sin ninguno, un mensaje claro en vez de «list index out of range».
+    """
+    models = [m for m in sparse.iterdir() if m.is_dir()] if sparse.exists() else []
+    counts = {m: registered_images(m) for m in models}
+    if not counts or max(counts.values()) < 3:
+        raise for_person("COLMAP no pudo ubicar las fotos entre sí (pocas fotos, o una pieza sin textura, lisa o "
+                         "simétrica). Prueba con más fotos alrededor, el tapete de escaneo o spray mate.")
+    best = max(models, key=lambda m: (counts[m], m.name))
+    if len(models) > 1:
+        print(f"[sfm] COLMAP armó {len(models)} modelos: se usa {best.name} ({counts[best]} fotos; "
+              + ", ".join(f"{m.name}: {counts[m]}" for m in sorted(models, key=lambda m: m.name)) + ")")
+    return best
 
 
 # --------------------------------------------------------------------------- modelo TXT
