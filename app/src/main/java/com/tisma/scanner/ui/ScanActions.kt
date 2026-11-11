@@ -47,6 +47,8 @@ interface ScanActions {
     fun sendToCloud()
     /** «Imprimir»: la pieza de la nube queda en la cuenta (Mi biblioteca, en el teléfono y la PC). */
     fun keepInLibrary() {}
+    /** Retira de la biblioteca la publicación de este escaneo (sólo la cuenta que la publicó). */
+    fun withdrawFromLibrary() {}
     /** El nombre público de la cuenta en la biblioteca (el autor de lo que publica), al abrir «Publicar». */
     fun loadLibraryName() {}
     /**

@@ -68,6 +68,7 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
                 Triple(setOf(422), "'author_name' is needed the first time", "Elige el nombre con el que vas a publicar"),
                 Triple(setOf(403), "The model was removed from the library", "La publicación fue retirada de la biblioteca"),
                 Triple(setOf(429), "Too many name changes today", "Ya cambiaste el nombre muchas veces hoy: prueba mañana"),
+                Triple(setOf(404), "No such model", "Esa publicación ya no está en la biblioteca (o no es de tu cuenta)"),
                 Triple(setOf(409), "The model is being changed at the same time", "Se está cambiando al mismo tiempo: prueba de nuevo"),
             )
 
@@ -299,6 +300,12 @@ class CloudClient(baseUrl: String, private val token: String, private val retryB
         val (code, j) = request("PUT", "/v1/me/library-name", JSONObject().put("name", name.trim()).toString().toByteArray())
         if (code != 200 || j == null) throw HttpError(code, j)
         return j.getString("library_name")
+    }
+
+    /** Retira una publicación propia de la biblioteca (sólo la cuenta que la publicó). 404: no es suya o ya no está. */
+    fun withdrawModel(modelId: String) {
+        val (code, j) = request("DELETE", "/v1/library/models/$modelId")
+        if (code != 200) throw HttpError(code, j)
     }
 
     fun publishModel(body: JSONObject): JSONObject {

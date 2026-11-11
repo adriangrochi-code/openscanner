@@ -607,6 +607,22 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * «Publicar»: la pieza a la biblioteca compartida de Tisma, desde el ítem de «Imprimir» (lo guarda si hace falta),
      * con la miniatura dibujada en el teléfono y el manifiesto firmado con la clave de par de esta instalación.
      */
+    /** Retira la publicación de este escaneo (DELETE /v1/library/models/{id}); la pieza sigue en Mi biblioteca. */
+    override fun withdrawFromLibrary() {
+        val job = _state.value.cloudJobId ?: return
+        val id = _state.value.libraryModelId ?: return
+        if (_state.value.libraryBusy) return
+        _state.update { it.copy(libraryBusy = true, libraryStatus = "Retirando de la biblioteca…") }
+        viewModelScope.launch(Dispatchers.IO) {
+            val r = runCatching { com.tisma.scanner.cloud.CloudClient(_state.value.cloudUrl, _state.value.cloudKey).withdrawModel(id) }
+            val gone = r.isSuccess || (r.exceptionOrNull() as? com.tisma.scanner.cloud.CloudClient.HttpError)?.code == 404
+            if (gone) { prefs.edit().remove("library_model_$job").apply(); log("Retirada de la biblioteca: $id") }
+            _state.update { it.copy(libraryBusy = false,
+                libraryPublished = if (gone) false else it.libraryPublished, libraryModelId = if (gone) null else it.libraryModelId,
+                libraryStatus = r.fold({ "✓ Retirada de la biblioteca de Tisma" }, { e -> "✗ " + com.tisma.scanner.cloud.CloudClient.userMessage(e) })) }
+        }
+    }
+
     /** Lee el nombre público de la cuenta (al abrir «Publicar»): el autor es la cuenta, no un texto libre. */
     override fun loadLibraryName() {
         _state.update { it.copy(libraryNameChecked = false) }

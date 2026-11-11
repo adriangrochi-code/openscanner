@@ -32,6 +32,7 @@ class State:
         self.chunk = chunk
         self.flaky_jobs = flaky_jobs
         self.full = 0
+        self.models: dict[str, str] = {}       # lm_… -> token of the account that published it
         self.library_name: str | None = None   # the account's one public name in the library (spec 967f7a3)
         self.status_down = 0                   # next GET /v1/scans/{id} answered 503 (POST /test/status-down)
         self.files: dict[str, dict] = {}       # af_… -> item
@@ -217,8 +218,9 @@ def handler(state: State):
                 return self.send(422, {"detail": "Thumbnail over 64 KB"})
             if state.library_name is None:
                 state.library_name = j["author_name"]
-            lm = "lm_" + uuid.uuid4().hex[:12]
+            lm = "lm_" + uuid.uuid4().hex                    # the publication's code: lm_ + 32 hex (p2p_library 3 novies)
             item["published_model"] = lm
+            state.models[lm] = token
             return self.send(201, {"id": lm, "revision": 1, "name": j["name"], "license": j.get("license"),
                                    "author": state.library_name})
 
@@ -259,6 +261,19 @@ def handler(state: State):
                         return self.send(413, {"detail": "A piece is too large"})
                     scan["data"] += data
                     return self.send(200, {"received": len(scan["data"])})
+            self.send(404, {"detail": "Not Found"})
+
+        def do_DELETE(self) -> None:
+            """Withdraw one's own publication: DELETE /v1/library/models/{id} → 200 {"ok": true}; 404 if not one's own."""
+            if not self.authed():
+                return
+            parts = urlparse(self.path).path.strip("/").split("/")
+            if len(parts) == 4 and parts[:3] == ["v1", "library", "models"]:
+                token = self.headers["Authorization"][7:]
+                if state.models.get(parts[3]) != token:
+                    return self.send(404, {"detail": "No such model"})
+                del state.models[parts[3]]
+                return self.send(200, {"ok": True})
             self.send(404, {"detail": "Not Found"})
 
         def do_GET(self) -> None:

@@ -147,6 +147,12 @@ class CloudClientServerTest {
             assertEquals("Tester", client.publishModel(noAuthor).getString("author"))
             assertEquals("Tester", client.publishModel(LibraryPublish.body(item, key, "Caja", "Otra persona", "MIT", "", null))
                 .getString("author"))
+            // The publication's code is lm_ + 32 hex; the account withdraws its own, and a second time is 404, in Spanish.
+            assertTrue(published.getString("id").matches(Regex("lm_[0-9a-f]{32}")))
+            client.withdrawModel(published.getString("id"))
+            val again = runCatching { client.withdrawModel(published.getString("id")) }.exceptionOrNull() as CloudClient.HttpError
+            assertEquals(404, again.code)
+            assertTrue(again.message!!.startsWith("Esa publicación ya no está"))
             assertEquals("Ana Tester", client.setLibraryName(" Ana Tester "))
             assertEquals("Ana Tester", client.libraryName())
             // Firmado con otra clave (o el manifiesto tocado): 422.

@@ -1051,9 +1051,21 @@ private fun ReviewScreen(s: UiState, vm: ScanActions, onShare: (File) -> Unit, o
                     SecondaryButton(if (s.libraryPublished) "✓ Publicada" else "Publicar", Modifier.weight(1f),
                         enabled = !s.libraryBusy && !s.libraryPublished) { vm.loadLibraryName(); publishing = true }
                 }
+                var withdrawing by remember { mutableStateOf(false) }
                 s.libraryModelId?.let { id ->
                     Text(publishedCodeLine(id), color = Tisma.TextDim, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    SecondaryButton("Retirar de la biblioteca", Modifier.fillMaxWidth(), enabled = !s.libraryBusy) { withdrawing = true }
                 }
+                if (withdrawing) androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { withdrawing = false },
+                    containerColor = Tisma.Bar,
+                    title = { Text("¿Retirar la publicación?", color = Tisma.Text, fontSize = 17.sp) },
+                    text = { Text("Deja de estar en la biblioteca de Tisma para los demás. La pieza sigue en tu Mi biblioteca.",
+                        color = Tisma.TextDim, fontSize = 13.sp) },
+                    confirmButton = { Text("Retirar", color = Tisma.PurpleText, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable { withdrawing = false; vm.withdrawFromLibrary() }.padding(12.dp)) },
+                    dismissButton = { Text("Cancelar", color = Tisma.TextDim, modifier = Modifier.clickable { withdrawing = false }.padding(12.dp)) },
+                )
                 if (publishing) PublishDialog(s, onCancel = { publishing = false }) { name, author, license, description ->
                     publishing = false
                     vm.publishToLibrary(name, author, license, description)
