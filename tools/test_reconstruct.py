@@ -395,3 +395,27 @@ def test_an_uncalibrated_focus_is_not_a_scale():
         s, _, n = rc.scale_from_focus(work, imgs, pts, usable)
         assert n == 30 and abs(s - 2.0) < 1e-9, "only camera 2's points"
         assert rc.scale_from_focus(work, {"0/1.jpg": imgs["0/1.jpg"]}, pts, usable)[0] is None
+
+
+def test_a_focus_peak_at_the_end_of_the_sweep_is_not_a_depth():
+    """Where the sharpness keeps rising past the last plane of the sweep (the table or the mat behind the part), the
+    depth was clipped to that plane with a high confidence, and those points went into the focus scale. Now a peak on
+    the first or last plane has no confidence; one inside the sweep keeps its depth."""
+    import cv2
+    from depth_from_focus import depth_from_focus
+    rng = np.random.default_rng(3)
+    texture = (rng.random((240, 320)) * 255).astype(np.uint8)
+    texture = cv2.cvtColor(cv2.resize(texture, None, fx=1, fy=1), cv2.COLOR_GRAY2BGR)
+
+    def blurred(sigma):
+        return texture.copy() if sigma == 0 else cv2.GaussianBlur(texture, (0, 0), sigma)
+
+    diopters = [10.0, 8.0, 6.0, 4.0, 2.0]
+    # Beyond the far end: the farther the plane, the sharper (the last one the sharpest).
+    _, conf, _ = depth_from_focus(diopters, [blurred(s) for s in (4, 3, 2, 1, 0)], max_side=4096)
+    assert np.median(conf[40:-40, 40:-40]) == 0.0, "a clipped depth must not count"
+    # Inside the sweep: sharpest at 6 D -> about 1/6 m, with confidence.
+    depth, conf, _ = depth_from_focus(diopters, [blurred(s) for s in (3, 1.5, 0, 1.5, 3)], max_side=4096)
+    c = (slice(40, -40), slice(40, -40))
+    assert np.median(conf[c]) > 0.5
+    assert abs(np.median(depth[c]) - 1 / 6) < 0.02

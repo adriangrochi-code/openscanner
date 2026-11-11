@@ -102,6 +102,11 @@ def depth_from_focus(stack_diopters, images, win=9, max_side=2000):
     depth_m = 1.0 / np.maximum(di, 1e-3)
     # Confianza: lo marcado que es el pico frente a la media del barrido.
     conf = (fm.max(0) - fm.mean(0)) / (fm.mean(0) + 1e-3)
+    # Un pico en el primer o el último plano no es una medida: la nitidez sigue subiendo hacia afuera del barrido
+    # (la mesa o el tapete detrás de la pieza) y la profundidad queda recortada al extremo, con confianza alta. Esos
+    # puntos entraban en la escala por enfoque y la sesgaban, sin aviso.
+    if n >= 3:
+        conf = np.where((idx == 0) | (idx == n - 1), 0.0, conf)
     aif = np.take_along_axis(np.stack(aligned), idx[None, ..., None], 0)[0]
     return depth_m, conf, aif
 
