@@ -419,3 +419,28 @@ def test_a_focus_peak_at_the_end_of_the_sweep_is_not_a_depth():
     c = (slice(40, -40), slice(40, -40))
     assert np.median(conf[c]) > 0.5
     assert abs(np.median(depth[c]) - 1 / 6) < 0.02
+
+
+def test_zupt_smoothing_does_not_correct_twice_what_the_ins_corrected_at_a_stop():
+    """The INS's Kalman corrects the position too at each stop (zero-velocity update): its trajectory jumps back there.
+    zupt_smooth subtracted the whole error again for every later segment: after the first stop the trajectory (and
+    the INS scale made from it) was off by that error."""
+    from ins_accuracy import zupt_smooth
+    dt, bias = 0.01, 0.2                 # an accelerometer bias of 0.2 m/s² while moving
+    rows, t, true_x, ins_x, v_err = [], 0.0, 0.0, 0.0, 0.0
+    for seg in range(2):
+        for k in range(1, 101):          # 1 s moving 0.1 m: speeding up and slowing down to a stop, as a hand does
+            t += dt
+            v = 0.2 * (1 - abs(2 * k / 100 - 1))
+            true_x += v * dt
+            v_err += bias * dt; ins_x += (v + v_err) * dt
+            rows.append((int(t * 1e9), np.array([ins_x, 0, 0]), np.array([v + v_err, 0, 0]), False))
+        ins_x -= ins_x - true_x          # the Kalman's update at the stop takes the position back (here, all of it)
+        v_err = 0.0
+        for k in range(50):              # 0.5 s still
+            t += dt
+            rows.append((int(t * 1e9), np.array([ins_x, 0, 0]), np.zeros(3), True))
+    _, out = zupt_smooth(rows)
+    assert abs(out[-1][0] - true_x) < 0.006, (out[-1][0], true_x)   # 2 mm a segment: the test's Euler steps
+    stop = 100                           # the first still sample: continuous with the corrected motion before it
+    assert abs(out[stop][0] - out[stop - 1][0]) < 0.003

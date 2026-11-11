@@ -143,6 +143,12 @@ def zupt_smooth(traj):
         tau = (t[a:b + 1] - t[a]) / T
         out[a:b + 1] = p[a:b + 1] - shift - v_end * T * (tau ** 2)[:, None] / 2
         shift = shift + v_end * T / 2
+        if i < n:
+            # The INS's own zero-velocity update at this stop already moved the position back (its Kalman corrects
+            # position through the position-velocity covariance): the trajectory jumps between the last moving sample
+            # and the first still one. Only what it left carries over; subtracting the whole error again
+            # double-corrected every segment after the first stop. (With no jump, nothing changes.)
+            shift = shift + (p[i] - p[b])
     return t, out
 
 
