@@ -38,7 +38,15 @@ class ImuRecorder(context: Context, private val ins: StrapdownIns) : SensorEvent
     private var stillAccel: MutableList<com.tisma.scanner.ins.ImuSample>? = null
     private var stillGyro: MutableList<com.tisma.scanner.ins.ImuSample>? = null
 
-    @Synchronized fun startStillCapture() { stillAccel = ArrayList(40_000); stillGyro = ArrayList(40_000) }
+    /**
+     * Empieza la captura; false si ya hay una (la prueba de quietud y la calibración base comparten este búfer: la
+     * segunda lo vaciaba y, al terminar, lo cerraba, y la primera quedaba sin muestras).
+     */
+    @Synchronized fun startStillCapture(): Boolean {
+        if (stillAccel != null) return false
+        stillAccel = ArrayList(40_000); stillGyro = ArrayList(40_000)
+        return true
+    }
 
     /** Termina la captura y devuelve (acelerómetro, giróscopo). */
     @Synchronized fun stopStillCapture(): Pair<List<com.tisma.scanner.ins.ImuSample>, List<com.tisma.scanner.ins.ImuSample>> {

@@ -814,7 +814,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun runImuStillTest() {
         if (_state.value.imuTestRemaining > 0 || session != null) return
         viewModelScope.launch {
-            imu.startStillCapture()
+            if (!imu.startStillCapture()) {
+                _state.update { it.copy(imuReport = listOf(BUSY_MEASURING)) }; return@launch
+            }
             for (s in IMU_TEST_SECONDS downTo 1) {
                 _state.update { it.copy(imuTestRemaining = s, imuReport = listOf("Midiendo… no toques el móvil ($s s)")) }
                 delay(1000)
@@ -979,9 +981,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
             val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
             val csvFile = File(calDir(), "deriva_$stamp.csv")
             val rows = ArrayList<com.tisma.scanner.ins.DriftRow>()
+            if (!imu.startStillCapture()) {
+                _state.update { it.copy(driftProgress = BUSY_MEASURING) }; return@launch
+            }
             ins.reset()
             ins.filter.resetMagStats()
-            imu.startStillCapture()
             val csv = csvFile.bufferedWriter()
             csv.write(com.tisma.scanner.ins.DriftRow.CSV_HEADER + "\n")
             _state.update { it.copy(driftRunning = true, driftReport = emptyList()) }
@@ -1039,7 +1043,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
                     val lines = com.tisma.scanner.ins.DriftLog.lines(rows) + compass + (report?.lines() ?: emptyList())
                     val applied = report != null && !report.moved
                     if (applied) applyCalibration(report!!)
-                    val summary = lines + (if (applied) "✓ Calibración guardada y aplicada" else "Calibración NO guardada (el móvil se movió)")
+                    val summary = lines + when {
+                        applied -> "✓ Calibración guardada y aplicada"
+                        report == null -> "Calibración NO guardada: no llegaron datos suficientes del IMU"
+                        else -> "Calibración NO guardada (el móvil se movió)"
+                    }
                     runCatching {
                         File(calDir(), "deriva_$stamp.txt").writeText(summary.joinToString("\n") + "\n")
                         File(calDir(), "deriva_$stamp.json").writeText(
@@ -2361,6 +2369,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         /** Distancia típica de enfoque de las macro de foco fijo de 2 MP. */
         const val MACRO_FOCUS_M = 0.04
         const val IMU_TEST_SECONDS = 60
+        /** La prueba de quietud y la calibración base no pueden medir a la vez (comparten la captura del IMU). */
+        const val BUSY_MEASURING = "Ya hay una medición en curso (prueba de quietud o calibración base): espera a que termine"
         const val ANTI_SHAKE_FRAMES = 4
         /** Giro por debajo del cual se considera el móvil firme para una foto a mano (rad/s). */
         const val STEADY_GYRO = 0.25
