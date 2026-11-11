@@ -262,6 +262,28 @@ def test_a_reason_written_for_the_person_reaches_error_es():
         assert b["error_es"].startswith("No se pudo armar la pieza con estas fotos")
 
 
+def test_textura_zip_only_with_a_complete_texture():
+    """OpenMVS's TextureMesh can crash after writing part of its files (on CI: code -11 after «Mesh texturing
+    completed»). collect zipped every *texture* file it found, so textura.zip could carry an OBJ whose material or
+    image is missing. Now only an OBJ with its .mtl files and their images goes in, and only the files they name."""
+    import zipfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        und = d / "work" / "undistorted"; und.mkdir(parents=True)
+        out = d / "out"; out.mkdir()
+        (und / "scene_texture.obj").write_text("mtllib scene_texture.mtl\nv 0 0 0\nf 1 1 1\n")
+        ts.collect(d / "work", out)                                     # no .mtl: crashed before writing it
+        assert not (out / "textura.zip").exists()
+        (und / "scene_texture.mtl").write_text("newmtl m0\nmap_Kd scene_texture_map_Kd.jpg\n")
+        ts.collect(d / "work", out)                                     # .mtl but not its image
+        assert not (out / "textura.zip").exists()
+        (und / "scene_texture_map_Kd.jpg").write_bytes(b"jpg")
+        (und / "old_texture_unused.png").write_bytes(b"png")           # not named by the material
+        ts.collect(d / "work", out)
+        with zipfile.ZipFile(out / "textura.zip") as z:
+            assert sorted(z.namelist()) == ["scene_texture.mtl", "scene_texture.obj", "scene_texture_map_Kd.jpg"]
+
+
 if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()

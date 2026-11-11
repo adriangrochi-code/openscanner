@@ -187,13 +187,33 @@ def collect(work: Path, out: Path) -> None:
     for name in RESULTS:
         if (work / name).exists():
             shutil.copy(work / name, out / name)
-    und = work / "undistorted"
-    texture = [p for p in und.glob("*texture*") if p.suffix.lower() in (".obj", ".mtl", ".png", ".jpg")] \
-        if und.exists() else []
+    texture = complete_texture(work / "undistorted")
     if texture:
         with zipfile.ZipFile(out / "textura.zip", "w", zipfile.ZIP_DEFLATED) as z:
             for p in texture:
                 z.write(p, p.name)
+
+
+def complete_texture(und: Path) -> list[Path]:
+    """
+    The files of OpenMVS's textured mesh, only if complete: each *texture*.obj with the .mtl files it names, and the
+    images those name (map_Kd, …). TextureMesh can crash after writing part of them (on CI: code -11 after «Mesh
+    texturing completed»), and every *texture* file found was zipped: an OBJ without its material or image.
+    """
+    if not und.exists():
+        return []
+    files: list[Path] = []
+    for obj in sorted(und.glob("*texture*.obj")):
+        mtls = [und / l.split(None, 1)[1].strip() for l in obj.read_text(errors="replace").splitlines()
+                if l.startswith("mtllib ") and len(l.split(None, 1)) == 2]
+        if not mtls or not all(m.is_file() for m in mtls):
+            continue
+        maps = [und / l.split(None, 1)[1].strip() for m in mtls for l in m.read_text(errors="replace").splitlines()
+                if l.strip().lower().startswith("map_") and len(l.split(None, 1)) == 2]
+        if not maps or not all(m.is_file() for m in maps):
+            continue
+        files += [obj, *mtls, *maps]
+    return list(dict.fromkeys(files))
 
 
 def finite(v):
