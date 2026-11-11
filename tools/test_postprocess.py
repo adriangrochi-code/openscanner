@@ -148,6 +148,23 @@ def test_a_noise_layer_under_the_table_is_not_the_table():
         assert all(abs(g / w - 1) < 0.05 for g, w in zip(dims, (40, 30, 20))), dims
 
 
+def test_poisson_survives_a_crash_of_its_process():
+    """Open3D's Poisson segfaulted once on CI, taking the whole run with it. It runs in a child process now: one that
+    dies (here made to abort the first time) is tried again, and the part comes out the same."""
+    import os
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(box_on_table())))
+        os.environ["TISMA_POISSON_CRASH_ONCE"] = str(Path(d) / "crashed")
+        try:
+            r = pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=8000)
+        finally:
+            os.environ.pop("TISMA_POISSON_CRASH_ONCE")
+        assert (Path(d) / "crashed").exists()                       # the first child did die
+        assert r["watertight"] and abs(r["volume_mm3"] / 24000 - 1) < 0.05, r
+
+
 def test_a_part_thinner_than_the_table_strip_says_so():
     """With a coarse cloud, a part thinner than the strip removed with the table (6 point spacings) left nothing, and
     the run ended in a NumPy error («zero-size array…»). Now it stops with a message that says what happened."""

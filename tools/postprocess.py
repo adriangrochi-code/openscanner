@@ -50,6 +50,43 @@ def for_person(text: str) -> SystemExit:
     e.for_person = True
     return e
 
+
+def _poisson_child(cloud: str, mesh_out: str, dens_out: str, depth: int) -> None:
+    """In a child process: Poisson on the cloud (with its normals), mesh and densities to files."""
+    import os
+    marker = os.environ.get("TISMA_POISSON_CRASH_ONCE")       # tests only: crash the first time, as Open3D did
+    if marker and not Path(marker).exists():
+        Path(marker).write_text("crashed")
+        os.abort()
+    pcd = o3d.io.read_point_cloud(cloud)
+    mesh, dens = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=depth, linear_fit=True)
+    o3d.io.write_triangle_mesh(mesh_out, mesh)
+    np.save(dens_out, np.asarray(dens))
+
+
+def poisson(pcd, depth: int, tries: int = 2):
+    """
+    Poisson in a child process, once more if it dies. Open3D's Poisson (in threads) segfaulted once on CI: a native
+    crash cannot be caught in Python and took the whole job with it. A child that dies is just tried again. If child
+    processes cannot be started at all, it runs here as before.
+    """
+    import multiprocessing as mp
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="tisma_poisson_") as d:
+        cloud, mesh_out, dens_out = str(Path(d) / "in.ply"), str(Path(d) / "mesh.ply"), str(Path(d) / "dens.npy")
+        o3d.io.write_point_cloud(cloud, pcd)
+        for attempt in range(tries):
+            try:
+                p = mp.get_context("spawn").Process(target=_poisson_child, args=(cloud, mesh_out, dens_out, depth))
+                p.start(); p.join()
+            except (OSError, RuntimeError) as e:          # no child processes here: as before, in this process
+                log(f"Poisson sin proceso aparte ({e})")
+                return o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=depth, linear_fit=True)
+            if p.exitcode == 0 and Path(mesh_out).exists():
+                return o3d.io.read_triangle_mesh(mesh_out), np.load(dens_out)
+            log(f"Poisson terminó mal (código {p.exitcode}): " + ("se intenta otra vez" if attempt + 1 < tries else "sin más intentos"))
+    raise for_person("No se pudo armar la malla de la pieza (el cálculo se cortó dos veces). Vuelve a enviar el escaneo.")
+
 def refine_plane(P, model, thr, rounds=5):
     """
     El plano de RANSAC ajustado por mínimos cuadrados a sus puntos, y otra vez con los puntos de ese plano, hasta que
@@ -418,7 +455,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     measured = o3d.geometry.PointCloud(pcd)
     extent = np.ptp(np.asarray(pcd.points), axis=0).max()
     depth = depth or int(np.clip(np.ceil(np.log2(extent / sp)) + 1, 7, 11))
-    mesh, dens = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=depth, linear_fit=True)
+    mesh, dens = poisson(pcd, depth)
     dens = np.asarray(dens)
     closed_base = plane is not None and flat_base
     # Fuera lo que Poisson "inventa" lejos de los datos (baja densidad: burbujas).

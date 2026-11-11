@@ -243,7 +243,7 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 
 **Open (01:20, 11-11):** Open3D's Poisson segfaulted once on CI (7c63b75, inside test_the_same_cloud_gives_the_same_
 measures, five reconstructions in a row; the next run passed). A native crash cannot be caught in Python: on a node
-it would fail a person's job at random. Next: run Poisson in a child process with a retry.
+it would fail a person's job at random. 01:50: Poisson now runs in a child process (spawn), retried once if it dies; freeze_support in tisma_scan, reconstruct and tisma_server entries for the Windows .exe. Test with a child made to abort. Windows CI to confirm.
 
 ## Deep bug hunt (owner, 2026-11-10 20:00 → 11-12 03:10): hard shapes in postprocess
 

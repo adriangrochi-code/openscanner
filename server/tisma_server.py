@@ -703,4 +703,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()   # TismaServer.exe: postprocess runs Poisson in a child process of this same exe
     main()

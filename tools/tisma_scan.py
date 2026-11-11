@@ -385,4 +385,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()   # tisma_scan.exe (PyInstaller): the Poisson child process starts this same exe
     sys.exit(main())
