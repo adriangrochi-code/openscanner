@@ -230,3 +230,18 @@ if __name__ == "__main__":
     test_a_wide_open_top_is_not_taken_as_the_base()
     test_a_thin_plate_measures_its_thickness()
     print("ok")
+
+
+def test_a_hole_only_at_the_top_is_not_taken_for_the_base():
+    """The base (lowered to the floor with a skirt) was the widest hole near the LOWEST HOLE. With only a hole at the
+    top (the base already closed, a cup's mouth) that hole was taken for the base and the rim was dragged down to
+    Z = 0: the part crushed flat, volume 0, still «closed». Now near the part's lowest point; the top is just capped."""
+    m = pp.o3d.geometry.TriangleMesh.create_cylinder(radius=10, height=20, resolution=40, split=4)
+    m.translate((0, 0, 10))
+    V = np.asarray(m.vertices); T = np.asarray(m.triangles)
+    m.triangles = pp.o3d.utility.Vector3iVector(T[[not np.all(V[t, 2] >= 20 - 1e-6) for t in T]])
+    m.remove_unreferenced_vertices()
+    assert pp.cap_holes(m, 1e9, flatten_lowest=True) == 1
+    closed, vol = pp.closed_volume(m)
+    assert closed and abs(vol / (np.pi * 10 ** 2 * 20) - 1) < 0.02, vol
+    assert np.asarray(m.vertices)[:, 2].max() > 19.9, "the rim stays at the top"

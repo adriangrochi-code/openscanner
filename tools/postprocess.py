@@ -311,9 +311,13 @@ def cap_holes(mesh, max_perimeter, flatten_lowest=False):
         def footprint(l):
             P = V[l, :2]
             return np.prod(P.max(0) - P.min(0))
-        low = min(V[l, 2].min() for l in loops)
+        # «Near the lowest» is near the part's lowest point, not the lowest hole's: with only a hole at the top (the
+        # base already closed, a cup's mouth), that hole was the lowest one, became the base, and the skirt dragged
+        # the rim down to the floor: the part crushed flat, volume 0, still «closed».
+        low = V[:, 2].min()
         near = low + 0.25 * (V[:, 2].max() - low)
-        base = max((i for i, l in enumerate(loops) if V[l, 2].min() <= near), key=lambda i: footprint(loops[i]))
+        bases = [i for i, l in enumerate(loops) if V[l, 2].min() <= near]
+        base = max(bases, key=lambda i: footprint(loops[i])) if bases else None
     for i, loop in enumerate(loops):
         if i == base:
             loop = skirt_to_floor(V, loop, new_v, new_t)
