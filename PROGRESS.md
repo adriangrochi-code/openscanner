@@ -234,12 +234,16 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
 | Photo selection (blurry drop) | revisado | 10:15 fine. |
 | Scale (mat > focus > INS) | revisado | 10:15 mat vs median. 21:15 INS: frames outside the trajectory's time span were all put at its first/last point (np.interp clamps): -27 % scale with 40 % of frames outside; now skipped, test (real: photos saved while «stopping» come after the trajectory ends). Focus scale read: per-point ratio, median, MAD rejection: fine. |
 | COLMAP SfM / OpenMVS dense | revisado | CI full CPU path green. 00:15 (11-11) when COLMAP splits a scan into several models, the «largest» was picked by number of FILES (same for all): a sub-model could become the part. Now by photos placed (largest_model). No model at all: clear message instead of IndexError. The pipeline's own reasons now reach the person (error_es). Tests. 00:20 textura.zip: only a complete OBJ + .mtl + images (TextureMesh can crash mid-export, as on CI), test. 00:30: the OBJ was in metres and the reconstruction's frame (downloaded next to pieza.stl, it showed 1000x smaller and offset); now in pieza.stl's frame via the report's to_part_mm. Tests. |
-| Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. |
+| Table removal | revisado | 20:00 sparse table (part removed as table), thin parts message; 20:30 deterministic plane. 01:20 (11-11) REGRESSION from 20:00 seen on CI (7ab4c2d: box 40.9 x 37.7 mm): with small planes allowed, a thin layer of points under the mat (0.8 %) was the «lowest» horizontal plane and became the table; the mat stayed. Now the biggest horizontal plane with the part above. Test. |
 | Meshing and closing | revisado | 03:20-07:15 base skirt, pinches, open top; 20:00 nothing below the table. |
 | Report and measures | revisado | 12:20 NaN → null; 20:00 measures from measured points (thin plates +19 % → +1 %); 20:30 same scan, same measures. |
 | tisma_scan (node program) | revisado | 08:15 own work folder; summary contract with the server session. |
 | Windows node package | revisado | CI green on every push; licences checked. |
 | Tester kit and release workflow | revisado | 14:20 SOURCE.txt + THIRD_PARTY.md; 15:20 all pipeline tests on CI. Release waits for the owner's «sí». |
+
+**Open (01:20, 11-11):** Open3D's Poisson segfaulted once on CI (7c63b75, inside test_the_same_cloud_gives_the_same_
+measures, five reconstructions in a row; the next run passed). A native crash cannot be caught in Python: on a node
+it would fail a person's job at random. Next: run Poisson in a child process with a retry.
 
 ## Deep bug hunt (owner, 2026-11-10 20:00 → 11-12 03:10): hard shapes in postprocess
 

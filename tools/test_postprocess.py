@@ -129,6 +129,25 @@ def test_to_part_mm_takes_the_input_cloud_to_the_parts_frame():
             (np.percentile(Q, [2, 98], axis=0), np.percentile(V, [2, 98], axis=0))
 
 
+def test_a_noise_layer_under_the_table_is_not_the_table():
+    """On CI (7ab4c2d) a thin layer of points just under the mat (under 1 % of the cloud) was taken as the table,
+    because it was the lowest horizontal plane: the mat was not removed and the box measured 40.9 x 37.7 mm. Of the
+    horizontal planes with the part above, the table is the biggest one."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        P = box_on_table(table_step=0.0006)
+        rng = np.random.default_rng(3)
+        t = P[np.abs(P[:, 2]) < 1e-4]                                   # the table's points
+        under = t[rng.choice(len(t), len(P) // 60, replace=True)] + [0, 0, -0.006]   # beyond the plane tolerance
+        under[:, :2] += rng.normal(0, 0.0003, (len(under), 2))
+        P = np.vstack([P, under])
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)))
+        r = pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=8000)
+        dims = sorted(r["dimensions_mm_xyz"], reverse=True)
+        assert all(abs(g / w - 1) < 0.05 for g, w in zip(dims, (40, 30, 20))), dims
+
+
 def test_a_part_thinner_than_the_table_strip_says_so():
     """With a coarse cloud, a part thinner than the strip removed with the table (6 point spacings) left nothing, and
     the run ended in a NumPy error («zero-size array…»). Now it stops with a message that says what happened."""

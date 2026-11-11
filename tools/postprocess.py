@@ -121,8 +121,10 @@ def support_plane(pcd, thr, up=None, max_planes=8, min_share=0.005):
             return np.mean(h[others] > np.median(h[c[2]]) + thr) > 0.5 if len(others) else False
         horiz = [c for c in horiz if most_above(c)]
         if horiz:
-            # Altura de cada plano a lo largo de la gravedad: el más bajo es la mesa.
-            best = min(horiz, key=lambda c: np.median(P_all[c[2]] @ up))
+            # De los horizontales con la pieza encima, la mesa es el MAYOR. El más bajo no: con planos chicos entre los
+            # candidatos, una capa fina de puntos bajo el tapete (en CI, 0,8 % de la nube) pasaba por mesa, el tapete
+            # quedaba y la caja medía 40,9 x 37,7 mm.
+            best = max(horiz, key=lambda c: len(c[2]))
             n, d, idx, _ = best
             if n @ up < 0:
                 n, d = -n, -d
