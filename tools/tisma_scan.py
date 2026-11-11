@@ -36,10 +36,17 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-# The stages of reconstruct.py (the tags it prints) and how far along each one starts.
+# The stages of reconstruct.py (the tags it prints) and how far along each one starts. A tool is a program's name,
+# or «program subcommand»; the first rule that matches wins, so COLMAP's dense steps come before plain «colmap».
+# (Without them every COLMAP line was 25 %: on a node with an NVIDIA card, where the dense cloud is COLMAP's, the
+# progress stood at 50 % for the longest part of the job.)
 STAGES = (
     ("[hdr]", None, 5),
     ("[sfm]", None, 15),
+    ("[run]", "colmap image_undistorter", 55),
+    ("[run]", "colmap patch_match_stereo", 60),
+    ("[run]", "colmap stereo_fusion", 78),
+    ("[run]", "colmap poisson_mesher", 84),
     ("[run]", "colmap", 25),
     ("[ins]", None, 45),
     ("[scale]", None, 50),
@@ -153,7 +160,8 @@ def progress_of(line: str) -> int | None:
         if tool is None:
             return percent
         words = line.split()
-        if len(words) > 1 and Path(words[1]).stem == tool:
+        program, _, sub = tool.partition(" ")
+        if len(words) > 1 and Path(words[1]).stem == program and (not sub or (len(words) > 2 and words[2] == sub)):
             return percent
     return None
 

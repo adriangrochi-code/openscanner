@@ -16,6 +16,10 @@ def test_progress_of_the_stages():
     assert ts.progress_of("[run] /opt/openMVS/TextureMesh scene.mvs") == 84
     assert ts.progress_of("[post] limpieza") == 90
     assert ts.progress_of("cualquier otra línea") is None
+    # COLMAP's dense cloud (nodes with an NVIDIA card): it moves on, it does not stay at the 25 % of «colmap».
+    assert ts.progress_of("[run] C:/COLMAP/bin/colmap.exe patch_match_stereo --workspace_path u") == 60
+    assert ts.progress_of("[run] /usr/bin/colmap stereo_fusion --workspace_path u") == 78
+    assert ts.progress_of("[run] colmap mapper --database_path db") == 25
 
 
 def test_without_colmap_a_coded_error():
