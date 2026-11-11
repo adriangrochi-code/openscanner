@@ -298,3 +298,33 @@ if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
         print("ok", fn.__name__)
+
+
+def test_a_part_without_a_metric_scale_is_not_handed_over():
+    """With no mat, no focus distances and no usable INS scale the pipeline went on in COLMAP's units: pieza.stl and
+    the summary's «mm» were of any size and the person printed the part at a random size. Now tisma_scan asks the
+    pipeline to stop (--need-scale) and, if a part without scale comes out anyway, refuses it with the reason."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "colmap").write_text("")
+        ts.os.environ["TISMA_SCAN_DENSE"] = "colmap"
+        seen = []
+
+        def unscaled_main(argv):
+            seen.append(argv)
+            work = Path(argv[argv.index("--work") + 1])
+            work.mkdir(parents=True, exist_ok=True)
+            (work / "pieza.stl").write_text("solid pieza\nendsolid pieza\n")
+            (work / "pieza_informe.json").write_text(json.dumps({"units_in": "unit", "dimensions_mm_xyz": [3.1, 2.2, 1.4]}))
+
+        old = rc.COLMAP_EXE, rc.main
+        try:
+            rc.COLMAP_EXE, rc.main = str(d / "colmap"), unscaled_main
+            code = ts.main([str(d / "a.zip"), "-o", str(d / "a"), "--summary", str(d / "a.json")])
+        finally:
+            rc.COLMAP_EXE, rc.main = old
+            ts.os.environ.pop("TISMA_SCAN_DENSE", None)
+        s = json.loads((d / "a.json").read_text(encoding="utf-8"))
+        assert "--need-scale" in seen[0]
+        assert code == 1 and s["code"] == "reconstruction_failed" and "tapete" in s["error_es"]
+        assert not (d / "a" / "pieza.stl").exists(), "no part of a random size for the person"

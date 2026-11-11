@@ -183,6 +183,15 @@ class Tee(io.TextIOBase):
             self.log.flush()
 
 
+def unscaled(work: Path) -> bool:
+    """Whether the part came out without a metric scale (postprocess run on COLMAP's units): its STL and measures
+    would be of any size. reconstruct stops before (--need-scale); this is the last check before handing it over."""
+    try:
+        return json.loads((work / "pieza_informe.json").read_text(encoding="utf-8")).get("units_in") == "unit"
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def collect(work: Path, out: Path) -> None:
     for name in RESULTS:
         if (work / name).exists():
@@ -307,7 +316,9 @@ def run(scan: Path, out: Path, threads: int, gpu: bool, real_stdout) -> dict:
 
 
 def rebuild(reconstruct, scan: Path, out: Path, work: Path, dense: str, real_stdout) -> dict:
-    argv = [str(scan), "--work", str(work), "--dense", dense]
+    # --need-scale: without a metric scale the part would come out in COLMAP's units (any size) with its measures
+    # labelled mm; the person printed it at a random size.
+    argv = [str(scan), "--work", str(work), "--dense", dense, "--need-scale"]
     with open(out / "log.txt", "w", encoding="utf-8") as log:
         tee = Tee(log, real_stdout)
         try:
@@ -323,6 +334,9 @@ def rebuild(reconstruct, scan: Path, out: Path, work: Path, dense: str, real_std
                 "o el tapete de escaneo.")
             raise Failed("reconstruction_failed", f"The part could not be rebuilt from these photos: {ex}"[:500],
                          es[:500]) from ex
+    if unscaled(work):
+        raise Failed("reconstruction_failed", "The part has no metric scale (no mat, focus or INS scale)",
+                     reconstruct.NO_SCALE_ES)
     collect(work, out)
     if not (out / "pieza.stl").exists():
         raise Failed("no_part", "The scan gave no part (no STL)",

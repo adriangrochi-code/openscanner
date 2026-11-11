@@ -57,6 +57,10 @@ def for_person(text: str) -> SystemExit:
     e.for_person = True
     return e
 
+NO_SCALE_ES = ("No se pudo saber el tamaño real de la pieza: las fotos no dieron ninguna escala. Escanea con el "
+               "tapete de escaneo (imprímelo desde la app al 100 %) y que se vea en las fotos.")
+
+
 def load_session(path: Path, work: Path) -> Path:
     """La carpeta del escaneo: la de session.json (la menos profunda; sin __MACOSX, que agrega el Finder al volver a
     comprimir). Antes se tomaba la primera carpeta del zip, que podía ser __MACOSX o no existir."""
@@ -1000,6 +1004,8 @@ def main(argv=None):
     ap.add_argument("--dense", choices=["none", "colmap", "openmvs"], default="none")
     ap.add_argument("--prepare-only", action="store_true", help="sólo HDR + realce, sin COLMAP")
     ap.add_argument("--no-post", action="store_true", help="no postprocesar la nube densa (limpieza, malla, STL)")
+    ap.add_argument("--need-scale", action="store_true",
+                    help="terminar si no hay escala métrica (tapete, enfoque o INS), en vez de dar una pieza sin tamaño real")
     a = ap.parse_args(argv)
 
     a.work.mkdir(parents=True, exist_ok=True)
@@ -1071,6 +1077,9 @@ def main(argv=None):
         model = out
     else:
         print("[scale] sin escala métrica (usa --mat con el tapete ArUco)")
+        if a.need_scale:
+            # Una pieza sin escala sale en unidades de COLMAP: el STL y las medidas «en mm» serían de cualquier tamaño.
+            raise for_person(NO_SCALE_ES)
     dense(a.work, model, a.dense)
 
     # Postprocesado de la nube densa -> pieza limpia, cerrada y en mm (STL para imprimir).
