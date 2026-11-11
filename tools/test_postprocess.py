@@ -112,6 +112,23 @@ def test_the_same_cloud_gives_the_same_measures():
             assert (max(v) - min(v)) / min(v) < 0.001, v
 
 
+def test_to_part_mm_takes_the_input_cloud_to_the_parts_frame():
+    """The report's to_part_mm (input units → pieza.stl's frame) is what tisma_scan applies to OpenMVS's textured OBJ:
+    applied to the input cloud it must land where the STL is (mm, on the table)."""
+    import open3d as o3d
+    with tempfile.TemporaryDirectory() as d:
+        inp = Path(d) / "denso.ply"
+        P = box_on_table()
+        o3d.io.write_point_cloud(str(inp), o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P)))
+        r = pp.postprocess(inp, Path(d) / "pieza", up=np.array([0, 0, 1.0]), max_triangles=8000)
+        M = np.array(r["to_part_mm"])
+        box = P[P[:, 2] > 0.001]                                     # the box's points, in metres
+        Q = (M[:3, :3] @ box.T).T + M[:3, 3]
+        V = np.asarray(o3d.io.read_triangle_mesh(str(Path(d) / "pieza.ply")).vertices)
+        assert np.allclose(np.percentile(Q, [2, 98], axis=0), np.percentile(V, [2, 98], axis=0), atol=1.5), \
+            (np.percentile(Q, [2, 98], axis=0), np.percentile(V, [2, 98], axis=0))
+
+
 def test_a_part_thinner_than_the_table_strip_says_so():
     """With a coarse cloud, a part thinner than the strip removed with the table (6 point spacings) left nothing, and
     the run ended in a NumPy error («zero-size array…»). Now it stops with a message that says what happened."""

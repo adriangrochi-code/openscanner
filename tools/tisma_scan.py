@@ -189,9 +189,38 @@ def collect(work: Path, out: Path) -> None:
             shutil.copy(work / name, out / name)
     texture = complete_texture(work / "undistorted")
     if texture:
+        # La malla con textura sale de OpenMVS en el marco de la reconstrucción (metros, sin alinear): se lleva al
+        # de pieza.stl (mm, sobre la mesa), o al lado del STL se veía 1000 veces más chica y corrida.
+        to_part = None
+        try:
+            to_part = json.loads((work / "pieza_informe.json").read_text(encoding="utf-8")).get("to_part_mm")
+        except (OSError, ValueError):
+            pass
         with zipfile.ZipFile(out / "textura.zip", "w", zipfile.ZIP_DEFLATED) as z:
             for p in texture:
-                z.write(p, p.name)
+                if p.suffix.lower() == ".obj" and to_part:
+                    z.writestr(p.name, obj_in_frame(p.read_text(errors="replace"), to_part))
+                else:
+                    z.write(p, p.name)
+
+
+def obj_in_frame(text: str, m) -> str:
+    """The OBJ with its vertices (v) moved by the 4x4 matrix m and its normals (vn) turned by its rotation."""
+    r = [[m[i][j] for j in range(3)] for i in range(3)]
+    out = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[0] in ("v", "vn"):
+            x, y, z = (float(v) for v in parts[1:4])
+            if parts[0] == "v":
+                q = [m[i][0] * x + m[i][1] * y + m[i][2] * z + m[i][3] for i in range(3)]
+            else:
+                q = [r[i][0] * x + r[i][1] * y + r[i][2] * z for i in range(3)]
+                n = math.sqrt(sum(c * c for c in q)) or 1.0
+                q = [c / n for c in q]
+            line = f"{parts[0]} {q[0]:.6g} {q[1]:.6g} {q[2]:.6g}" + ("" if len(parts) == 4 else " " + " ".join(parts[4:]))
+        out.append(line)
+    return "\n".join(out) + "\n"
 
 
 def complete_texture(und: Path) -> list[Path]:

@@ -282,6 +282,16 @@ def test_textura_zip_only_with_a_complete_texture():
         ts.collect(d / "work", out)
         with zipfile.ZipFile(out / "textura.zip") as z:
             assert sorted(z.namelist()) == ["scene_texture.mtl", "scene_texture.obj", "scene_texture_map_Kd.jpg"]
+        # In pieza.stl's frame (mm, on the table): the report's to_part_mm moves the OBJ's vertices, turns its normals.
+        m = [[0, -1000, 0, 5], [1000, 0, 0, -2], [0, 0, 1000, 0], [0, 0, 0, 1]]     # x1000, 90° about Z, shifted
+        (d / "work" / "pieza_informe.json").write_text(json.dumps({"to_part_mm": m}))
+        (und / "scene_texture.obj").write_text("mtllib scene_texture.mtl\nv 0.01 0.02 0.03 0.5 0.5 0.5\nvn 1 0 0\nf 1 1 1\n")
+        ts.collect(d / "work", out)
+        with zipfile.ZipFile(out / "textura.zip") as z:
+            lines = z.read("scene_texture.obj").decode().splitlines()
+        v = [float(x) for x in lines[1].split()[1:4]]
+        assert [round(x, 6) for x in v] == [-15.0, 8.0, 30.0] and lines[1].endswith("0.5 0.5 0.5"), lines[1]
+        assert [round(float(x), 6) for x in lines[2].split()[1:]] == [0.0, 1.0, 0.0], lines[2]
 
 
 if __name__ == "__main__":

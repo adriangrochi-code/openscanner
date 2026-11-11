@@ -351,6 +351,9 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     if len(pcd.points) == 0:
         raise SystemExit(f"Nube vacía: {inp}")
     pcd.scale(UNITS_TO_MM[units], center=(0, 0, 0))
+    # De la nube de entrada al marco de la pieza (mm, sobre la mesa, alineada): se va armando y queda en el informe,
+    # para llevar a ese mismo marco lo que sale de la misma reconstrucción (la malla con textura de OpenMVS).
+    to_part = np.diag([UNITS_TO_MM[units]] * 3 + [1.0])
     report = {"input_points": len(pcd.points), "units_in": units}
     log(f"{len(pcd.points)} puntos de entrada")
 
@@ -372,6 +375,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         origin = -d * n
         T0 = frame_from_plane(n, origin)
         pcd.transform(T0)
+        to_part = T0 @ to_part
         if cameras is not None:
             cameras = (T0[:3, :3] @ cameras.T).T + T0[:3, 3]
         if not keep_plane:
@@ -471,6 +475,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
     if plane is None:
         T[2, 3] -= (Rz @ V.T)[2].min()
     mesh.transform(T); measured.transform(T)
+    to_part = T @ to_part
 
     # 7-8. Exportar e informar
     o3d.io.write_triangle_mesh(str(out.with_suffix(".stl")), mesh)
@@ -493,6 +498,7 @@ def postprocess(inp: Path, out: Path, units="m", voxel=0.0, flat_base=True, dept
         "mesh_vs_points_p95_mm": round(fit_p95, 4),
         "flat_base": bool(flat_base and plane is not None),
         "poisson_depth": depth,
+        "to_part_mm": [[round(float(x), 9) for x in row] for row in to_part],
     })
     # NaN/infinito no son JSON (la app y los lectores estrictos rechazan el informe entero): van como null.
     report = {k: (None if isinstance(v, float) and not np.isfinite(v) else v) for k, v in report.items()}
