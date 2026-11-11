@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 A smoke test of the app on an Android emulator (or a phone over adb), the first steps of docs/PROBAR.md:
-install, open, the main screen without a crash, ⚙ → Nube with its sign-in. Screenshots and the logcat go to <out>.
+install, open, the main screen without a crash, ⚙ → Nube with its sign-in. Then two of the phone checks of
+PROGRESS.md: a capture setting survives closing the app, and a scan cut while recording (the state a killed app leaves:
+pendiente.json «captura», a half line in a .csv) is rescued with its zip when the app opens. Screenshots and the
+logcat go to <out>.
 
     python3 tools/emulator_smoke.py app/build/outputs/apk/debug/app-debug.apk out/
 
@@ -67,6 +70,14 @@ def shot(out: Path, name: str) -> None:
     (out / f"{name}.png").write_bytes(png)
 
 
+def restart() -> None:
+    """Close the app as the system does (force-stop) and open it again."""
+    adb("shell", "am", "force-stop", PKG)
+    time.sleep(1)
+    adb("shell", "am", "start", "-W", "-n", f"{PKG}/.MainActivity", timeout=180)
+    wait_for("⚙", 120)
+
+
 def main() -> int:
     apk, out = Path(sys.argv[1]), Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
@@ -90,7 +101,39 @@ def main() -> int:
         wait_for("Entrar", 30)
         shot(out, "2_nube")
         crashed()
-        print("smoke test passed: opens, main screen, ⚙ → Nube → Entrar, no crash")
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        # 3. A capture setting survives closing the app: Vídeo 360 → Fotos, force-stop, open again.
+        x, y = wait_for("▶", 30)                               # Vídeo 360's photo/video toggle
+        adb("shell", "input", "tap", str(x), str(y))
+        wait_for("Vídeo 360", 30)                              # the Fotos screen shows the mode chips
+        time.sleep(2)
+        restart()
+        wait_for("Vídeo 360", 60)
+        if any("Pon la pieza en el recuadro" in l for l, _ in screen()):
+            raise AssertionError("the app opened in Vídeo 360 again: the chosen mode (Fotos) was not kept")
+        shot(out, "3_fotos_tras_reabrir")
+        x, y = wait_for("Vídeo 360")
+        adb("shell", "input", "tap", str(x), str(y))           # back to Vídeo 360 for whoever comes next
+        # 4. A scan cut while recording is rescued: its zip appears after the app opens.
+        scans = f"/sdcard/Android/data/{PKG}/files/scans"
+        cut = f"{scans}/scan_cortado"
+        adb("shell", "mkdir", "-p", f"{cut}/images/0")
+        adb("shell", f"echo '{{\"pasos\":[\"captura\"],\"intentos\":0}}' > {cut}/pendiente.json")
+        adb("shell", f"printf 'frame,trigger,pass,camera_id,t_ns,file\\n1,1,FAR,0,100,images/0/100.jpg\\n2,1,FA' > {cut}/frames.csv")
+        adb("shell", f"echo '{{}}' > {cut}/session.json")
+        restart()
+        deadline = time.time() + 90
+        while time.time() < deadline and "scan_cortado.zip" not in adb("shell", "ls", scans, check=False):
+            crashed(); time.sleep(3)
+        listing = adb("shell", "ls", scans, check=False)
+        if "scan_cortado.zip" not in listing:
+            raise AssertionError(f"the scan cut while recording was not rescued (no zip): {listing.split()}")
+        frames = adb("shell", "cat", f"{cut}/frames.csv", check=False)
+        if frames.rstrip().endswith("FA"):
+            raise AssertionError("the half line of frames.csv was left in the rescued scan")
+        crashed()
+        print("smoke test passed: opens, main screen, ⚙ → Nube → Entrar, the mode is kept after closing, "
+              "a scan cut while recording is rescued, no crash")
         return 0
     except (AssertionError, RuntimeError) as e:
         (out / "fallo.txt").write_text(str(e), encoding="utf-8")
