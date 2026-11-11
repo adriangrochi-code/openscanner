@@ -348,3 +348,27 @@ if __name__ == "__main__":
     for fn in [v for k, v in dict(globals()).items() if k.startswith("test_")]:
         fn()
         print("ok", fn.__name__)
+
+
+def test_scaling_the_model_with_a_photo_without_points():
+    """COLMAP writes an EMPTY points line for a photo without points. The scaled copy of the model took every other
+    non-empty line as a pose: after that photo the poses stayed unscaled (and points lines were «scaled»), so the
+    metric model the dense cloud starts from was broken."""
+    with tempfile.TemporaryDirectory() as d:
+        src, dst = Path(d) / "src", Path(d) / "dst"
+        src.mkdir()
+        (src / "cameras.txt").write_text("1 PINHOLE 640 480 500 500 320 240\n")
+        (src / "images.txt").write_text(
+            "# Image list\n"
+            "1 1 0 0 0 0.1 0.2 0.3 1 a.jpg\n10 20 7 30 40 8\n"
+            "2 1 0 0 0 1.0 2.0 3.0 1 b.jpg\n\n"
+            "3 1 0 0 0 4.0 5.0 6.0 1 c.jpg\n50 60 7\n")
+        (src / "points3D.txt").write_text("7 1.0 1.0 1.0 0 0 0 0\n8 2.0 2.0 2.0 0 0 0 0\n")
+        rc.scale_model_txt(src, dst, 2.0)
+        _, imgs = rc.read_model_txt(dst)
+        assert sorted(imgs) == ["a.jpg", "b.jpg", "c.jpg"]
+        assert np.allclose(imgs["a.jpg"]["t"], [0.2, 0.4, 0.6])
+        assert np.allclose(imgs["b.jpg"]["t"], [2.0, 4.0, 6.0])
+        assert np.allclose(imgs["c.jpg"]["t"], [8.0, 10.0, 12.0]), "the photo after one without points"
+        assert np.allclose(imgs["c.jpg"]["obs"], [[50, 60, 7]]), "its points untouched"
+        assert np.allclose(rc.read_points3d(dst)[8], [4.0, 4.0, 4.0])

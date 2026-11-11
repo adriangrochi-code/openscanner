@@ -761,15 +761,16 @@ def scale_from_focus(work, imgs, pts):
 def scale_model_txt(src: Path, dst: Path, s: float):
     dst.mkdir(parents=True, exist_ok=True)
     shutil.copy(src / "cameras.txt", dst / "cameras.txt")
-    out, k = [], 0
+    out = []
     for l in (src / "images.txt").read_text().splitlines():
-        if l.startswith("#") or not l:
-            out.append(l); continue
-        if k % 2 == 0:
-            p = l.split()
+        p = l.split()
+        # The pose lines (10 fields; a points line has 3 per point, or is EMPTY for a photo without points). Taking
+        # every other non-empty line, one empty points line flipped the count: the later photos kept their poses
+        # unscaled and their points lines got «scaled» instead.
+        if not l.startswith("#") and len(p) == 10:
             p[5:8] = [repr(float(v) * s) for v in p[5:8]]
             l = " ".join(p)
-        out.append(l); k += 1
+        out.append(l)
     (dst / "images.txt").write_text("\n".join(out) + "\n")
     out = []
     for l in (src / "points3D.txt").read_text().splitlines():
