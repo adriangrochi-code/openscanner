@@ -867,10 +867,9 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     }
 
     private fun loadCalibration() {
-        val v = prefs.getString("cal", null)?.split(",")?.mapNotNull { it.toDoubleOrNull() } ?: return
-        if (v.size != 6) return
-        ins.gyroBiasPrior = com.tisma.scanner.ins.Vec3(v[0], v[1], v[2])
-        ins.accelBiasPrior = com.tisma.scanner.ins.Vec3(v[3], v[4], v[5])
+        val p = com.tisma.scanner.ins.BiasPriors.parse(prefs.getString("cal", null), ins.accelCalibration != null) ?: return
+        ins.gyroBiasPrior = p.gyro
+        ins.accelBiasPrior = p.accel
         if (session == null) ins.reset()
         val date = java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.getDefault()).format(java.util.Date(prefs.getLong("cal_time", 0)))
         _state.update {
@@ -959,6 +958,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         ins.accelCalibration = null
         prefs.edit().remove("acal").remove("acal_poses").remove("acal_mode").apply()
         _state.update { it.copy(accelCalibrated = false) }
+        loadCalibration()   // without the 6-face one, the stillness test's accelerometer bias counts again
         if (session == null) ins.reset()
         updateAutoCalText()
     }
