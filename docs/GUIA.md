@@ -93,11 +93,13 @@ datos EXIF.
 | La pieza sale más grande o más chica | Comprueba que el tapete esté impreso al 100 % (barra de 100 mm). |
 | «Tu plan tiene que incluir los escaneos 3D» | Cambia de plan en tu cuenta de Tisma. |
 | La subida no avanza | Revisa la conexión. La subida sigue sola donde se quedó. |
+| «No se pudo saber el tamaño real de la pieza» | Las fotos no dieron ninguna escala: escanea con el tapete impreso al 100 % y que se vea en las fotos. Ese trabajo no se cobra. |
+| «Ese envío ya no está en Tisma Cloud» | El trabajo se borró o venció en la nube: toca **☁ Enviar** para mandarlo de nuevo. |
 
 ## Qué se puede esperar
 
 - Con tapete, textura y buena luz, a 20-40 cm: detalles de unas décimas de milímetro y una escala con un
-  error de alrededor del 0,1 % (medido en pruebas sintéticas; con un tapete impreso real, a confirmar
+  error de entre 0,1 y 0,2 % (medido en pruebas sintéticas; con un tapete impreso real, a confirmar
   en la beta).
 - Sin tapete: la escala sale de los sensores del móvil (alrededor del 5-10 %). En una caja de prueba de
   40 × 30 × 20 mm salió 41,2 × 31,1 × 20,1 mm.

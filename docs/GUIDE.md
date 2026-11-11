@@ -94,11 +94,13 @@ Tisma Cloud refuses a scan that includes the location. The photos carry no locat
 | The part comes out bigger or smaller | Check that the mat is printed at 100 % (100 mm bar). |
 | "Tu plan tiene que incluir los escaneos 3D" (your plan must include 3D scans) | Change plan in your Tisma account. |
 | The upload does not move | Check the connection. The upload carries on by itself from where it stopped. |
+| "No se pudo saber el tamaño real de la pieza" (the real size of the part could not be found) | The photos gave no scale: scan with the mat printed at 100 %, visible in the photos. That job is not charged. |
+| "Ese envío ya no está en Tisma Cloud" (that send is no longer in Tisma Cloud) | The job was removed or expired in the cloud: press **☁ Enviar** to send it again. |
 
 ## What to expect
 
 - With the mat, texture and good light, at 20-40 cm: details of a few tenths of a millimetre, and a scale
-  within about 0.1 % (measured in synthetic tests; to be confirmed with a real printed mat in the beta).
+  within 0.1-0.2 % (measured in synthetic tests; to be confirmed with a real printed mat in the beta).
 - Without the mat: the scale comes from the phone's sensors (about 5-10 %). A 40 × 30 × 20 mm test box came
   out 41.2 × 31.1 × 20.1 mm.
 - Transparent, very shiny or very thin parts are hard for any photogrammetry.

@@ -16,6 +16,29 @@ Branch `scanner/next`. Newest first. Each entry says what was done, what was tes
   BUNDLED_DLLS.txt still says what would be owed if that ever changed. The scanner app stays AGPL-3.0; the LICENSE
   file waits for the owner's direct confirmation.
 
+## 2026-11-11 17:20: bug hunt ended by the owner; back to the beta
+
+Owner (via QA, 17:16 UTC): «Deja los bug por ahora y sigamos con la hoja de ruta»: the hourly deep bug hunt ends
+(it ran from 2026-11-10 to here; the coverage table below has every finding, each with a test that fails without
+its fix). Only what blocks gets fixed from now on.
+
+Since 02:00 (11-11), user-visible: no crash when the preview goes away while a camera opens, or on a quick job;
+two scans in a row (the second was dropped, or taken for the first); a gone cloud job no longer blocks a scan;
+no part handed over without a metric scale (and an uncalibrated focus is not a scale); the focus scale ignores
+depths clipped at the sweep's ends; INS smoothing no longer corrects twice; photo poses not from an INS reset after
+them; a hole only at the top no longer crushes the part; progress moves during COLMAP's dense cloud; IMU stillness
+test and drift calibration no longer share a capture; the accelerometer bias is not corrected twice.
+
+CI: azure.archive.ubuntu.com stopped serving packages (the full-scan install hung twice); scan-e2e.yml now gives
+that step 25 min and falls back to archive.ubuntu.com (481e669).
+
+Docs: GUIA/GUIDE troubleshooting has the two new messages (no scale; gone send) and the scale «0.1-0.2 %»; the beta
+notes draft (docs/releases/borradores/0.1.0-beta.1.md) has the publication code and «Retirar», two scans in a
+row, and «no invented size». Nothing published: the release waits for the owner's «sí».
+
+Open, needs the owner: the «sí» for scanner-v0.1.0-beta.1; whether the app asks once «¿mediste la barra de
+100 mm?» (a mat printed with «fit to page», 94-97 %, cannot be told from the photos: parts 3-6 % small).
+
 ## 2026-11-06: scale bias, cloud upload in the background
 
 - Mat scale: AprilTag corner refinement instead of cornerSubPix (5ac5396): +0.4 % -> +0.03 to +0.06 % in synthetic
