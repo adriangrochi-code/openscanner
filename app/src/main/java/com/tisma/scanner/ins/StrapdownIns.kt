@@ -72,7 +72,14 @@ class StrapdownIns(
     private val history = ArrayDeque<InsState>()
     private val capacity = historyCapacity
 
+    /**
+     * Cambia en cada reset(): la INS empieza otra vez desde el origen, en otro marco. Una pose pedida para una foto
+     * de antes del reset (la cola de escritura sigue con las últimas fotos del escaneo) no es de su marco.
+     */
+    @Volatile var epoch = 0L; private set
+
     @Synchronized fun reset() {
+        epoch++
         filter.reset(gyroBiasPrior); lastGyroT = -1; lastMag = null
         prevAccelT = -1; prevAccel = null; lastAccelT = -1; lastAccel = null; pendingGyro.clear()
         kf.reset(accelBiasPrior); vo.reset(); gaps = 0
@@ -301,6 +308,9 @@ class StrapdownIns(
     @Synchronized fun latest(): InsState? = history.lastOrNull()
 
     /** Estado interpolado en el instante t (p.ej. el timestamp de un fotograma). */
+    /** El estado en tNs si la INS sigue en la misma época (sin reset desde entonces); si no, null. */
+    @Synchronized fun stateAt(tNs: Long, epoch: Long): InsState? = if (epoch != this.epoch) null else stateAt(tNs)
+
     @Synchronized fun stateAt(tNs: Long): InsState? {
         if (history.isEmpty()) return null
         if (tNs <= history.first().timestampNs) return history.first()

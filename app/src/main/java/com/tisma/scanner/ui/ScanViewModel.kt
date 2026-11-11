@@ -2006,16 +2006,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         val t = timestampNs + (clockOffset[cameraId] ?: 0L)
         val trig = trigger
         val pass = activePass
+        // The INS epoch of this photo: coming back to the app while the last photos are still being written resets
+        // the INS (a new frame from the origin); those photos' pose and blur were then taken from the new one.
+        val epoch = ins.epoch
         storedBytes.addAndGet(jpeg.size.toLong())
         pendingWrites.incrementAndGet()
         // El hilo de la cámara sólo copia bytes; escribir 5 MB aquí dejaría al HAL sin buffers
         // en las ráfagas (apilados × cámaras físicas).
         writer.execute {
             try {
-                val pose = ins.stateAt(t)
+                val pose = ins.stateAt(t, epoch)
                 runCatching { s.addImage(trig, pass.name, cameraId, t, width, height, jpeg, pose) }
                     .onFailure { log("Error guardando imagen: ${it.message}") }
-                val vec = motionBlurVec(cameraId, t, width)
+                val vec = motionBlurVec(cameraId, t, width, epoch = epoch)
                 val blurPx = vec?.let { kotlin.math.hypot(it.first, it.second) } ?: 0.0
                 if (vec != null && _state.value.deblurMotion && blurPx >= com.tisma.scanner.quality.MotionDeblur.minPx(width) &&
                     blurPx <= com.tisma.scanner.quality.MotionDeblur.MAX_PX) {
@@ -2107,13 +2110,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
      * Arrastre de la foto durante su exposición (px de la foto, ejes del sensor), con el giro que
      * midió la INS entre el inicio y el final de la exposición.
      */
-    private fun motionBlurVec(cameraId: String, t: Long, width: Int, consume: Boolean = true): Pair<Double, Double>? {
+    private fun motionBlurVec(cameraId: String, t: Long, width: Int, consume: Boolean = true,
+                              epoch: Long = ins.epoch): Pair<Double, Double>? {
         // Exposición real de esa foto (en HDR, +2 EV es 4× más larga que la previsualización).
         val key = "$cameraId/$t"
         val exp = (if (consume) exposures.remove(key) else exposures[key]) ?: cameras.exposureNsFor(cameraId)
         if (exp <= 0) return null
-        val a = ins.stateAt(t) ?: return null
-        val b = ins.stateAt(t + exp) ?: return null
+        val a = ins.stateAt(t, epoch) ?: return null
+        val b = ins.stateAt(t + exp, epoch) ?: return null
         val info = inventory[cameraId] ?: return null
         val f = info.focalLengthsMm.firstOrNull()?.toDouble() ?: return null
         val sw = info.sensorSizeMm?.first?.toDouble() ?: return null
