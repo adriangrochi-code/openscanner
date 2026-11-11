@@ -372,3 +372,26 @@ def test_scaling_the_model_with_a_photo_without_points():
         assert np.allclose(imgs["c.jpg"]["t"], [8.0, 10.0, 12.0]), "the photo after one without points"
         assert np.allclose(imgs["c.jpg"]["obs"], [[50, 60, 7]]), "its points untouched"
         assert np.allclose(rc.read_points3d(dst)[8], [4.0, 4.0, 4.0])
+
+
+def test_an_uncalibrated_focus_is_not_a_scale():
+    """Android: with focus_distance_calibration «uncalibrated» the focus distances have no physical units. Their depth
+    maps were still taken as a metric scale, above the INS: the part could come out of any size with nothing said."""
+    import cv2
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        for cam in ("0", "2"):
+            (work / "images" / cam).mkdir(parents=True)
+            (work / "depth" / cam).mkdir(parents=True)
+            cv2.imwrite(str(work / "images" / cam / "1.jpg"), np.full((100, 100), 128, np.uint8))
+            cv2.imwrite(str(work / "depth" / cam / "1_mm.png"), np.full((100, 100), 500, np.uint16))
+        pts = {i: np.array([0.0, 0.0, 0.25]) for i in range(30)}
+        obs = np.array([[50.0, 50.0, i] for i in range(30)])
+        imgs = {f"{cam}/1.jpg": dict(R=np.eye(3), t=np.zeros(3), cam=1, obs=obs) for cam in ("0", "2")}
+        session = {"cameras": [{"id": "0", "focus_distance_calibration": "uncalibrated"},
+                               {"id": "2", "focus_distance_calibration": "approximate"}]}
+        usable = rc.metric_focus_cameras(session)
+        assert usable == {"2"}
+        s, _, n = rc.scale_from_focus(work, imgs, pts, usable)
+        assert n == 30 and abs(s - 2.0) < 1e-9, "only camera 2's points"
+        assert rc.scale_from_focus(work, {"0/1.jpg": imgs["0/1.jpg"]}, pts, usable)[0] is None

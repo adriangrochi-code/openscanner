@@ -718,17 +718,28 @@ def read_points3d(d: Path):
     return pts
 
 
-def scale_from_focus(work, imgs, pts):
+def metric_focus_cameras(session) -> set:
+    """Las cámaras cuyo enfoque da distancias en dioptrías de verdad: «calibrated» o «approximate». Con
+    «uncalibrated», Android avisa que los valores del foco no tienen unidades físicas (sólo el orden: qué está delante):
+    su «escala» puede salir de cualquier tamaño."""
+    return {c["id"] for c in session.get("cameras", [])
+            if c.get("focus_distance_calibration") in ("calibrated", "approximate")}
+
+
+def scale_from_focus(work, imgs, pts, cameras=None):
     """
     Escala métrica a partir de la distancia medida con el ENFOQUE (barridos de enfoque).
     Para cada punto 3D visto en una foto con mapa de profundidad por enfoque:
     ratio = profundidad por enfoque (m) / profundidad SfM (unidades del modelo). La mediana es
     la escala. Su precisión depende de la calibración del enfoque del móvil (session.json).
     Devuelve (escala, dispersión relativa, nº de puntos) o (None, None, 0).
+    cameras: sólo las fotos de estas cámaras (metric_focus_cameras); None = todas.
     """
     ratios = []
     for name, im in imgs.items():
         cam, stem = name.split("/")[0], Path(name).stem
+        if cameras is not None and cam not in cameras:
+            continue
         dpath = work / "depth" / cam / f"{stem}_mm.png"
         if not dpath.exists() or len(im["obs"]) == 0:
             continue
@@ -1053,7 +1064,9 @@ def main(argv=None):
     # Todas las fuentes de escala disponibles (se usa la mejor y se muestran las demás para
     # contrastarlas): tapete ArUco > distancia por enfoque > trayectoria INS.
     sources = []
-    s_f, rel_f, n_f = scale_from_focus(a.work, imgs, read_points3d(txt))
+    # Sin foco calibrado o aproximado, la distancia por enfoque no es una escala: con «uncalibrated» se tomaba igual,
+    # antes que la INS, y la pieza podía salir de cualquier tamaño sin aviso.
+    s_f, rel_f, n_f = scale_from_focus(a.work, imgs, read_points3d(txt), metric_focus_cameras(session))
     if s_f:
         calib = {c["id"]: c.get("focus_distance_calibration", "?") for c in session["cameras"]}
         sources.append((s_f, f"distancia por enfoque ({n_f} puntos, ±{rel_f * 100:.2f} % estadístico; "
