@@ -149,9 +149,15 @@ class CloudSendWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         /** Preferences: the last scan sent, the one shown when the app opens with no scan of its own. */
         const val KEY_LAST_SENT = "cloud_last_zip"
 
-        /** Of all the sends, the one the app shows: its scan's, or with none, the last one sent. */
-        fun shown(infos: List<androidx.work.WorkInfo>, zip: File?, lastSent: String?): androidx.work.WorkInfo? {
-            val target = zip ?: lastSent?.let(::File)
+        /**
+         * Of all the sends, the one the app shows: its scan's, or, only when the app has just opened with no scan of
+         * its own (scanStarted false), the last one sent. Once a new scan is started, the one before is not this one's:
+         * shown while the new one was being recorded, its part filled «Tu pieza» and «Enviar» then did nothing for
+         * the new scan (the part «was already downloaded»).
+         */
+        fun shown(infos: List<androidx.work.WorkInfo>, zip: File?, lastSent: String?,
+                  scanStarted: Boolean = false): androidx.work.WorkInfo? {
+            val target = zip ?: (if (scanStarted) return null else lastSent?.let(::File))
             return infos.lastOrNull { isFor(it.tags, target) }
         }
 

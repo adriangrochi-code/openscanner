@@ -285,6 +285,8 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
 
     /** Evita disparos solapados (ráfagas HDR o secuencias de rotación en curso). */
     @Volatile private var sequenceRunning = false
+    /** A scan was started in this run of the app: «the last one sent» is no longer the one to show. */
+    @Volatile private var scanStarted = false
         set(v) {
             field = v
             // Al terminar una toma la vista vuelve: no contarla como vista previa parada.
@@ -694,7 +696,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
         cloudJob = viewModelScope.launch {
             androidx.work.WorkManager.getInstance(getApplication()).getWorkInfosByTagFlow(W.UNIQUE).collect { infos ->
                 // El resultado de otro escaneo (el anterior) no es el de éste: ni su pieza, ni «Imprimir»/«Publicar».
-                val info = W.shown(infos, _state.value.lastZip, prefs.getString(W.KEY_LAST_SENT, null)) ?: return@collect
+                val info = W.shown(infos, _state.value.lastZip, prefs.getString(W.KEY_LAST_SENT, null), scanStarted) ?: return@collect
                 // Un trabajo terminado sigue en el historial de WorkManager: lo que se hace una sola vez
                 // (cerrar la sesión vencida, el registro) se hace sólo la primera vez que se ve.
                 val first = prefs.getString("cloud_seen", null) != info.id.toString()
@@ -1685,6 +1687,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app), MultiCameraContro
     override fun startScan() {
         // Mientras se procesa el anterior (mallas, nitidez, .zip) no se empieza otro: competirían por la CPU.
         if (session != null || stopping != null || _state.value.busy) return
+        scanStarted = true   // from here the app shows only this scan's send (CloudSendWorker.shown)
         updateClockOffsets()
         val base = File(getApplication<Application>().getExternalFilesDir(null), "scans").apply { mkdirs() }
         val s = ScanSession(base)

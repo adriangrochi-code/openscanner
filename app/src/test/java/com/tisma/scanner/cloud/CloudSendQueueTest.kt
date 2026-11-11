@@ -47,6 +47,16 @@ class CloudSendQueueTest {
         assertEquals(sends(b).single().id, CloudSendWorker.shown(all, null, last)?.id)
     }
 
+    @Test fun whileANewScanIsRecordedTheOneBeforeIsNotShown() {
+        // A is sent and still on its way; a new scan is started (no zip yet): A's result is not the new scan's.
+        // Shown, its part filled «Tu pieza» and «Enviar» then did nothing for the new scan.
+        CloudSendWorker.enqueue(ctx, a, "http://127.0.0.1:1")
+        val all = wm.getWorkInfosByTag(CloudSendWorker.UNIQUE).get()
+        val last = ctx.getSharedPreferences("tisma", Context.MODE_PRIVATE).getString(CloudSendWorker.KEY_LAST_SENT, null)
+        assertEquals(null, CloudSendWorker.shown(all, null, last, scanStarted = true))
+        assertEquals("the app just opened: the last one sent", sends(a).single().id, CloudSendWorker.shown(all, null, last)?.id)
+    }
+
     @Test fun theSameScanTwiceIsOneSend() {
         CloudSendWorker.enqueue(ctx, a, "http://127.0.0.1:1")
         CloudSendWorker.enqueue(ctx, a, "http://127.0.0.1:1")
