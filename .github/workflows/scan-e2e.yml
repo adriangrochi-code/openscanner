@@ -22,16 +22,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Its own time limit, network retries and a wait for the dpkg lock: on 11-11 this step hung twice for the whole
-      # job (36 and 53 min, before any code ran) and took the job's 120 minutes with it.
+      # Its own time limit and a second mirror: on 11-11 this step hung twice for the whole job (36 and 53 min, before
+      # any code ran), and with a limit it showed why: azure.archive.ubuntu.com stopped serving packages («Ign» every
+      # 20 s). The first try (the runner's mirror) gets 8 minutes; if it fails, archive.ubuntu.com.
       - name: COLMAP y lo que necesita OpenMVS
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: |
-          APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o DPkg::Lock::Timeout=300"
-          sudo apt-get $APT update -q
-          sudo apt-get $APT install -y -q --no-install-recommends colmap build-essential cmake git libeigen3-dev \
-            libboost-iostreams-dev libboost-program-options-dev libboost-system-dev libboost-serialization-dev \
-            libopencv-dev libcgal-dev libglew-dev libjpeg-dev libpng-dev libtiff-dev zlib1g-dev libegl1 libgl1
+          APT="-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=300"
+          PKGS="colmap build-essential cmake git libeigen3-dev libboost-iostreams-dev libboost-program-options-dev
+            libboost-system-dev libboost-serialization-dev libopencv-dev libcgal-dev libglew-dev libjpeg-dev libpng-dev
+            libtiff-dev zlib1g-dev libegl1 libgl1"
+          install() { sudo apt-get $APT update -q && sudo timeout "$1" apt-get $APT install -y -q --no-install-recommends $PKGS; }
+          if ! install 8m; then
+            echo "The runner's Ubuntu mirror failed: archive.ubuntu.com"
+            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu#http://archive.ubuntu.com/ubuntu#g' \
+              /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null || true
+            install 12m
+          fi
           timeout 60 colmap help | head -2
 
       - uses: actions/cache@v4
